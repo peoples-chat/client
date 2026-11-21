@@ -52,6 +52,9 @@ Always pin a release tag: MDK deletes nightly builds after 30 days, and the `mdk
 - **Odin.** MDK's Markdown parser (`marmot-markdown`) compiles Odin code at build time. `scripts/install-odin.sh`
   installs the compiler version the locked MDK pins into `.tools/odin`, where `.cargo/config.toml` points `ODIN`. Every
   build of the core or the app needs it, CI included.
+- **LLVM tools.** For Android builds and optimized Linux builds, the Markdown parser compiles through the Rust
+  toolchain's `llvm-tools-preview` component, which `rust-toolchain.toml` lists. It builds for Android API 26 unless
+  `ANDROID_API` says otherwise, while the app's `minSdk` is 24; #15 settles which level the app supports.
 - **SQLCipher and OpenSSL** are compiled from source (vendored). A C compiler, `perl` and `make` are enough; no system
   libraries are needed.
 - **Stack size.** Unoptimized OpenMLS can overflow the default 2 MiB thread stack, so `.cargo/config.toml` sets
