@@ -12,7 +12,7 @@ Work is tracked in the issues of this repository.
 
 | Path | What it is |
 | --- | --- |
-| `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. |
+| `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. It builds on MDK; see [docs/mdk.md](docs/mdk.md). |
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
 | `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
@@ -28,6 +28,8 @@ Keep the interface thin: it shows state and sends commands, and the core does th
   installed automatically on first use.
 - **Node.js** 24 or newer and **pnpm** 12.
 - The [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your platform.
+- **Odin**, which MDK's Markdown parser needs at build time: run `scripts/install-odin.sh` once, and again after an MDK
+  upgrade. It installs the pinned compiler into `.tools/odin`. It needs `python3` and `curl`.
 
 For iOS (macOS only):
 
@@ -72,7 +74,7 @@ The same checks run in CI:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p peoples-chat-core
+cargo test -p peoples-chat-core      # includes a relay round trip through MDK
 pnpm check
 pnpm test
 pnpm build

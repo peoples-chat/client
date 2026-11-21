@@ -5,6 +5,10 @@
 //! that the same core can run without a web view (background radio and push handling) and
 //! can be wrapped by a native shell if needed.
 
+mod messaging;
+
+pub use messaging::{Messaging, MessagingError, MessagingOptions, NewAccount};
+
 /// Version of the core, shown by the shell to prove that the core is linked in.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

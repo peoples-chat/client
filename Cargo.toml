@@ -7,10 +7,27 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Size-focused release profile from the Tauri guide: https://tauri.app/concept/size/#cargo-configuration
+# MDK's workspace patches these crates. Patches do not reach dependents, so we repeat them to
+# build the same graph MDK tests. Copied from MDK v0.18.0's Cargo.toml; check them on every MDK
+# upgrade (docs/mdk.md).
+[patch.crates-io]
+# Drops the unmaintained proc-macro-error2 dependency of hax-lib-macros 0.3.7.
+hax-lib-macros = { git = "https://github.com/cryspen/hax.git", rev = "8f9cb576e58f6cc7e9ed249a7d4439b0f7ed0da7" }
+# SQLCipher 4.17.0 instead of 4.14.0, which logs a warning for every failed mlock.
+libsqlite3-sys = { git = "https://github.com/rusqlite/rusqlite.git", rev = "5ae7fdf83085c595fd54f977b3a56ccacabaf16b" }
+
+# Skip debug info for dependencies in dev builds: MDK's tree is large.
+[profile.dev.package."*"]
+debug = false
+
+# Opening an MDK store replays SQL migrations; unoptimized SQLCipher makes that slow in tests.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3
+
+# MDK's recommended release profile: thin LTO and one codegen unit. Panics must unwind, because
+# MDK isolates failures per account worker; panic = "abort" would end the whole app instead.
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = 3
-panic = "abort"
 strip = true

@@ -6,3 +6,20 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# MDK, the Marmot Development Kit, through its multi-account app runtime. All three come from
+# one release tag; Cargo.lock records the commit. Upgrade routine: docs/mdk.md.
+marmot-app = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+# Replaces the OS keychain in tests.
+keyring-core = "1"
+# A Nostr relay inside the test process, as MDK's own tests use.
+nostr-relay-builder = "0.44"
+# Reads the published events back. The same fork and revision MDK pins.
+nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589" }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,8 @@
+[env]
+# MDK's marmot-markdown compiles Odin code at build time. scripts/install-odin.sh installs the
+# pinned compiler here; an ODIN already set in the environment takes precedence.
+ODIN = { value = ".tools/odin/odin", relative = true }
+
+# Unoptimized OpenMLS, inside MDK, can overflow the default 2 MiB thread stack. MDK runs its
+# tests and debug binaries with 4 MiB; so do we.
+RUST_MIN_STACK = "4194304"

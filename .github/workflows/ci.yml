@@ -21,6 +21,13 @@ jobs:
       # rustup reads the channel and components from rust-toolchain.toml
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/odin-archive
+          key: odin-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: odin-${{ runner.os }}-
+      - name: Install Odin for MDK's Markdown parser
+        run: ODIN_ARCHIVE_CACHE="$HOME/.cache/odin-archive" scripts/install-odin.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -51,5 +58,12 @@ jobs:
         run: pnpm build
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/odin-archive
+          key: odin-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: odin-${{ runner.os }}-
+      - name: Install Odin for MDK's Markdown parser
+        run: ODIN_ARCHIVE_CACHE="$HOME/.cache/odin-archive" scripts/install-odin.sh
       - name: Shell clippy
         run: cargo clippy -p peoples-chat --all-targets -- -D warnings
