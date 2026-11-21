@@ -9,12 +9,14 @@ interface ActionRowProps {
   label: string;
   /** Action icons in green, as on New chat; settings rows keep them muted. */
   accent?: boolean;
+  /** A chevron for rows that open a screen; rows that act in place have none. */
+  chevron?: boolean;
   disabled?: boolean;
   onClick?: () => void;
 }
 
-/** A row that opens something, with a chevron. */
-export function ActionRow({ icon, label, accent, disabled, onClick }: ActionRowProps) {
+/** A row that opens something or does something. */
+export function ActionRow({ icon, label, accent, chevron = true, disabled, onClick }: ActionRowProps) {
   return (
     <button
       type="button"
@@ -24,7 +26,7 @@ export function ActionRow({ icon, label, accent, disabled, onClick }: ActionRowP
     >
       <Icon name={icon} size={22} className={styles.actionIcon} />
       <span className={styles.actionLabel}>{label}</span>
-      <Icon name="chevron" size={18} className={styles.chevron} />
+      {chevron && <Icon name="chevron" size={18} className={styles.chevron} />}
     </button>
   );
 }

@@ -26,6 +26,8 @@
   --color-green-fg: #2c5237;
   --color-amber-bg: #f6ebcc;
   --color-amber-fg: #735200;
+  /* The logo's mark, and radio sends later. */
+  --color-amber-strong: #d4a53a;
   /* QR codes stay dark on light in both themes, so that cameras can read them. */
   --color-qr-bg: #ffffff;
   --color-qr-fg: #1e2a22;
@@ -50,6 +52,7 @@
     --color-green-fg: #a9d4b5;
     --color-amber-bg: #332a14;
     --color-amber-fg: #e5c06a;
+    --color-amber-strong: #d9ae4a;
     --color-qr-bg: #ffffff;
     --color-qr-fg: #121a15;
   }

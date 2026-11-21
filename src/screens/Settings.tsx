@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { usesDemoData } from "../core";
 import { coreVersion } from "../core/shell";
 import { useNavigation } from "../navigation/Navigator";
+import type { Screen } from "../navigation/screens";
 import { useAppState } from "../state";
 import { Avatar } from "../ui/Avatar";
 import { Icon, type IconName } from "../ui/Icon";
@@ -10,12 +11,12 @@ import { ScreenHeader } from "../ui/ScreenHeader";
 import layout from "../ui/layout.module.css";
 import styles from "./Settings.module.css";
 
-// Every setting in the design. None is built yet, so all are disabled (#63).
-const SETTINGS: { icon: IconName; label: string }[] = [
+// Every setting in the design. Those without a screen are not built yet and are disabled (#63).
+const SETTINGS: { icon: IconName; label: string; screen?: Screen }[] = [
   { icon: "person", label: "Account" },
   { icon: "devices", label: "Linked devices" },
   { icon: "group", label: "Recovery" },
-  { icon: "radio", label: "Radio" },
+  { icon: "radio", label: "Radio", screen: { name: "radioSettings" } },
   { icon: "moon", label: "Appearance" },
   { icon: "chat", label: "Chats and storage" },
   { icon: "bell", label: "Notifications" },
@@ -41,8 +42,14 @@ export function Settings() {
           </span>
           <Icon name="qr" strokeWidth={1.8} className={styles.qr} />
         </button>
-        {SETTINGS.map((setting) => (
-          <ActionRow key={setting.label} icon={setting.icon} label={setting.label} disabled />
+        {SETTINGS.map(({ icon, label, screen }) => (
+          <ActionRow
+            key={label}
+            icon={icon}
+            label={label}
+            disabled={!screen}
+            onClick={screen && (() => navigation.push(screen))}
+          />
         ))}
         <p className={styles.version}>
           {core}

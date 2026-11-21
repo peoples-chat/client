@@ -32,7 +32,6 @@ export function Chats() {
         <Chip selected>All</Chip>
         <Chip disabled>Unread</Chip>
         <Chip disabled>Groups</Chip>
-        <Chip disabled>Radio</Chip>
       </ChipRow>
       <main className={layout.scroll}>
         {items.length === 0 ? (
@@ -69,7 +68,7 @@ export function Chats() {
           </ul>
         )}
       </main>
-      <TabBar active="chats" onSelect={(tab) => tab !== "chats" && navigation.reset([{ name: tab }])} />
+      <TabBar />
     </div>
   );
 }

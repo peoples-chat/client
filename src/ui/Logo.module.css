@@ -1,0 +1,10 @@
+.tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 28px;
+  background: var(--color-primary);
+  color: var(--color-amber-strong);
+}

@@ -6,7 +6,7 @@ import { CreateProfile } from "./screens/CreateProfile";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
 import { Profile } from "./screens/Profile";
-import { Radio } from "./screens/Radio";
+import { RadioSettings } from "./screens/RadioSettings";
 import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
 import { Welcome } from "./screens/Welcome";
@@ -41,8 +41,6 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <CreateProfile />;
     case "chats":
       return <Chats />;
-    case "radio":
-      return <Radio />;
     case "chat":
       return <ChatScreen chatId={screen.chatId} />;
     case "newChat":
@@ -53,6 +51,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <MessageRequest invitationId={screen.invitationId} />;
     case "settings":
       return <Settings />;
+    case "radioSettings":
+      return <RadioSettings />;
     case "profile":
       return <Profile />;
   }

@@ -1,6 +1,6 @@
 import { useNavigation } from "../navigation/Navigator";
 import { Button } from "../ui/Button";
-import { Icon } from "../ui/Icon";
+import { Logo } from "../ui/Logo";
 import layout from "../ui/layout.module.css";
 import styles from "./Welcome.module.css";
 
@@ -9,9 +9,7 @@ export function Welcome() {
   return (
     <div className={layout.screen}>
       <main className={styles.main}>
-        <div className={styles.logo} aria-hidden="true">
-          <Icon name="chat" size={42} />
-        </div>
+        <Logo />
         <h1 className={styles.title}>peoples.chat</h1>
         <p className={styles.tagline}>Private messages that keep working when the internet does not.</p>
       </main>
