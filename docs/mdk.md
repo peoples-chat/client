@@ -4,7 +4,8 @@ The core uses [MDK](https://github.com/marmot-protocol/mdk), the Marmot Developm
 relays. It depends on MDK's multi-account app runtime, the `marmot-app` crate, directly from Rust.
 
 MDK documents two host surfaces: the MarmotKit bindings (Swift and Kotlin) and the C ABI. A Rust host using `marmot-app`
-directly is not among them; we asked upstream whether that is intended (see [Open questions](#open-questions)).
+directly is not among them, but it works, so we use it. If it breaks, the fallbacks are MDK's C ABI (`marmot-c`) or the
+lower `marmot-session` crate.
 
 ## What the core uses
 
@@ -82,7 +83,3 @@ Cargo prints `patch ... was not used in the crate graph` when a patch does not a
 5. Run `scripts/install-odin.sh`; the new release may pin another Odin.
 6. Run the checks in the README, including the relay round trip in `cargo test -p peoples-chat-core`.
 7. Update the pin table above.
-
-## Open questions
-
-- Is `marmot-app`'s Rust API meant for hosts other than MarmotKit and the C ABI, and how stable is it between releases?
