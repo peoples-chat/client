@@ -5,9 +5,12 @@
 //! that the same core can run without a web view (background radio and push handling) and
 //! can be wrapped by a native shell if needed.
 
+mod app;
+pub mod interface;
 mod messaging;
 
-pub use messaging::{Messaging, MessagingError, MessagingOptions, NewAccount};
+pub use app::Core;
+pub use messaging::{ExistingAccount, Messaging, MessagingError, MessagingOptions, NewAccount};
 
 /// Version of the core, shown by the shell to prove that the core is linked in.
 pub fn version() -> &'static str {

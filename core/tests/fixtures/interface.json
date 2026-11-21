@@ -1,0 +1,115 @@
+{
+  "snapshot": {
+    "account": {
+      "name": "Emil Dahl",
+      "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+      "inviteLink": "nostr:npub1fixtureemildahl"
+    },
+    "chats": [
+      {
+        "id": "chat-1",
+        "contact": {
+          "publicKey": "3e22bf168fae1e1be96fb407cde13c487568c9bcc716236ee4842dc734ff9df8",
+          "name": "Astrid Holm"
+        },
+        "messages": [
+          {
+            "id": "msg-1",
+            "direction": "in",
+            "text": "Are you coming to the meeting?",
+            "sentAt": 1795300000000,
+            "transport": "internet"
+          },
+          {
+            "id": "msg-2",
+            "direction": "out",
+            "text": "Yes, around three.",
+            "sentAt": 1795300060000,
+            "transport": "radio",
+            "delivery": "confirmed"
+          }
+        ]
+      }
+    ],
+    "invitations": [
+      {
+        "id": "inv-1",
+        "from": {
+          "publicKey": "4a577124f4d699f2455a80e12b58d41a26465d4c01a65faae29b37189cd08375",
+          "name": "Karen Winther"
+        },
+        "receivedAt": 1795300120000,
+        "messages": [
+          {
+            "id": "msg-3",
+            "direction": "in",
+            "text": "Hi, it's Karen from the allotment.",
+            "sentAt": 1795300120000,
+            "transport": "internet"
+          }
+        ]
+      }
+    ]
+  },
+  "events": [
+    {
+      "type": "chatAdded",
+      "chat": {
+        "id": "chat-2",
+        "contact": {
+          "publicKey": "a89ecb62193920de288123ea3d5e5f556118c4d180cbffc672804f3cd4689299",
+          "name": "Jonas Kjær"
+        },
+        "messages": []
+      }
+    },
+    {
+      "type": "messageAdded",
+      "chatId": "chat-2",
+      "message": {
+        "id": "msg-4",
+        "direction": "out",
+        "text": "Hello!",
+        "sentAt": 1795300180000,
+        "transport": "internet",
+        "delivery": "waiting"
+      }
+    },
+    {
+      "type": "deliveryChanged",
+      "chatId": "chat-2",
+      "messageId": "msg-4",
+      "delivery": "sent"
+    },
+    {
+      "type": "invitationReceived",
+      "invitation": {
+        "id": "inv-2",
+        "from": {
+          "publicKey": "a89ecb62193920de288123ea3d5e5f556118c4d180cbffc672804f3cd4689299",
+          "name": "Jonas Kjær"
+        },
+        "receivedAt": 1795300240000,
+        "messages": []
+      }
+    },
+    {
+      "type": "invitationRemoved",
+      "invitationId": "inv-2"
+    },
+    {
+      "type": "accountDeleted"
+    },
+    {
+      "type": "accountCreated",
+      "account": {
+        "name": "Emil Dahl",
+        "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "inviteLink": "nostr:npub1fixtureemildahl"
+      }
+    }
+  ],
+  "commandError": {
+    "message": "Enter a name."
+  }
+}
