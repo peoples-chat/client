@@ -15,6 +15,7 @@ Work is tracked in the issues of this repository.
 | `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. |
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
+| `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
 | `src/core/` | The interface's side of the boundary to the core: commands, events and, for now, a mock core with demo data. |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
