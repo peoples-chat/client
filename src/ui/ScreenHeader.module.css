@@ -1,0 +1,66 @@
+/* The design reserves 54px above headers for the status bar; here the safe area does that. */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--safe-top) + 8px) 8px 8px 4px;
+}
+
+.bordered {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtitle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.tabHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: calc(var(--safe-top) + 8px) 8px 6px 10px;
+}
+
+.profileButton {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.tabTitle {
+  flex: 1;
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}

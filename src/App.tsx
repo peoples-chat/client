@@ -1,40 +1,62 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Navigator } from "./navigation/Navigator";
+import type { Screen } from "./navigation/screens";
+import { Account } from "./screens/Account";
+import { ChatScreen } from "./screens/ChatScreen";
+import { Chats } from "./screens/Chats";
+import { CreateProfile } from "./screens/CreateProfile";
+import { MessageRequest } from "./screens/MessageRequest";
+import { NewChat } from "./screens/NewChat";
+import { Profile } from "./screens/Profile";
+import { RadioSettings } from "./screens/RadioSettings";
+import { Scan } from "./screens/Scan";
+import { Settings } from "./screens/Settings";
+import { Welcome } from "./screens/Welcome";
+import { useAppState } from "./state";
+import layout from "./ui/layout.module.css";
+import styles from "./App.module.css";
 
-type CoreLink =
-  | { state: "starting" }
-  | { state: "linked"; version: string }
-  | { state: "failed"; reason: string };
-
-// Placeholder screen. It asks the Rust core for its version to prove that the
-// web view, the app shell and the core are wired together on this platform.
-function App() {
-  const [core, setCore] = useState<CoreLink>({ state: "starting" });
-
-  useEffect(() => {
-    let cancelled = false;
-    invoke<string>("core_version")
-      .then((version) => {
-        if (!cancelled) setCore({ state: "linked", version });
-      })
-      .catch((e) => {
-        if (!cancelled) setCore({ state: "failed", reason: String(e) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
+export default function App() {
+  const state = useAppState();
   return (
-    <main>
-      <h1>peoples.chat</h1>
-      <p className="tagline">Messaging that keeps working when the internet is gone.</p>
-
-      {core.state === "linked" && <p className="status ok">Core {core.version} linked</p>}
-      {core.state === "failed" && <p className="status failed">Core not reachable: {core.reason}</p>}
-      {core.state === "starting" && <p className="status">Starting…</p>}
-    </main>
+    <div className={styles.app}>
+      {state.status === "ready" && (
+        <Navigator initial={state.account ? { name: "chats" } : { name: "welcome" }}>
+          {(screen) => <ScreenView screen={screen} />}
+        </Navigator>
+      )}
+      {state.status === "failed" && (
+        <div className={layout.centered} role="alert">
+          <p>peoples.chat could not start.</p>
+          <p>{state.error}</p>
+        </div>
+      )}
+    </div>
   );
 }
 
-export default App;
+function ScreenView({ screen }: { screen: Screen }) {
+  switch (screen.name) {
+    case "welcome":
+      return <Welcome />;
+    case "createProfile":
+      return <CreateProfile />;
+    case "chats":
+      return <Chats />;
+    case "chat":
+      return <ChatScreen chatId={screen.chatId} />;
+    case "newChat":
+      return <NewChat />;
+    case "scan":
+      return <Scan />;
+    case "request":
+      return <MessageRequest invitationId={screen.invitationId} />;
+    case "settings":
+      return <Settings />;
+    case "account":
+      return <Account />;
+    case "radioSettings":
+      return <RadioSettings />;
+    case "profile":
+      return <Profile />;
+  }
+}

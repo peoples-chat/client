@@ -1,0 +1,59 @@
+/* Design tokens from the Moss design (linked in #21). Light first; dark follows the system. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-sans: "Albert Sans Variable", "Helvetica Neue", Arial, sans-serif;
+
+  --color-bg: #fdfdfb;
+  --color-text: #1e2a22;
+  --color-muted: #566259;
+  /* Links and action icons. */
+  --color-accent: #2f5a3d;
+  --color-accent-hover: #274a32;
+  /* Primary buttons and the user's own messages. */
+  --color-primary: #3a6647;
+  --color-on-primary: #ffffff;
+  --color-on-primary-muted: #e3ede5;
+  /* Fields, secondary buttons and cards. */
+  --color-surface: #f2f5f0;
+  --color-bubble-in: #edf1eb;
+  --color-border: #e1e6de;
+  --color-disabled: #a8b1a9;
+  --color-danger: #a3271f;
+  /* Avatar tints; green also marks the selected chip and tab. */
+  --color-green-bg: #dce8dd;
+  --color-green-fg: #2c5237;
+  --color-amber-bg: #f6ebcc;
+  --color-amber-fg: #735200;
+  /* The logo's mark, and radio sends later. */
+  --color-amber-strong: #d4a53a;
+  /* QR codes stay dark on light in both themes, so that cameras can read them. */
+  --color-qr-bg: #ffffff;
+  --color-qr-fg: #1e2a22;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #121a15;
+    --color-text: #eaefe8;
+    --color-muted: #9daaa0;
+    --color-accent: #9ad2ab;
+    --color-accent-hover: #cde6d4;
+    --color-primary: #3b7550;
+    --color-on-primary: #ffffff;
+    --color-on-primary-muted: #e3ede5;
+    --color-surface: #18221c;
+    --color-bubble-in: #1f2b24;
+    --color-border: #28342c;
+    --color-disabled: #3c4a41;
+    --color-danger: #f0a59e;
+    --color-green-bg: #213327;
+    --color-green-fg: #a9d4b5;
+    --color-amber-bg: #332a14;
+    --color-amber-fg: #e5c06a;
+    --color-amber-strong: #d9ae4a;
+    --color-qr-bg: #ffffff;
+    --color-qr-fg: #121a15;
+  }
+}

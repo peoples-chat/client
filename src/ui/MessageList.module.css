@@ -1,0 +1,74 @@
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 12px 14px;
+}
+
+/* Pushes a short conversation to the bottom while keeping a long one scrollable. */
+.spacer {
+  flex: 1 0 auto;
+}
+
+.empty {
+  align-self: center;
+  margin: 0 0 12px;
+  font-size: 14.5px;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.day {
+  align-self: center;
+  padding: 4px 0 6px;
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+
+.bubble {
+  max-width: 78%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 13px 7px;
+  overflow-wrap: anywhere;
+}
+
+.in {
+  align-self: flex-start;
+  border-radius: 22px 22px 22px 8px;
+  background: var(--color-bubble-in);
+  color: var(--color-text);
+}
+
+.out {
+  align-self: flex-end;
+  border-radius: 22px 22px 8px 22px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.text {
+  white-space: pre-wrap;
+}
+
+.meta {
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.out .meta {
+  color: var(--color-on-primary-muted);
+}
+
+.delivery {
+  display: flex;
+}

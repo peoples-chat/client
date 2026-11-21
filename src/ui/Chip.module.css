@@ -1,0 +1,36 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 2px;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.selected {
+  background: var(--color-green-bg);
+  color: var(--color-green-fg);
+}
+
+.chip:disabled .pill {
+  color: var(--color-disabled);
+}

@@ -11,12 +11,17 @@ fn core_version() -> &'static str {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(log::LevelFilter::Info)
-                .build(),
-        )
+    let builder = tauri::Builder::default().plugin(
+        tauri_plugin_log::Builder::new()
+            .level(log::LevelFilter::Info)
+            .build(),
+    );
+
+    // Scanning QR codes with the camera. The plugin exists for iOS and Android only.
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![core_version])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

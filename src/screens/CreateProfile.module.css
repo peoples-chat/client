@@ -1,0 +1,38 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 16px 24px;
+}
+
+.keyNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--color-surface);
+  font-size: 14.5px;
+}
+
+.keyNote p {
+  margin: 0;
+}
+
+.keyIcon {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.error {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-danger);
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px max(24px, calc(var(--safe-bottom) + 6px));
+}
