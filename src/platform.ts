@@ -1,7 +1,14 @@
 import { isTauri } from "@tauri-apps/api/core";
 
-/** Scanning QR codes uses the camera plugin, which the iOS and Android apps have. */
-export const canScanQrCodes = isTauri() && /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+/** True in the iOS and Android apps, false on desktop and in the browser preview. */
+const inPhoneApp = isTauri() && /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 
-/** The system share sheet, where the web view offers it. */
-export const canShare = typeof navigator.share === "function";
+/** Scanning QR codes uses the camera plugin, which the iOS and Android apps have. */
+export const canScanQrCodes = inPhoneApp;
+
+/**
+ * The system share sheet through the web share API. Not in the phone apps: on iOS the web view
+ * opens it as a clipped popover, and Android's web view lacks the API. A native share sheet
+ * replaces it there (#66).
+ */
+export const canShare = !inPhoneApp && typeof navigator.share === "function";
