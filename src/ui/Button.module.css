@@ -1,0 +1,79 @@
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+  border: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.large {
+  min-height: 52px;
+  border-radius: 26px;
+}
+
+.small {
+  min-height: 44px;
+  border-radius: 22px;
+}
+
+.primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.secondary {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.danger {
+  background: transparent;
+  color: var(--color-danger);
+}
+
+.button:disabled {
+  color: var(--color-disabled);
+}
+
+/* Keeps its outline on a surface-coloured card too. */
+.primary:disabled {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.button:not(:disabled):active {
+  opacity: 0.85;
+}
+
+.iconButton {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.iconButton:disabled {
+  color: var(--color-disabled);
+}
+
+@media (hover: hover) {
+  .primary:not(:disabled):hover {
+    filter: brightness(1.08);
+  }
+
+  .secondary:not(:disabled):hover,
+  .iconButton:not(:disabled):hover {
+    background: var(--color-surface);
+  }
+}

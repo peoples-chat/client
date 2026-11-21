@@ -1,0 +1,38 @@
+/* Shared screen layout: a column with a header, a scrolling middle and an optional footer. */
+
+.screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A short line under a field or above a footer that says why something did not work. */
+.error {
+  margin: 0 20px 8px;
+  font-size: 14px;
+  color: var(--color-danger);
+}
+
+.centered {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 32px;
+  text-align: center;
+  color: var(--color-muted);
+}
+
+.centered p {
+  margin: 0;
+}

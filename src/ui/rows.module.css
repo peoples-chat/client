@@ -1,0 +1,122 @@
+.actionRow,
+.contactRow,
+.chatRow {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.actionRow {
+  gap: 14px;
+  min-height: 50px;
+  padding: 5px 20px;
+  font-size: 16px;
+}
+
+.actionIcon,
+.chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.accent .actionIcon {
+  color: var(--color-accent);
+}
+
+.actionLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.actionRow:disabled,
+.actionRow:disabled .actionIcon,
+.actionRow:disabled .chevron {
+  color: var(--color-disabled);
+}
+
+.contactRow {
+  gap: 12px;
+  min-height: 52px;
+  padding: 6px 20px;
+}
+
+.contactName {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatRow {
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border-radius: 16px;
+}
+
+.chatBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chatTop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.chatName {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatTime {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+
+.chatPreview {
+  min-width: 0;
+  font-size: 14.5px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.request {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.sectionTitle {
+  margin: 0;
+  padding: 16px 20px 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+@media (hover: hover) {
+  .actionRow:not(:disabled):hover,
+  .contactRow:hover,
+  .chatRow:hover {
+    background: var(--color-surface);
+  }
+}

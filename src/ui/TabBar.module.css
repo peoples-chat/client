@@ -1,0 +1,46 @@
+.bar {
+  display: flex;
+  /* The design's 26px below the tabs is the home indicator area less 8px. */
+  padding: 0 8px max(8px, calc(env(safe-area-inset-bottom, 0px) - 8px));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-height: 52px;
+  padding: 8px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 30px;
+  border-radius: 15px;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.active {
+  color: var(--color-green-fg);
+}
+
+.active .pill {
+  background: var(--color-green-bg);
+}
+
+.tab:disabled {
+  color: var(--color-disabled);
+}
