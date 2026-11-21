@@ -1,13 +1,19 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { createMockCore } from "./mockCore";
+import { createTauriCore } from "./tauriCore";
 import type { Core } from "./types";
 
 /**
- * The core the interface talks to. The mock with demo data for now; the real Rust core
- * replaces it behind the same interface once the Tauri boundary exists (#16).
+ * True when the interface talks to the real Rust core in the app shell. Until the real core
+ * covers the whole flow (#20), builds opt in with `VITE_CORE=rust`; the browser preview always
+ * uses the mock.
  */
-export const core: Core = createMockCore();
+const usesRustCore = isTauri() && import.meta.env.VITE_CORE === "rust";
+
+/** The core the interface talks to: the real one, or the mock with demo data. */
+export const core: Core = usesRustCore ? createTauriCore() : createMockCore();
 
 /** True while `core` is the mock, so the interface can say that it shows demo data. */
-export const usesDemoData = true;
+export const usesDemoData = !usesRustCore;
 
 export * from "./types";

@@ -1,8 +1,11 @@
-// The interface's side of the boundary to the Rust core (#16).
+// The interface's side of the boundary to the Rust core (#16). `docs/core-interface.md`
+// describes the contract. The Rust side is `core/src/interface.rs`, and
+// `core/tests/fixtures/interface.json` pins the JSON that both sides agree on.
 //
 // The web view sends commands and receives events. It holds no protocol logic and no key
-// material: public keys and invite links are opaque strings here. Until the real core is
-// wired through Tauri, `mockCore.ts` implements this interface with demo data.
+// material: public keys and invite links are opaque strings here. `tauriCore.ts` reaches the
+// real core through the app shell, and `mockCore.ts` implements the same interface with demo
+// data.
 //
 // Not here yet: `pairRadio` and the transport and radio state events. They arrive with the
 // radio pairing work (#24) and the transport work (#48).
