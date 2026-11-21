@@ -49,6 +49,11 @@ For Android:
   export JAVA_HOME=/path/to/jdk-21
   export ANDROID_HOME="$HOME/Library/Android/sdk"
   export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+  # MDK builds OpenSSL from source, which needs the NDK's llvm-ranlib; Tauri sets only the
+  # compiler and archiver. (On Linux, the folder is linux-x86_64.)
+  for target in aarch64_linux_android armv7_linux_androideabi i686_linux_android x86_64_linux_android; do
+    export "RANLIB_$target=$NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib"
+  done
   ```
 
 ## Run
