@@ -1,6 +1,6 @@
-/* A phone-width column. On desktop, wider windows centre it. */
+/* A phone-width column. On desktop, wider windows centre it. On phones, it ends at the keyboard. */
 .app {
-  height: 100%;
+  height: var(--viewport-height, 100%);
   max-width: 480px;
   margin: 0 auto;
   display: flex;

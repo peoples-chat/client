@@ -5,7 +5,9 @@ import "./styles/tokens.css";
 import "./styles/global.css";
 import App from "./App";
 import { store } from "./state";
+import { followVisualViewport } from "./viewport";
 
+followVisualViewport();
 void store.start();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

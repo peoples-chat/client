@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useRef } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 import type { DeliveryState, Message } from "../core/types";
 import { formatDay, formatTime, sameDay } from "./format";
 import { Icon } from "./Icon";
@@ -13,12 +13,31 @@ interface MessageListProps {
 /** The messages of a chat, oldest at the top, with a separator for each day. */
 export function MessageList({ messages, empty }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
+  const atBottom = useRef(true);
 
   // Keep the newest message in view as messages arrive.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (list) list.scrollTop = list.scrollHeight;
   }, [messages.length]);
+
+  // And when the list gets shorter, for example because the keyboard opened.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const onScroll = () => {
+      atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    };
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) list.scrollTop = list.scrollHeight;
+    });
+    list.addEventListener("scroll", onScroll);
+    observer.observe(list);
+    return () => {
+      list.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
+  }, []);
 
   const now = Date.now();
   return (

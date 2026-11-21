@@ -4,6 +4,17 @@
   box-sizing: border-box;
 }
 
+/* Space for the status bar and the home indicator or navigation bar. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* The on-screen keyboard covers the bottom inset (see viewport.ts). */
+html[data-keyboard] {
+  --safe-bottom: 0px;
+}
+
 html,
 body,
 #root {

@@ -1,7 +1,7 @@
 .bar {
   display: flex;
   /* The design's 26px below the tabs is the home indicator area less 8px. */
-  padding: 0 8px max(8px, calc(env(safe-area-inset-bottom, 0px) - 8px));
+  padding: 0 8px max(8px, calc(var(--safe-bottom) - 8px));
   border-top: 1px solid var(--color-border);
   background: var(--color-bg);
 }
