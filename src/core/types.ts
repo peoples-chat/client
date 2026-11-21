@@ -75,6 +75,7 @@ export interface Snapshot {
  */
 export type CoreEvent =
   | { type: "accountCreated"; account: Account }
+  | { type: "accountDeleted" }
   | { type: "chatAdded"; chat: Chat }
   | { type: "invitationReceived"; invitation: Invitation }
   | { type: "invitationRemoved"; invitationId: string }
@@ -94,6 +95,8 @@ export interface Core {
 
   /** First launch: creates the account key and publishes the profile name. */
   createAccount(name: string): Promise<Account>;
+  /** Removes the profile, leaves every chat and deletes the account's data from this device. */
+  deleteAccount(): Promise<void>;
   /** Starts a direct chat from a scanned QR code or a pasted invite link. */
   addContact(inviteLink: string): Promise<Chat>;
   acceptInvitation(invitationId: string): Promise<Chat>;

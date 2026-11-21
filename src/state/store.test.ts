@@ -46,6 +46,20 @@ describe("applyEvent", () => {
     expect(applyEvent(state, { type: "invitationRemoved", invitationId: "x" })).toBe(state);
   });
 
+  it("clears the account, chats and requests when the account is deleted", () => {
+    const state = {
+      ...ready([chat("a")]),
+      account: { name: "Emil", publicKey: "k", inviteLink: "peopleschat:x" },
+      invitations: [{ id: "i1", from: { publicKey: "k2", name: "Karen" }, receivedAt: 5, messages: [] }],
+    };
+    expect(applyEvent(state, { type: "accountDeleted" })).toEqual({
+      ...state,
+      account: null,
+      chats: [],
+      invitations: [],
+    });
+  });
+
   it("adds a chat and an invitation once, and removes the invitation", () => {
     const invitation = { id: "i1", from: { publicKey: "k", name: "Karen" }, receivedAt: 5, messages: [] };
     let state = applyEvent(ready(), { type: "chatAdded", chat: chat("a") });

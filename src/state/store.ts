@@ -31,6 +31,9 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
     case "accountCreated":
       return { ...state, account: event.account };
 
+    case "accountDeleted":
+      return { ...state, account: null, chats: [], invitations: [] };
+
     case "chatAdded":
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
       return { ...state, chats: [...state.chats, event.chat] };

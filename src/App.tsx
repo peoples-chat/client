@@ -1,5 +1,6 @@
 import { Navigator } from "./navigation/Navigator";
 import type { Screen } from "./navigation/screens";
+import { Account } from "./screens/Account";
 import { ChatScreen } from "./screens/ChatScreen";
 import { Chats } from "./screens/Chats";
 import { CreateProfile } from "./screens/CreateProfile";
@@ -51,6 +52,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <MessageRequest invitationId={screen.invitationId} />;
     case "settings":
       return <Settings />;
+    case "account":
+      return <Account />;
     case "radioSettings":
       return <RadioSettings />;
     case "profile":

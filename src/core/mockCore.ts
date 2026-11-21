@@ -50,8 +50,19 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const now = options.now ?? Date.now;
   const delays = options.delays ?? { sent: 600, reply: 1500 };
   const listeners = new Set<CoreListener>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
   const replyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const state = restore(storage) ?? emptyState();
+
+  // Runs `task` later, unless the account is deleted first.
+  function later(ms: number, task: () => void) {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      task();
+    }, ms);
+    timers.add(timer);
+    return timer;
+  }
 
   function emit(...events: CoreEvent[]) {
     save(storage, state);
@@ -74,8 +85,12 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
 
   // The demo contact answers once the user stops sending for a moment.
   function scheduleReply(chatId: string) {
-    clearTimeout(replyTimers.get(chatId));
-    const timer = setTimeout(() => {
+    const pending = replyTimers.get(chatId);
+    if (pending) {
+      clearTimeout(pending);
+      timers.delete(pending);
+    }
+    const timer = later(delays.reply, () => {
       replyTimers.delete(chatId);
       const chat = state.chats.find((c) => c.id === chatId);
       if (!chat) return;
@@ -89,7 +104,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       state.repliesSent += 1;
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
-    }, delays.reply);
+    });
     replyTimers.set(chatId, timer);
   }
 
@@ -130,6 +145,15 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         { type: "invitationReceived", invitation },
       );
       return structuredClone(account);
+    },
+
+    async deleteAccount() {
+      requireAccount();
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      replyTimers.clear();
+      Object.assign(state, emptyState());
+      emit({ type: "accountDeleted" });
     },
 
     async addContact(inviteLink) {
@@ -185,11 +209,11 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
 
-      setTimeout(() => {
+      later(delays.sent, () => {
         message.delivery = "sent";
         emit({ type: "deliveryChanged", chatId, messageId: message.id, delivery: "sent" });
         scheduleReply(chatId);
-      }, delays.sent);
+      });
       return structuredClone(message);
     },
   };

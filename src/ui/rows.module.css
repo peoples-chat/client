@@ -27,14 +27,28 @@
   color: var(--color-accent);
 }
 
-.actionLabel {
+.danger,
+.danger .actionIcon {
+  color: var(--color-danger);
+}
+
+.actionText {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.actionDescription {
+  font-size: 13.5px;
+  color: var(--color-muted);
 }
 
 .actionRow:disabled,
 .actionRow:disabled .actionIcon,
-.actionRow:disabled .chevron {
+.actionRow:disabled .chevron,
+.actionRow:disabled .actionDescription {
   color: var(--color-disabled);
 }
 

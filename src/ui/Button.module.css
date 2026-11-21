@@ -35,12 +35,18 @@
   color: var(--color-danger);
 }
 
+.dangerSolid {
+  background: var(--color-danger);
+  color: var(--color-bg);
+}
+
 .button:disabled {
   color: var(--color-disabled);
 }
 
 /* Keeps its outline on a surface-coloured card too. */
-.primary:disabled {
+.primary:disabled,
+.dangerSolid:disabled {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
 }

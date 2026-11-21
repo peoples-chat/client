@@ -7,8 +7,12 @@ import styles from "./rows.module.css";
 interface ActionRowProps {
   icon: IconName;
   label: string;
+  /** A second line under the label. */
+  description?: string;
   /** Action icons in green, as on New chat; settings rows keep them muted. */
   accent?: boolean;
+  /** Red, for actions that cannot be undone. */
+  danger?: boolean;
   /** A chevron for rows that open a screen; rows that act in place have none. */
   chevron?: boolean;
   disabled?: boolean;
@@ -16,16 +20,19 @@ interface ActionRowProps {
 }
 
 /** A row that opens something or does something. */
-export function ActionRow({ icon, label, accent, chevron = true, disabled, onClick }: ActionRowProps) {
+export function ActionRow({ icon, label, description, accent, danger, chevron = true, disabled, onClick }: ActionRowProps) {
   return (
     <button
       type="button"
-      className={`${styles.actionRow} ${accent ? styles.accent : ""}`}
+      className={[styles.actionRow, accent && styles.accent, danger && styles.danger].filter(Boolean).join(" ")}
       disabled={disabled}
       onClick={onClick}
     >
       <Icon name={icon} size={22} className={styles.actionIcon} />
-      <span className={styles.actionLabel}>{label}</span>
+      <span className={styles.actionText}>
+        <span>{label}</span>
+        {description && <span className={styles.actionDescription}>{description}</span>}
+      </span>
       {chevron && <Icon name="chevron" size={18} className={styles.chevron} />}
     </button>
   );

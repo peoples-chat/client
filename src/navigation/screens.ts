@@ -8,6 +8,7 @@ export type Screen =
   | { name: "scan" }
   | { name: "request"; invitationId: string }
   | { name: "settings" }
+  | { name: "account" }
   | { name: "radioSettings" }
   | { name: "profile" };
 

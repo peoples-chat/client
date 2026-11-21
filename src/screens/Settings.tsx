@@ -13,7 +13,7 @@ import styles from "./Settings.module.css";
 
 // Every setting in the design. Those without a screen are not built yet and are disabled (#63).
 const SETTINGS: { icon: IconName; label: string; screen?: Screen }[] = [
-  { icon: "person", label: "Account" },
+  { icon: "person", label: "Account", screen: { name: "account" } },
   { icon: "devices", label: "Linked devices" },
   { icon: "group", label: "Recovery" },
   { icon: "radio", label: "Radio", screen: { name: "radioSettings" } },

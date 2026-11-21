@@ -117,6 +117,38 @@ describe("mock core", () => {
     await expect(core.acceptInvitation(invitation.id)).rejects.toBeInstanceOf(CoreError);
   });
 
+  it("deletes the account with its chats and requests, and allows a new one", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const [chat] = (await core.load()).chats;
+    await core.sendMessage(chat.id, "Hello");
+    events.length = 0;
+
+    await core.deleteAccount();
+    expect(events).toEqual([{ type: "accountDeleted" }]);
+    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [] });
+
+    // The pending acknowledgement and reply belonged to the deleted account.
+    vi.advanceTimersByTime(5000);
+    expect(events).toHaveLength(1);
+
+    await core.createAccount("Karen");
+    expect((await core.load()).account?.name).toBe("Karen");
+  });
+
+  it("refuses to delete an account that does not exist", async () => {
+    const { core } = setup();
+    await expect(core.deleteAccount()).rejects.toBeInstanceOf(CoreError);
+  });
+
+  it("forgets a deleted account across reloads", async () => {
+    const storage = memoryStorage();
+    const first = createMockCore({ storage, now: () => NOW });
+    await first.createAccount("Emil");
+    await first.deleteAccount();
+    expect((await createMockCore({ storage }).load()).account).toBeNull();
+  });
+
   it("keeps its state between reloads and settles waiting messages", async () => {
     const storage = memoryStorage();
     const first = createMockCore({ storage, now: () => NOW });
