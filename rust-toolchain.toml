@@ -1,4 +1,5 @@
-# Same channel as MDK (marmot-protocol/mdk), which the core will link.
+# Same channel and components as MDK (marmot-protocol/mdk), which the core links. MDK's Markdown
+# parser uses llvm-tools-preview for Android builds and optimized Linux builds.
 [toolchain]
 channel = "1.97.1"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

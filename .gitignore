@@ -3,6 +3,9 @@
 # Rust
 /target/
 
+# Build tools installed by scripts/ (the Odin compiler for MDK)
+/.tools/
+
 # Front end
 node_modules
 /dist
