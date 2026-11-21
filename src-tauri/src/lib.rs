@@ -1,6 +1,7 @@
 //! App shell. It hosts the web view and forwards commands to the Rust core.
 //! No protocol logic belongs here.
 
+mod bridge;
 #[cfg(debug_assertions)]
 mod spike;
 
@@ -10,7 +11,7 @@ mod spike;
 /// that a phone starts.
 const WORKER_STACK: usize = 8 * 1024 * 1024;
 
-/// Version of the linked core. The placeholder screen calls this once at start.
+/// Version of the linked core, shown at the bottom of Settings.
 #[tauri::command]
 fn core_version() -> &'static str {
     let version = peoples_chat_core::version();
@@ -38,18 +39,29 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
 
+    let builder = builder.setup(|app| {
+        // The core starts with the app, not when the web view first asks for it.
+        bridge::start(app.handle())?;
+        #[cfg(debug_assertions)]
+        spike::run_from_env(app.handle());
+        Ok(())
+    });
+
     #[cfg(debug_assertions)]
-    let builder = builder
-        .setup(|app| {
-            spike::run_from_env(app.handle());
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            core_version,
-            spike::spike_relay_round_trip
-        ]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        core_version,
+        bridge::core_snapshot,
+        bridge::create_account,
+        bridge::delete_account,
+        spike::spike_relay_round_trip
+    ]);
     #[cfg(not(debug_assertions))]
-    let builder = builder.invoke_handler(tauri::generate_handler![core_version]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        core_version,
+        bridge::core_snapshot,
+        bridge::create_account,
+        bridge::delete_account
+    ]);
 
     builder
         .run(tauri::generate_context!())
