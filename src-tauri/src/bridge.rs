@@ -37,7 +37,6 @@ impl CoreSlot {
                     .await
                     .map_err(start_failed)?;
                 forward_events(app.clone(), core.subscribe());
-                log::info!("core started");
                 Ok(core)
             })
             .await

@@ -42,6 +42,10 @@ impl Core {
             )?),
             None => None,
         };
+        log::info!(
+            "core started {} an account",
+            if account.is_some() { "with" } else { "without" }
+        );
         let (events, _) = broadcast::channel(EVENT_BUFFER);
         Ok(Self {
             inner: Arc::new(Inner {
@@ -96,6 +100,7 @@ impl Core {
         let account = account_view(created.public_key_hex, name.to_owned())
             .map_err(|error| failed("create the account", error))?;
 
+        log::info!("account created");
         self.state().account = Some(account.clone());
         self.emit(CoreEvent::AccountCreated {
             account: account.clone(),
@@ -117,6 +122,7 @@ impl Core {
             .await
             .map_err(|error| failed("delete the account", error))?;
 
+        log::info!("account deleted");
         *self.state() = Snapshot::default();
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
