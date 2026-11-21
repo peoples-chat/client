@@ -37,6 +37,11 @@ Choices:
 `nostr-sdk` client. Keys go to `keyring-core`'s in-memory store, so the test never touches the machine's keychain and
 runs on CI without a Secret Service.
 
+## Phones
+
+The core builds and runs on iOS and Android. Sizes, build times and caveats are in
+[spikes/15-mdk-on-phones.md](spikes/15-mdk-on-phones.md).
+
 ## Pin
 
 | What | Where |
@@ -54,12 +59,17 @@ Always pin a release tag: MDK deletes nightly builds after 30 days, and the `mdk
   installs the compiler version the locked MDK pins into `.tools/odin`, where `.cargo/config.toml` points `ODIN`. Every
   build of the core or the app needs it, CI included.
 - **LLVM tools.** For Android builds and optimized Linux builds, the Markdown parser compiles through the Rust
-  toolchain's `llvm-tools-preview` component, which `rust-toolchain.toml` lists. It builds for Android API 26 unless
-  `ANDROID_API` says otherwise, while the app's `minSdk` is 24; #15 settles which level the app supports.
+  toolchain's `llvm-tools-preview` component, which `rust-toolchain.toml` lists.
+- **Android API level.** The Markdown parser builds for Android API 26 unless `ANDROID_API` says otherwise.
+  `.cargo/config.toml` sets it to 24, the app's `minSdk`.
+- **`ranlib` on Android.** OpenSSL's build calls `<target>-ranlib`, which current NDKs don't ship. The README's Android
+  setup points `RANLIB_<target>` at the NDK's `llvm-ranlib`.
 - **SQLCipher and OpenSSL** are compiled from source (vendored). A C compiler, `perl` and `make` are enough; no system
   libraries are needed.
-- **Stack size.** Unoptimized OpenMLS can overflow the default 2 MiB thread stack, so `.cargo/config.toml` sets
-  `RUST_MIN_STACK` to 4 MiB, as MDK does.
+- **Stack size.** Unoptimized OpenMLS can overflow the default 2 MiB thread stack.
+  - `.cargo/config.toml` sets `RUST_MIN_STACK` to 4 MiB, as MDK does. That reaches only processes Cargo starts, such as
+    tests and desktop dev builds.
+  - The app shell builds Tauri's async runtime with 8 MiB thread stacks itself, so phones get them too.
 - **Release profile.** Panics must unwind: MDK isolates failures per account worker, and `panic = "abort"` would end the
   whole app instead. The workspace uses MDK's recommended thin LTO.
 

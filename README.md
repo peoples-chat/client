@@ -18,6 +18,7 @@ Work is tracked in the issues of this repository.
 | `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
 | `src/core/` | The interface's side of the boundary to the core: commands, events and, for now, a mock core with demo data. |
+| `docs/` | Notes on MDK in the core ([docs/mdk.md](docs/mdk.md)) and findings from spikes (`docs/spikes/`). |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
 
 Keep the interface thin: it shows state and sends commands, and the core does the rest.
@@ -71,6 +72,9 @@ together.
 
 `pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
 quickest way to work on screens. Anything the app cannot do yet is disabled.
+
+`pnpm tauri ios build` fails at its last step, after Xcode has built the app; see
+[docs/spikes/15-mdk-on-phones.md](docs/spikes/15-mdk-on-phones.md#build-setup).
 
 ## Checks
 
