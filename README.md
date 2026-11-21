@@ -3,7 +3,8 @@
 An everyday encrypted messenger that keeps working over LoRa radio when the internet is gone, with one
 identity and one contact list for both.
 
-**Status:** proof of concept. The interface runs on a mock core with demo data until the real core lands.
+**Status:** proof of concept. By default the interface runs on a mock core with demo data. The real core can create
+and delete an account so far.
 Nothing here is ready for real use. No licence has been chosen yet, so all rights are reserved for now.
 
 Work is tracked in the issues of this repository.
@@ -17,8 +18,8 @@ Work is tracked in the issues of this repository.
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
 | `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
-| `src/core/` | The interface's side of the boundary to the core: commands, events and, for now, a mock core with demo data. |
-| `docs/` | Notes on MDK in the core ([docs/mdk.md](docs/mdk.md)) and findings from spikes (`docs/spikes/`). |
+| `src/core/` | The interface's side of the boundary to the core: commands, events, the bridge to the real core and a mock core with demo data. |
+| `docs/` | The interface between core and web view ([docs/core-interface.md](docs/core-interface.md)), MDK in the core ([docs/mdk.md](docs/mdk.md)) and findings from spikes (`docs/spikes/`). |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
 
 Keep the interface thin: it shows state and sends commands, and the core does the rest.
@@ -72,6 +73,10 @@ together.
 
 `pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
 quickest way to work on screens. Anything the app cannot do yet is disabled.
+
+The app uses the mock core too, unless you start it with `VITE_CORE=rust`, for example
+`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account so far. Relays, keys and the rest are
+in [docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
 
 The app's product name is `peopleschat`, without the dot, because `pnpm tauri ios build` cannot find the built app
 when the name has one. People still see "peoples.chat": on iOS through `CFBundleDisplayName` in

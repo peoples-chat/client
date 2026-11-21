@@ -15,8 +15,13 @@ lower `marmot-session` crate.
 | --- | --- |
 | `Messaging::open` | `AccountHome::open_with_keychain`, `MarmotApp::try_with_relays_and_account_home_and_config`, `MarmotAppRuntime::start` |
 | `create_account(name)` | `create_identity_local_ready_with_initial_profile` |
+| `accounts()` | `AccountManager::managed_accounts`, `display_name_for_account_id` |
+| `delete_account` | `sign_out_and_wipe` |
 | `wait_until_published` | polls `account_setup_readiness` until `NetworkReady` |
 | `close` | `shutdown_and_close` |
+
+`Core` (`core/src/app.rs`) builds the interface's commands and events on it; see
+[core-interface.md](core-interface.md).
 
 Choices:
 
@@ -29,6 +34,10 @@ Choices:
 - **Account setup in two steps.** The account exists locally as soon as `create_account` returns. Publishing its relay
   lists (kinds 10002 and 10050), an empty follow list (kind 3), its profile (kind 0) and its KeyPackage (kind 30443)
   continues in the background, and each needs a relay's acknowledgement.
+- **Relays are required.** MDK refuses to set up an account without default relays (`MissingDefaultRelays`), but they
+  don't need to be reachable.
+- **Deleting wipes.** `sign_out_and_wipe` removes the account's databases and its key. Telling relays and groups is
+  best effort and never blocks the local wipe.
 
 ## Tests
 
@@ -36,6 +45,9 @@ Choices:
 (`nostr_relay_builder::MockRelay`, as MDK's own tests use) and reads the published events back with a separate
 `nostr-sdk` client. Keys go to `keyring-core`'s in-memory store, so the test never touches the machine's keychain and
 runs on CI without a Secret Service.
+
+`core/tests/core_interface.rs` does the same for `Core`. It creates an account, finds it again after a restart and
+deletes it, and it checks the interface's JSON against the shared fixture.
 
 ## Phones
 
