@@ -5,13 +5,12 @@
 
 # Front end
 node_modules
-/build
-/.svelte-kit
-/package
-vite.config.js.timestamp-*
+/dist
+*.tsbuildinfo
 vite.config.ts.timestamp-*
 
 # Local environment and secrets
 .env
 .env.*
 !.env.example
+*.local

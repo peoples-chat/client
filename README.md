@@ -15,10 +15,10 @@ Work is tracked in the issues of this repository.
 | `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. |
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
-| `src/` | Web interface (SvelteKit in single-page mode, TypeScript). It holds no protocol logic. |
+| `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check and build check for the app. |
 
-The front-end framework is provisional. Keep the interface thin so that it can be replaced.
+Keep the interface thin: it shows state and sends commands, and the core does the rest.
 
 ## Prerequisites
 
@@ -29,8 +29,8 @@ The front-end framework is provisional. Keep the interface thin so that it can b
 
 For iOS (macOS only):
 
-- Xcode, with an iOS simulator runtime that matches Xcode's SDK version. If `pnpm tauri ios dev` says the
-  simulator SDK is not installed, run `xcodebuild -downloadPlatform iOS`.
+- Xcode with an iOS simulator. If `pnpm tauri ios dev` says the simulator SDK is not installed and opens
+  Xcode, let Xcode finish starting once and run the command again.
 - `brew install xcodegen cocoapods`
 - `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
 
