@@ -48,8 +48,8 @@ Every target compiles SQLCipher, OpenSSL and MDK's Odin-built Markdown parser fr
 
 | Target | Command | Result | Time |
 | --- | --- | --- | --- |
-| iOS simulator arm64, debug | `pnpm tauri ios build --debug --target aarch64-sim` | App builds and runs; the command fails at its last step ([below](#build-setup)) | 69 s |
-| iOS simulator arm64, release | `pnpm tauri ios build --target aarch64-sim` | App builds; the same last step fails | 246 s |
+| iOS simulator arm64, debug | `pnpm tauri ios build --debug --target aarch64-sim` | App builds and runs | 69 s |
+| iOS simulator arm64, release | `pnpm tauri ios build --target aarch64-sim` | App builds | 246 s |
 | iOS simulator x86-64, debug | `cargo build -p peoples-chat --lib --target x86_64-apple-ios` | Builds | 66 s |
 | iOS device, debug | `cargo build -p peoples-chat --lib --target aarch64-apple-ios` | Builds; not linked into an app ([below](#not-tested-yet)) | 68 s |
 | Android arm64, debug | `pnpm tauri android build --debug --apk --target aarch64` | APK builds and runs | 57 s |
@@ -93,13 +93,13 @@ App store download sizes will differ; these numbers compare like with like.
   - OpenSSL's build looks for `<target>-ranlib`. NDK 29 doesn't have it, and Tauri sets only the compiler and archiver.
   - The README's Android setup exports the NDK's `llvm-ranlib` for each ABI. A CI job for Android needs the same.
   - The path depends on where the NDK is installed, so it can't go in `.cargo/config.toml`.
-- **`pnpm tauri ios build` fails at its last step.**
-  - Xcode builds and archives the app. The Tauri CLI then looks for `peoples.app` to rename it, but the archive holds
-    `peoples.chat.app`. The CLI seems to treat `.chat` in the product name as a file extension.
-  - The same happens without MDK.
-  - The archived app is complete and installs in the simulator, and `pnpm tauri ios dev` is not affected.
-  - It has to be solved before the build can produce an IPA for devices: a product name without a dot, or a fix in
-    Tauri.
+- **`pnpm tauri ios build` failed at its last step. Fixed.**
+  - Xcode built and archived the app. The Tauri CLI then looked for `peoples.app` to rename it, but the archive held
+    `peoples.chat.app`. The CLI seems to treat `.chat` in the product name as a file extension. The same happened
+    without MDK.
+  - The product name is now `peopleschat`, and the command completes. The name under the app icon is still
+    "peoples.chat": `CFBundleDisplayName` in `src-tauri/Info.ios.plist` sets it.
+  - The failing step came after the build, so the build times above still hold.
 
 ### Not tested yet
 
@@ -134,6 +134,7 @@ App store download sizes will differ; these numbers compare like with like.
     doesn't reach an app that a phone starts.
   - The spike ran with 8 MiB stacks; the default was not tried.
 - **`.cargo/config.toml`**: `ANDROID_API = "24"`.
+- **Product name `peopleschat`** (`src-tauri/tauri.conf.json` and the Xcode project). People still see "peoples.chat".
 
 ## Run it again
 
@@ -148,8 +149,8 @@ Spike accounts use their own folder and key store service, separate from the app
 2. On a booted iOS simulator:
 
    ```sh
-   pnpm tauri ios build --debug --target aarch64-sim   # ends with the rename error above
-   xcrun simctl install booted src-tauri/gen/apple/build/peoples-chat_iOS.xcarchive/Products/Applications/peoples.chat.app
+   pnpm tauri ios build --debug --target aarch64-sim
+   xcrun simctl install booted src-tauri/gen/apple/build/arm64-sim/peopleschat.app
    SIMCTL_CHILD_PEOPLES_CHAT_SPIKE_RELAY=ws://127.0.0.1:7777 \
      xcrun simctl launch --terminate-running-process booted chat.peoples.client
    ```

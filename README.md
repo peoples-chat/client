@@ -73,8 +73,9 @@ together.
 `pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
 quickest way to work on screens. Anything the app cannot do yet is disabled.
 
-`pnpm tauri ios build` fails at its last step, after Xcode has built the app; see
-[docs/spikes/15-mdk-on-phones.md](docs/spikes/15-mdk-on-phones.md#build-setup).
+The app's product name is `peopleschat`, without the dot, because `pnpm tauri ios build` cannot find the built app
+when the name has one. People still see "peoples.chat": on iOS through `CFBundleDisplayName` in
+`src-tauri/Info.ios.plist`, on Android through `app_name` in the generated project.
 
 ## Checks
 
