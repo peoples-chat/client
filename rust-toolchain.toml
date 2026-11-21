@@ -1,0 +1,4 @@
+# Same channel as MDK (marmot-protocol/mdk), which the core will link.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

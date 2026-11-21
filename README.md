@@ -1,0 +1,73 @@
+# peoples.chat
+
+An everyday encrypted messenger that keeps working over LoRa radio when the internet is gone, with one
+identity and one contact list for both.
+
+**Status:** proof of concept, early scaffold. The app starts and shows a placeholder screen. Nothing here is
+ready for real use. No licence has been chosen yet, so all rights are reserved for now.
+
+Work is tracked in the issues of this repository.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. |
+| `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
+| `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
+| `src/` | Web interface (SvelteKit in single-page mode, TypeScript). It holds no protocol logic. |
+| `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check and build check for the app. |
+
+The front-end framework is provisional. Keep the interface thin so that it can be replaced.
+
+## Prerequisites
+
+- **Rust** through [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain.toml` and is
+  installed automatically on first use.
+- **Node.js** 24 or newer and **pnpm** 12.
+- The [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your platform.
+
+For iOS (macOS only):
+
+- Xcode, with an iOS simulator runtime that matches Xcode's SDK version. If `pnpm tauri ios dev` says the
+  simulator SDK is not installed, run `xcodebuild -downloadPlatform iOS`.
+- `brew install xcodegen cocoapods`
+- `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
+
+For Android:
+
+- Android SDK with platform tools, an emulator image and the NDK (tested with NDK 29.0.14206865).
+- A JDK that the Android Gradle plugin supports (tested with JDK 21).
+- `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`
+- These environment variables:
+
+  ```sh
+  export JAVA_HOME=/path/to/jdk-21
+  export ANDROID_HOME="$HOME/Library/Android/sdk"
+  export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+  ```
+
+## Run
+
+```sh
+pnpm install
+
+pnpm tauri dev                       # desktop
+pnpm tauri ios dev "iPhone 17"       # iOS simulator
+pnpm tauri android dev               # Android emulator (start the emulator first)
+```
+
+The placeholder screen shows `Core 0.1.0 linked` when the web view, the app shell and the Rust core are
+wired together.
+
+## Checks
+
+The same checks run in CI:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p peoples-chat-core
+pnpm check
+pnpm build
+```

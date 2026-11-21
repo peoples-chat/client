@@ -1,0 +1,8 @@
+[package]
+name = "peoples-chat-core"
+description = "Protocol core of peoples.chat: identity, messaging, radio transports and recovery"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

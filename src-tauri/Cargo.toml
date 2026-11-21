@@ -1,0 +1,21 @@
+[package]
+name = "peoples-chat"
+description = "peoples.chat app shell: hosts the web view and the Rust core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name, which Windows needs:
+# https://github.com/rust-lang/cargo/issues/8519
+name = "peoples_chat_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+peoples-chat-core = { path = "../core" }
+log = "0.4"
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"

@@ -1,0 +1,22 @@
+//! Protocol core of peoples.chat.
+//!
+//! All protocol logic lives here: identity, Marmot messaging, radio transports, transport
+//! selection and recovery. The crate must not depend on Tauri or on any interface code, so
+//! that the same core can run without a web view (background radio and push handling) and
+//! can be wrapped by a native shell if needed.
+
+/// Version of the core, shown by the shell to prove that the core is linked in.
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_matches_the_package_version() {
+        assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+        assert!(!version().is_empty());
+    }
+}
