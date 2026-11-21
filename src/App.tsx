@@ -7,8 +7,8 @@ import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
 import { Profile } from "./screens/Profile";
 import { Radio } from "./screens/Radio";
+import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
-import { Missing } from "./screens/shared";
 import { Welcome } from "./screens/Welcome";
 import { useAppState } from "./state";
 import layout from "./ui/layout.module.css";
@@ -48,7 +48,7 @@ function ScreenView({ screen }: { screen: Screen }) {
     case "newChat":
       return <NewChat />;
     case "scan":
-      return <Missing title="Scan a QR code" text="Scanning QR codes works in the phone apps." />;
+      return <Scan />;
     case "request":
       return <MessageRequest invitationId={screen.invitationId} />;
     case "settings":

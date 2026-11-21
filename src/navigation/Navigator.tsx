@@ -110,13 +110,12 @@ export function Navigator({ initial, children }: NavigatorProps) {
 
   const stack = stackRef.current;
   const top = stack.length - 1;
-  const navigation: Navigation = {
-    current: stack[top],
-    push: actions.push,
-    back: actions.back,
-    replace: actions.replace,
-    reset: actions.reset,
-  };
+  const current = stack[top];
+  // Stable while the top screen stays, so effects that depend on it do not restart.
+  const navigation = useMemo<Navigation>(
+    () => ({ current, push: actions.push, back: actions.back, replace: actions.replace, reset: actions.reset }),
+    [current, actions],
+  );
 
   return (
     <NavigationContext.Provider value={navigation}>
