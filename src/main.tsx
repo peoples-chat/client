@@ -1,7 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource-variable/albert-sans";
+import "./styles/tokens.css";
+import "./styles/global.css";
 import App from "./App";
-import "./App.css";
+import { store } from "./state";
+
+void store.start();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

@@ -3,8 +3,8 @@
 An everyday encrypted messenger that keeps working over LoRa radio when the internet is gone, with one
 identity and one contact list for both.
 
-**Status:** proof of concept, early scaffold. The app starts and shows a placeholder screen. Nothing here is
-ready for real use. No licence has been chosen yet, so all rights are reserved for now.
+**Status:** proof of concept. The interface runs on a mock core with demo data until the real core lands.
+Nothing here is ready for real use. No licence has been chosen yet, so all rights are reserved for now.
 
 Work is tracked in the issues of this repository.
 
@@ -16,7 +16,8 @@ Work is tracked in the issues of this repository.
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
-| `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check and build check for the app. |
+| `src/core/` | The interface's side of the boundary to the core: commands, events and, for now, a mock core with demo data. |
+| `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
 
 Keep the interface thin: it shows state and sends commands, and the core does the rest.
 
@@ -57,8 +58,11 @@ pnpm tauri ios dev "iPhone 17"       # iOS simulator
 pnpm tauri android dev               # Android emulator (start the emulator first)
 ```
 
-The placeholder screen shows `Core 0.1.0 linked` when the web view, the app shell and the Rust core are
-wired together.
+Settings shows `Core 0.1.0` at the bottom when the web view, the app shell and the Rust core are wired
+together.
+
+`pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
+quickest way to work on screens. Anything the app cannot do yet is disabled.
 
 ## Checks
 
@@ -69,5 +73,6 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p peoples-chat-core
 pnpm check
+pnpm test
 pnpm build
 ```
