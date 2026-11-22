@@ -379,6 +379,12 @@ other phone keeps one copy. So does a message whose radio send is still going wh
 arrives as `radio` too, and its relay copy later changes nothing. Messages that came by radio stay across a restart,
 also before their relay copies arrive. The radio parts are in [radio-format-v0.md](radio-format-v0.md#in-the-core).
 
+**After the outage** (#47). MDK publishes each radio message once a relay is back, and the waiting messages go. Both
+phones then have the same history: each message once, where it was, the radio ones still `radio`.
+`core/tests/republish.rs` checks this in both directions, with messages waiting on both phones, and that the relay
+copies are really in MDK. The other phone can take minutes to get what went over the relays after an outage (#78; see
+[mdk.md](mdk.md#relay-reachability)).
+
 **What the interface shows.** Settings → Radio shows the paired radio, or "No radio paired"; how many contacts have
 a MeshCore radio, under "Your contacts by mesh"; and the switch "Send everything by radio" under Testing. With it on, a chat on the internet says "Testing: every message goes by radio."
 above the field, which opens Radio, and the field takes short text as in radio mode.

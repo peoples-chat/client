@@ -340,6 +340,8 @@ seconds, and in one after 7.6 minutes.
   relay still answering NIP-11 requests while blocked, the message arrived within 5 seconds every time.
 - Whether it shows depends on timing: on whether the sender publishes before the other phone has asked again.
 - MDK has no public call that clears the cache. What to do about it is #78.
+- Tests about something else can keep this out: the test relay's `block_messages` goes on answering NIP-11 requests
+  while it blocks everything else (`core/tests/republish.rs`).
 
 ## Tests
 
