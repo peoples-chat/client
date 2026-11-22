@@ -89,6 +89,17 @@ describe("mock core", () => {
     await core.sendMessage(chat.id, "☔".repeat(32));
   });
 
+  it("exports a demo copy of the key, protected by a long enough password or plain", async () => {
+    const { core } = setup();
+    await expect(core.exportAccountKey({ kind: "plain" })).rejects.toThrow("Create an account first.");
+    await core.createAccount("Emil");
+    await expect(core.exportAccountKey({ kind: "protected", password: "too short" })).rejects.toThrow(
+      "at least 12 characters",
+    );
+    expect(await core.exportAccountKey({ kind: "protected", password: "long enough now" })).toMatch(/^ncryptsec1demo/);
+    expect(await core.exportAccountKey({ kind: "plain" })).toMatch(/^nsec1demo/);
+  });
+
   it("refuses an empty message and an unknown chat", async () => {
     const { core } = setup();
     await core.createAccount("Emil");

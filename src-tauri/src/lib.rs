@@ -27,11 +27,14 @@ pub fn run() {
         .expect("failed to build the async runtime");
     tauri::async_runtime::set(Box::leak(Box::new(runtime)).handle().clone());
 
-    let builder = tauri::Builder::default().plugin(
-        tauri_plugin_log::Builder::new()
-            .level(log::LevelFilter::Info)
-            .build(),
-    );
+    // The device unlock before a key export (#86): Android, iOS and macOS.
+    let builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
+        .plugin(tauri_plugin_biometric::init());
 
     // Scanning QR codes with the camera, and the system share sheet. Both plugins exist for iOS
     // and Android only.
@@ -53,7 +56,8 @@ pub fn run() {
             bridge::delete_account,
             bridge::add_contact,
             bridge::accept_invitation,
-            bridge::send_message
+            bridge::send_message,
+            bridge::export_account_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

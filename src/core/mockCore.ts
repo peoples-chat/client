@@ -1,6 +1,7 @@
 import { radioBytes } from "./radio";
 import {
   CoreError,
+  MIN_EXPORT_PASSWORD,
   RADIO_TEXT_LIMIT,
   type Account,
   type Chat,
@@ -230,6 +231,16 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       });
       return structuredClone(message);
     },
+
+    // The demo has no real key: these look like the real core's copies, and open nowhere.
+    async exportAccountKey(copy) {
+      requireAccount();
+      if (copy.kind === "plain") return `nsec1demo${randomBech32(54)}`;
+      if (Array.from(copy.password).length < MIN_EXPORT_PASSWORD) {
+        throw new CoreError(`Use a password of at least ${MIN_EXPORT_PASSWORD} characters.`);
+      }
+      return `ncryptsec1demo${randomBech32(148)}`;
+    },
   };
 }
 
@@ -344,6 +355,11 @@ function restore(storage: StorageLike | null): MockState | null {
   } catch {
     return null;
   }
+}
+
+function randomBech32(length: number): string {
+  const alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+  return Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => alphabet[b % 32]).join("");
 }
 
 function randomHex(bytes: number): string {

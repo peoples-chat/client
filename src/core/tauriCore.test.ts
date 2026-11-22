@@ -72,6 +72,7 @@ describe("Tauri core", () => {
       add_contact: chat,
       accept_invitation: chat,
       send_message: message,
+      export_account_key: "ncryptsec1fixture",
     };
     const { ipc, calls } = fakeIpc((command) => answers[command]);
     const core = createTauriCore(ipc);
@@ -80,12 +81,16 @@ describe("Tauri core", () => {
     expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
+    expect(await core.exportAccountKey({ kind: "protected", password: "a long password" })).toBe("ncryptsec1fixture");
+    await core.exportAccountKey({ kind: "plain" });
     await core.deleteAccount();
     expect(calls.slice(1)).toEqual([
       'create_account {"name":"Emil Dahl"}',
       'add_contact {"inviteLink":"nostr:nprofile1abc"}',
       'accept_invitation {"invitationId":"inv-1"}',
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
+      'export_account_key {"password":"a long password"}',
+      'export_account_key {"password":null}',
       "delete_account",
     ]);
   });

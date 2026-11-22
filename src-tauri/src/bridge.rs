@@ -5,6 +5,7 @@
 use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Message, Snapshot};
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri_plugin_biometric::{AuthOptions, BiometricExt};
 use tokio::sync::OnceCell;
 use tokio::sync::broadcast::{self, error::RecvError};
 
@@ -13,6 +14,9 @@ const EVENT: &str = "core-event";
 
 /// Keychain service for account keys: the app's identifier.
 const KEYCHAIN_SERVICE: &str = "chat.peoples.client";
+
+/// What the device unlock says it is for.
+const UNLOCK_REASON: &str = "Export your account key";
 
 /// Relays for new accounts, comma-separated, taken from the environment when the app is built.
 /// Without it the app uses the core's public [`DEFAULT_RELAYS`]. To use the relay that
@@ -157,6 +161,49 @@ pub async fn accept_invitation<R: Runtime>(
         .await?
         .accept_invitation(&invitation_id)
         .await
+}
+
+/// Exports the account key (#86): a NIP-49 copy protected by `password`, or the plain key when
+/// there is none. The device's owner unlocks first: the shell asks, so the web view can't skip
+/// it.
+#[tauri::command]
+pub async fn export_account_key<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    password: Option<String>,
+) -> Result<String, CommandError> {
+    let core = slot.get(&app).await?;
+    let key = core
+        .export_account_key(password.as_deref(), || confirm_owner(app.clone()))
+        .await?;
+    // The web view needs it as a plain string; the zeroizing copy is wiped here.
+    Ok(key.as_str().to_owned())
+}
+
+/// The device unlock: Face ID, Touch ID or a fingerprint, or the device's passcode instead.
+async fn confirm_owner<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
+    let options = AuthOptions {
+        allow_device_credential: true,
+        title: Some(UNLOCK_REASON.to_owned()),
+        ..AuthOptions::default()
+    };
+    // The prompt blocks until the person answers it.
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        app.biometric()
+            .authenticate(UNLOCK_REASON.to_owned(), options)
+    })
+    .await;
+    match answer {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => {
+            log::info!("the device unlock did not pass: {error}");
+            Err(CommandError::new("Unlock your device to export the key."))
+        }
+        Err(error) => {
+            log::warn!("the device unlock failed: {error}");
+            Err(CommandError::new("Unlock your device to export the key."))
+        }
+    }
 }
 
 #[tauri::command]

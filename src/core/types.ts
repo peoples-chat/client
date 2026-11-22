@@ -130,7 +130,19 @@ export interface Core {
   acceptInvitation(invitationId: string): Promise<Chat>;
   /** Sends text. The message is `waiting` until a relay has acknowledged it, then `sent`. */
   sendMessage(chatId: string, text: string): Promise<Message>;
+  /**
+   * Exports the account key once the device's owner has unlocked it (#86). A protected copy is
+   * a NIP-49 `ncryptsec1…` that other Nostr apps open with its password; a plain one is the
+   * `nsec1…` itself. Keep the result only while it is shown.
+   */
+  exportAccountKey(copy: KeyCopy): Promise<string>;
 }
+
+/** What kind of copy of the account key to export. */
+export type KeyCopy = { kind: "protected"; password: string } | { kind: "plain" };
+
+/** The shortest password for a protected copy of the account key. */
+export const MIN_EXPORT_PASSWORD = 12;
 
 /** A command failed for a reason the user can act on. The message is shown as it is. */
 export class CoreError extends Error {

@@ -4,6 +4,7 @@
 //! forwards its events to the web view when there is one. Background work, such as radio
 //! messages while the phone is locked, needs the core to run without a web view.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,6 +12,7 @@ use marmot_app::AppError;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
@@ -26,6 +28,8 @@ use crate::reach::Reachability;
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
+/// The shortest password for an exported key, as the design asks.
+pub const MIN_EXPORT_PASSWORD_CHARS: usize = 12;
 
 /// The protocol core. Clones share one core.
 #[derive(Clone)]
@@ -325,6 +329,50 @@ impl Core {
             .update_own_key(&account.public_key, chat_id)
             .await
             .map_err(|error| failed("update the key", error))
+    }
+
+    /// Exports the account key (#86; spec v0.2, Key export). With `password`, a NIP-49
+    /// `ncryptsec1…` that other Nostr apps and signers open with it; without one, the plain
+    /// `nsec1…`, as the user's explicit choice.
+    ///
+    /// `confirm_owner` asks for the device unlock. It runs once the request is otherwise
+    /// valid, so nobody unlocks only to hear that the password is too short, and an error from
+    /// it stops the export. The key is logged nowhere: keep the result only while it is shown.
+    pub async fn export_account_key<F, C>(
+        &self,
+        password: Option<&str>,
+        confirm_owner: C,
+    ) -> Result<Zeroizing<String>, CommandError>
+    where
+        C: FnOnce() -> F,
+        F: Future<Output = Result<(), CommandError>>,
+    {
+        let account = self.account()?;
+        if password.is_some_and(|password| password.chars().count() < MIN_EXPORT_PASSWORD_CHARS) {
+            return Err(CommandError::new(format!(
+                "Use a password of at least {MIN_EXPORT_PASSWORD_CHARS} characters."
+            )));
+        }
+        confirm_owner().await?;
+
+        let core = self.clone();
+        let password = password.map(|password| Zeroizing::new(password.to_owned()));
+        let protected = password.is_some();
+        // NIP-49's scrypt takes a second and a lot of memory: not on the async threads.
+        let exported = tokio::task::spawn_blocking(move || {
+            core.inner.messaging.export_key(
+                &account.public_key,
+                password.as_ref().map(|password| password.as_str()),
+            )
+        })
+        .await
+        .map_err(|error| failed("export the key", error))?
+        .map_err(|error| failed("export the key", error))?;
+        log::info!(
+            "account key exported, {}",
+            if protected { "protected" } else { "plain" }
+        );
+        Ok(exported)
     }
 
     /// Waits until the relays have the account's relay lists, profile and KeyPackage, so that

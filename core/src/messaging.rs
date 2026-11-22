@@ -42,6 +42,9 @@ const HISTORY_LIMIT: usize = 200;
 /// it computes for every epoch and lets the app read.
 const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
 const EXPORTER_BYTES: usize = 32;
+/// The surface that MDK's audit log records for a key export: a fixed label, never a person or a
+/// key.
+const EXPORT_CALLER: &str = "peoples_chat_core::Core::export_account_key";
 /// How often [`Messaging::chat_secret`] tries while the chat is changing, and how long it waits
 /// in between.
 const SECRET_ATTEMPTS: usize = 5;
@@ -705,6 +708,28 @@ impl Messaging {
             }
         }
         Err(MessagingError::EpochUnsettled)
+    }
+
+    /// The account key as a copy to keep (#86): a NIP-49 `ncryptsec1…` protected by `password`,
+    /// or the plain `nsec1…` without one.
+    ///
+    /// MDK writes every export to its audit log. A plain one also marks the key as handled
+    /// insecurely, for good: protected copies made later carry that mark. A protected copy takes
+    /// NIP-49's scrypt at log_n 18, about a second and 256 MiB, so call this off the async
+    /// threads.
+    pub fn export_key(
+        &self,
+        account_hex: &str,
+        password: Option<&str>,
+    ) -> Result<Zeroizing<String>, MessagingError> {
+        Ok(match password {
+            Some(password) => Zeroizing::new(self.runtime.export_encrypted_secret_key(
+                account_hex,
+                password,
+                EXPORT_CALLER,
+            )?),
+            None => self.runtime.reveal_nsec(account_hex, EXPORT_CALLER)?,
+        })
     }
 
     /// Updates the account's own key in the chat `chat_id`, which starts a new MLS epoch once
