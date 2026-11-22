@@ -1,0 +1,5 @@
+#!/bin/sh
+# Deletes group messages and gift wraps older than 90 days. Install as
+# /etc/cron.daily/strfry-retention.
+runuser -u strfry -- /usr/local/bin/strfry --config /etc/strfry.conf \
+  delete --age=7776000 --filter '{"kinds":[445,1059]}'

@@ -21,6 +21,7 @@ Work is tracked in the issues of this repository.
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
 | `src/core/` | The interface's side of the boundary to the core: commands, events, the bridge to the real core and a mock core with demo data. |
 | `docs/` | The interface between core and web view ([docs/core-interface.md](docs/core-interface.md)), MDK in the core ([docs/mdk.md](docs/mdk.md)), radio transports ([docs/radio.md](docs/radio.md)), the radio message format ([docs/radio-format-v0.md](docs/radio-format-v0.md)) and findings from spikes (`docs/spikes/`). |
+| `relay/` | The relay the project runs (#90): its configuration, write policy and setup script, and how to check a relay ([relay/README.md](relay/README.md)). |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
 
 Keep the interface thin: it shows state and sends commands, and the core does the rest.
