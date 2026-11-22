@@ -9,9 +9,9 @@ import {
   type Message,
 } from "./types";
 
-// A stand-in for the Rust core, so the interface can be built and tried before the real core
-// lands (#17, #19, #20). It holds demo data, creates no keys and uses no network. It emits the
-// same events the real core will, so the interface does not know which one it talks to.
+// A stand-in for the Rust core with demo data: in the browser preview, and in the app when it is
+// started with `VITE_CORE=mock`. It creates no keys and uses no network. It emits the same events
+// as the real core, so the interface does not know which one it talks to.
 
 const STORAGE_KEY = "peoples-chat.mock-core";
 const STORAGE_VERSION = 1;
