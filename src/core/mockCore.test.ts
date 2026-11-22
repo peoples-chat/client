@@ -160,7 +160,18 @@ describe("mock core", () => {
     expect(events).toEqual([{ type: "inviteChanged", invite }]);
     expect((await core.load()).invites).toEqual([invite]);
     await expect(core.createInvite(" ")).rejects.toThrow("Enter a name.");
-    expect((await core.previewInvite(invite.link)).name).toBe("Emil Dahl");
+  });
+
+  it("starts the chat with whoever a previewed invite link is from", async () => {
+    const { core } = setup();
+    const link = "https://peoples.chat/i#nprofile1demo/0123456789abcdef0123";
+    const from = await core.previewInvite(link);
+    expect(from.name).toBe("Emil Dahl");
+    await expect(core.previewInvite("Emil Dahl")).rejects.toThrow("not an invite link");
+
+    await core.createAccount("Sofie");
+    const chat = await core.addContact(link);
+    expect(chat.contact).toEqual(from);
   });
 
   it("refuses an empty message and an unknown chat", async () => {

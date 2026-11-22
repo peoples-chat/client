@@ -7,6 +7,7 @@ import {
   RADIO_TEXT_LIMIT,
   type Account,
   type Chat,
+  type Contact,
   type Core,
   type CoreEvent,
   type CoreListener,
@@ -62,6 +63,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const replyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const state = restore(storage) ?? emptyState();
+  // Who each previewed invite link is from, so the chat it starts is with that person (#95).
+  const previewed = new Map<string, Contact>();
 
   // Runs `task` later, unless the account is deleted first.
   function later(ms: number, task: () => void) {
@@ -214,15 +217,14 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const known = state.chats.find((c) => c.id === state.links[link]);
       if (known) return structuredClone(known);
 
-      const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
-      const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
-      const chat: Chat = {
-        id: randomHex(8),
-        contact: { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` },
-        messages: [],
-        reach: "internet",
-      };
-      state.demoContactsAdded += 1;
+      let contact = previewed.get(link);
+      if (!contact) {
+        const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
+        const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
+        contact = { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` };
+        state.demoContactsAdded += 1;
+      }
+      const chat: Chat = { id: randomHex(8), contact, messages: [], reach: "internet" };
       state.chats.push(chat);
       state.links[link] = chat.id;
       emit({ type: "chatAdded", chat });
@@ -248,8 +250,11 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     },
 
     async previewInvite(inviteLink) {
-      if (!LINK_PATTERN.test(inviteLink.trim())) throw new CoreError("That is not an invite link.");
-      return { publicKey: randomHex(32), name: "Emil Dahl" };
+      const link = inviteLink.trim();
+      if (!LINK_PATTERN.test(link)) throw new CoreError("That is not an invite link.");
+      const contact = previewed.get(link) ?? { publicKey: randomHex(32), name: "Emil Dahl" };
+      previewed.set(link, contact);
+      return structuredClone(contact);
     },
 
     async acceptInvitation(invitationId) {

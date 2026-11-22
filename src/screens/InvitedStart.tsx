@@ -7,7 +7,7 @@ import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { TextField } from "../ui/fields";
 import { Icon } from "../ui/Icon";
-import { tintFor } from "../ui/people";
+import { firstName, tintFor } from "../ui/people";
 import layout from "../ui/layout.module.css";
 import { errorText } from "./shared";
 import styles from "./InvitedStart.module.css";
@@ -25,7 +25,7 @@ export function InvitedStart({ link }: { link: string }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const first = from?.name.split(/\s+/)[0];
+  const first = from && firstName(from.name);
 
   useEffect(() => {
     let active = true;
@@ -46,7 +46,7 @@ export function InvitedStart({ link }: { link: string }) {
     try {
       if (!account) await core.createAccount(name);
       const chat = await core.addContact(link);
-      navigation.reset([{ name: "chats" }, { name: "chat", chatId: chat.id }]);
+      navigation.reset([{ name: "chats" }, { name: "chat", chatId: chat.id, invited: true }]);
     } catch (e) {
       setError(errorText(e));
       setBusy(false);

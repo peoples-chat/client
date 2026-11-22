@@ -3,7 +3,8 @@ export type Screen =
   | { name: "welcome" }
   | { name: "createProfile" }
   | { name: "chats" }
-  | { name: "chat"; chatId: string }
+  /** `invited`: opened right after joining from the contact's invite link (#95). */
+  | { name: "chat"; chatId: string; invited?: boolean }
   /** `link`: an invite link that opened the app, filled in for the user to confirm (#72). */
   | { name: "newChat"; link?: string }
   | { name: "scan" }

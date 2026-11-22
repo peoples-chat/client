@@ -51,7 +51,7 @@ function ScreenView({ screen }: { screen: Screen }) {
     case "chats":
       return <Chats />;
     case "chat":
-      return <ChatScreen chatId={screen.chatId} />;
+      return <ChatScreen chatId={screen.chatId} invited={screen.invited} />;
     case "newChat":
       return <NewChat link={screen.link} />;
     case "scan":
