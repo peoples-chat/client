@@ -1,8 +1,9 @@
 //! Internet messaging: Marmot over Nostr relays, through MDK's multi-account app runtime.
 //!
-//! This is the first link to MDK (#59): open the runtime, create an account and wait until its
-//! relay lists, profile and KeyPackage are on the relays. Signing through a signer interface
-//! (#17) and the commands and events for the interface (#16) build on it.
+//! This is the link to MDK (#59): open the runtime, create, list and delete accounts, and wait
+//! until an account's relay lists, profile and KeyPackage are on the relays. [`crate::Core`]
+//! builds the interface's commands and events on it (#16); signing through a signer interface
+//! comes with #17.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -36,6 +37,15 @@ pub struct MessagingOptions {
 pub struct NewAccount {
     /// The account's public key, in hex. MDK also uses it as the account's label.
     pub public_key_hex: String,
+}
+
+/// An account on this device that can sign.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExistingAccount {
+    /// The account's public key, in hex.
+    pub public_key_hex: String,
+    /// The profile name, when MDK knows it.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -104,6 +114,28 @@ impl Messaging {
         })
     }
 
+    /// The accounts on this device that can sign, with their profile names when known.
+    pub fn accounts(&self) -> Result<Vec<ExistingAccount>, MessagingError> {
+        let accounts = self.runtime.accounts().managed_accounts()?;
+        Ok(accounts
+            .into_iter()
+            .filter(|account| !account.signed_out && !account.unlinked)
+            .map(|account| ExistingAccount {
+                name: self
+                    .runtime
+                    .display_name_for_account_id(&account.account_id_hex),
+                public_key_hex: account.account_id_hex,
+            })
+            .collect())
+    }
+
+    /// Signs the account out and removes it from this device: its databases and its key in the
+    /// keychain. Telling relays and groups is best effort and does not block the local wipe.
+    pub async fn delete_account(&self, public_key_hex: &str) -> Result<(), MessagingError> {
+        self.runtime.sign_out_and_wipe(public_key_hex).await?;
+        Ok(())
+    }
+
     /// Waits until the relays have acknowledged the account's relay lists, profile and
     /// KeyPackage, so that others can invite it.
     pub async fn wait_until_published(
@@ -131,7 +163,7 @@ impl Messaging {
 
     /// Stops the runtime and closes every database. Call it before the process may be
     /// suspended; afterwards this value cannot be used.
-    pub async fn close(self) -> Result<(), MessagingError> {
+    pub async fn close(&self) -> Result<(), MessagingError> {
         self.runtime.shutdown_and_close().await?;
         Ok(())
     }
