@@ -1,0 +1,8 @@
+# Written by the Tauri and Gradle builds.
+/.tauri
+/android/.tauri
+/android/.gradle
+/android/build
+/ios/.tauri
+/ios/.build
+/ios/.swiftpm

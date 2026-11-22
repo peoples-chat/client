@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile",
-  "description": "Capability for the main window on phones: scanning QR codes with the camera",
+  "description": "Capability for the main window on phones: scanning QR codes with the camera, and the share sheet",
   "windows": ["main"],
   "platforms": ["iOS", "android"],
-  "permissions": ["barcode-scanner:default"]
+  "permissions": ["barcode-scanner:default", "share-sheet:default"]
 }

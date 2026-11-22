@@ -1,0 +1,17 @@
+# The system share sheet on phones (#66). A plugin of this app only, not published.
+[package]
+name = "tauri-plugin-share-sheet"
+description = "Opens the system share sheet on iOS and Android"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+links = "tauri-plugin-share-sheet"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+tauri = "2"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri = { version = "2", features = ["wry"] }

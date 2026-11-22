@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigation } from "../navigation/Navigator";
-import { canShare } from "../platform";
+import { canShare, share } from "../platform";
 import { useAppState } from "../state";
 import { Button } from "../ui/Button";
 import { TextField } from "../ui/fields";
@@ -37,9 +37,9 @@ export function Profile() {
 
   async function shareLink() {
     try {
-      await navigator.share({ title: "Chat with me on peoples.chat", text: link });
+      await share(link, "Chat with me on peoples.chat");
     } catch {
-      // Closing the share sheet rejects; nothing to do.
+      // Closing the web share sheet rejects; nothing to do.
     }
   }
 

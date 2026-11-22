@@ -15,6 +15,7 @@ Work is tracked in the issues of this repository.
 | --- | --- |
 | `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. It builds on MDK; see [docs/mdk.md](docs/mdk.md). |
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
+| `src-tauri/plugins/share-sheet/` | A Tauri plugin of the app's own: the system share sheet on iOS (Swift) and Android (Kotlin), which the phones' web views can't open. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
 | `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
