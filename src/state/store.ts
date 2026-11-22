@@ -1,4 +1,4 @@
-import type { Account, Chat, Core, CoreEvent, Invitation, Snapshot } from "../core/types";
+import type { Account, Chat, Core, CoreEvent, Invitation, Message, Snapshot } from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -47,6 +47,8 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, invitations: state.invitations.filter((i) => i.id !== event.invitationId) };
 
     case "messageAdded":
+      // The chat id can be an invitation's: messages that arrive before the user accepts.
+      if (!state.chats.some((c) => c.id === event.chatId)) return addToInvitation(state, event.chatId, event.message);
       return updateChat(state, event.chatId, (chat) =>
         chat.messages.some((m) => m.id === event.message.id)
           ? chat
@@ -63,6 +65,15 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
         };
       });
   }
+}
+
+function addToInvitation(state: AppState, invitationId: string, message: Message): AppState {
+  const invitation = state.invitations.find((i) => i.id === invitationId);
+  if (!invitation || invitation.messages.some((m) => m.id === message.id)) return state;
+  return {
+    ...state,
+    invitations: state.invitations.map((i) => (i === invitation ? { ...i, messages: [...i.messages, message] } : i)),
+  };
 }
 
 function updateChat(state: AppState, chatId: string, update: (chat: Chat) => Chat): AppState {

@@ -2,7 +2,7 @@
 //! launches, passes every core event to the web view as the Tauri event `core-event`, and turns
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
-use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Snapshot};
+use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Message, Snapshot};
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::OnceCell;
@@ -154,4 +154,14 @@ pub async fn accept_invitation<R: Runtime>(
         .await?
         .accept_invitation(&invitation_id)
         .await
+}
+
+#[tauri::command]
+pub async fn send_message<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    chat_id: String,
+    text: String,
+) -> Result<Message, CommandError> {
+    slot.get(&app).await?.send_message(&chat_id, &text).await
 }

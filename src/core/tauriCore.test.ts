@@ -66,18 +66,26 @@ describe("Tauri core", () => {
   it("sends commands with their arguments", async () => {
     const account = { name: "Emil Dahl", publicKey: "ab", inviteLink: "nostr:nprofile1" };
     const chat = shared.snapshot.chats[0];
-    const answers: Record<string, unknown> = { create_account: account, add_contact: chat, accept_invitation: chat };
+    const message = chat.messages[1];
+    const answers: Record<string, unknown> = {
+      create_account: account,
+      add_contact: chat,
+      accept_invitation: chat,
+      send_message: message,
+    };
     const { ipc, calls } = fakeIpc((command) => answers[command]);
     const core = createTauriCore(ipc);
 
     expect(await core.createAccount("Emil Dahl")).toEqual(account);
     expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
+    expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
     await core.deleteAccount();
     expect(calls.slice(1)).toEqual([
       'create_account {"name":"Emil Dahl"}',
       'add_contact {"inviteLink":"nostr:nprofile1abc"}',
       'accept_invitation {"invitationId":"inv-1"}',
+      'send_message {"chatId":"chat-1","text":"Yes, around three."}',
       "delete_account",
     ]);
   });
@@ -99,14 +107,6 @@ describe("Tauri core", () => {
     await expect(failing).rejects.toThrow("Something went wrong. Try again.");
     expect(logged).toHaveBeenCalledOnce();
     logged.mockRestore();
-  });
-
-  it("refuses what the core cannot do yet, without asking it", async () => {
-    const { ipc, calls } = fakeIpc();
-    const core = createTauriCore(ipc);
-
-    await expect(core.sendMessage("chat-1", "Hi")).rejects.toThrow("Sending messages is not available yet.");
-    expect(calls).toEqual([`listen ${CORE_EVENT}`]);
   });
 });
 
