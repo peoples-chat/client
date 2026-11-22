@@ -2,6 +2,7 @@
   "snapshot": {
     "account": {
       "name": "Emil Dahl",
+      "about": "Aarhus. Usually reachable by radio.",
       "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
       "inviteLink": "nostr:nprofile1fixtureemildahl"
     },
@@ -116,6 +117,22 @@
       ]
     },
     {
+      "type": "accountChanged",
+      "account": {
+        "name": "Emil D.",
+        "about": "Aarhus, Denmark",
+        "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "inviteLink": "nostr:nprofile1fixtureemildahl"
+      }
+    },
+    {
+      "type": "contactChanged",
+      "contact": {
+        "publicKey": "4a577124f4d699f2455a80e12b58d41a26465d4c01a65faae29b37189cd08375",
+        "name": "Karen W."
+      }
+    },
+    {
       "type": "invitationReceived",
       "invitation": {
         "id": "inv-2",
@@ -138,6 +155,7 @@
       "type": "accountCreated",
       "account": {
         "name": "Emil Dahl",
+        "about": "",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
         "inviteLink": "nostr:nprofile1fixtureemildahl"
       }

@@ -1,4 +1,4 @@
-import type { Account, Chat, Core, CoreEvent, Invitation, Message, Relay, Snapshot } from "../core/types";
+import type { Account, Chat, Contact, Core, CoreEvent, Invitation, Message, Relay, Snapshot } from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -74,7 +74,29 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
 
     case "relaysChanged":
       return sameRelays(state.relays, event.relays) ? state : { ...state, relays: event.relays };
+
+    case "accountChanged":
+      if (!state.account || sameAccount(state.account, event.account)) return state;
+      return { ...state, account: event.account };
+
+    case "contactChanged":
+      return renameContact(state, event.contact);
   }
+}
+
+function sameAccount(a: Account, b: Account): boolean {
+  return a.name === b.name && a.about === b.about && a.publicKey === b.publicKey && a.inviteLink === b.inviteLink;
+}
+
+/** Gives the contact a new name in their chats and invitations. */
+function renameContact(state: AppState, contact: Contact): AppState {
+  const renamed = (current: Contact) => current.publicKey === contact.publicKey && current.name !== contact.name;
+  if (!state.chats.some((c) => renamed(c.contact)) && !state.invitations.some((i) => renamed(i.from))) return state;
+  return {
+    ...state,
+    chats: state.chats.map((c) => (renamed(c.contact) ? { ...c, contact: { ...c.contact, name: contact.name } } : c)),
+    invitations: state.invitations.map((i) => (renamed(i.from) ? { ...i, from: { ...i.from, name: contact.name } } : i)),
+  };
 }
 
 function sameRelays(a: Relay[], b: Relay[]): boolean {

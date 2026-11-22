@@ -71,6 +71,30 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "relaysChanged", relays: structuredClone(relays) })).toBe(next);
   });
 
+  it("takes the account's new profile, once", () => {
+    const account = { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x" };
+    const state = { ...ready(), account };
+    const changed = { ...account, name: "Emil D.", about: "Aarhus" };
+    const next = applyEvent(state, { type: "accountChanged", account: changed });
+
+    expect(next.account).toEqual(changed);
+    expect(applyEvent(next, { type: "accountChanged", account: { ...changed } })).toBe(next);
+    // Without an account there is nothing to change.
+    expect(applyEvent(ready(), { type: "accountChanged", account: changed }).account).toBeNull();
+  });
+
+  it("renames a contact in their chats and invitations", () => {
+    const invitation = { id: "i1", from: { publicKey: "key-b", name: "Contact b" }, receivedAt: 5, messages: [] };
+    const state = { ...ready([chat("a"), chat("b")]), invitations: [invitation] };
+    const next = applyEvent(state, { type: "contactChanged", contact: { publicKey: "key-b", name: "Bea" } });
+
+    expect(next.chats.map((c) => c.contact.name)).toEqual(["Contact a", "Bea"]);
+    expect(next.chats[0]).toBe(state.chats[0]);
+    expect(next.invitations[0].from.name).toBe("Bea");
+    expect(applyEvent(next, { type: "contactChanged", contact: { publicKey: "key-b", name: "Bea" } })).toBe(next);
+    expect(applyEvent(state, { type: "contactChanged", contact: { publicKey: "x", name: "Nobody" } })).toBe(state);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);
@@ -82,7 +106,7 @@ describe("applyEvent", () => {
   it("clears the account, chats, requests and relays when the account is deleted", () => {
     const state = {
       ...ready([chat("a")]),
-      account: { name: "Emil", publicKey: "k", inviteLink: "peopleschat:x" },
+      account: { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x" },
       invitations: [{ id: "i1", from: { publicKey: "k2", name: "Karen" }, receivedAt: 5, messages: [] }],
       relays: [relay("wss://a.example", "connected")],
     };

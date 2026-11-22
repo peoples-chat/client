@@ -64,11 +64,12 @@ describe("Tauri core", () => {
   });
 
   it("sends commands with their arguments", async () => {
-    const account = { name: "Emil Dahl", publicKey: "ab", inviteLink: "nostr:nprofile1" };
+    const account = { name: "Emil Dahl", about: "", publicKey: "ab", inviteLink: "nostr:nprofile1" };
     const chat = shared.snapshot.chats[0];
     const message = chat.messages[1];
     const answers: Record<string, unknown> = {
       create_account: account,
+      update_profile: account,
       add_contact: chat,
       accept_invitation: chat,
       send_message: message,
@@ -78,6 +79,7 @@ describe("Tauri core", () => {
     const core = createTauriCore(ipc);
 
     expect(await core.createAccount("Emil Dahl")).toEqual(account);
+    expect(await core.updateProfile("Emil Dahl", "Aarhus")).toEqual(account);
     expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
@@ -86,6 +88,7 @@ describe("Tauri core", () => {
     await core.deleteAccount();
     expect(calls.slice(1)).toEqual([
       'create_account {"name":"Emil Dahl"}',
+      'update_profile {"name":"Emil Dahl","about":"Aarhus"}',
       'add_contact {"inviteLink":"nostr:nprofile1abc"}',
       'accept_invitation {"invitationId":"inv-1"}',
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
@@ -121,6 +124,7 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.account?.name).toBe("Emil Dahl");
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
     expect(state.invitations[0].from.name).toBe("Karen Winther");
+    expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.relays.map((r) => r.operator)).toEqual(["peoplesChat", "independent"]);
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
@@ -129,6 +133,8 @@ describe("the JSON shared with the Rust core", () => {
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
       reachChanged: (next) => expect(next.chats.map((c) => c.reach)).toEqual(["radio", "unreachable"]),
       relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
+      accountChanged: (next) => expect([next.account?.name, next.account?.about]).toEqual(["Emil D.", "Aarhus, Denmark"]),
+      contactChanged: (next) => expect(next.invitations[0].from.name).toBe("Karen W."),
       invitationReceived: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1", "inv-2"]),
       invitationRemoved: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1"]),
       accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [], relays: [] }),

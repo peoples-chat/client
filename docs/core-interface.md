@@ -45,6 +45,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | --- | --- | --- | --- | --- |
 | `load()` | `core_snapshot` | `Snapshot` | | Done (#16) |
 | `createAccount(name)` | `create_account` | `Account` | `accountCreated` | Done (#16) |
+| `updateProfile(name, about)` | `update_profile` | `Account` | `accountChanged` | Done (#93) |
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
 | `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
@@ -65,6 +66,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
 | `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
+| `accountChanged` | `account` | The user changed their profile | Done (#93) |
+| `contactChanged` | `contact` | A contact's profile changed, for example their name | Done (#93) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -73,7 +76,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays` |
-| `Account` | `name`, `publicKey` (hex), `inviteLink` |
+| `Account` | `name`, `about`, `publicKey` (hex), `inviteLink` |
 | `Contact` | `publicKey`, `name` |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
@@ -127,14 +130,43 @@ mistake.
 - **Accepting** turns the invitation into the chat with the same id: `invitationRemoved`, then `chatAdded`. The
   sender isn't told; they are in the chat already.
 - **Contact names** come from the person's profile on the relays. If it can't be found, the name is a pseudonym
-  derived from the key ("Brave Otter"), the same one White Noise shows. A name found later doesn't reach the interface
-  yet.
+  derived from the key ("Brave Otter"), the same one White Noise shows. A name found later, or a new one, arrives as
+  `contactChanged` ([Profile](#profile)).
 
 **Not built yet:**
 
 - deleting or blocking an invitation;
 - group chats: the core shows direct chats only;
 - opening an invite link tapped in another app. The link has to be pasted into New chat.
+
+## Profile
+
+**Changing it** (`updateProfile`, #93):
+
+- The name is required. Both fields are trimmed.
+  - The name can have up to 64 characters (`MAX_NAME`) and about up to 280 (`MAX_ABOUT`), counted as characters,
+    not bytes.
+  - The same limit holds for `createAccount`.
+- The core publishes the profile at once, and `accountChanged` follows. The photo, and anything other apps put in the
+  profile, stay as they are.
+- Without a connected relay nothing changes. The command fails with "Could not reach the relays. Try again when you
+  are online."
+- Sending the profile as it is changes nothing and publishes nothing.
+- It refuses:
+  - an empty name ("Enter a name.");
+  - a name that is too long ("Your name can have up to 64 characters.");
+  - an about text that is too long ("About can have up to 280 characters.").
+
+**Contacts' profiles.** MDK doesn't follow other people's profiles. So the core fetches its contacts' profiles when it
+starts following the account and every 5 minutes after. A new name updates the contact's chats and invitations through
+`contactChanged`.
+
+**What the interface shows.** Profile has Name and About. They save when the user leaves a field or presses Enter, and
+say "Saved" or why not.
+
+**Usernames are left out for now** (decided 22 November 2026). The design's Username, `emil@peoples.chat`, is a
+Nostr address (NIP-05). It would need a name service at peoples.chat and rules for claiming names. People connect by
+link and QR code instead. The name stays free text: not unique, and changeable.
 
 ## Messages
 

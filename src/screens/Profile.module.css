@@ -52,3 +52,22 @@
   gap: 8px;
   padding-top: 6px;
 }
+
+/* Under the fields: whether the last change was saved. Takes no room while there is nothing to say. */
+.saveState,
+.saveError {
+  margin: -8px 0 0;
+  font-size: 13.5px;
+}
+
+.saveState {
+  color: var(--color-muted);
+}
+
+.saveState:empty {
+  display: none;
+}
+
+.saveError {
+  color: var(--color-danger);
+}

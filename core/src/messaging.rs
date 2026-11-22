@@ -556,6 +556,16 @@ impl Messaging {
         if let Some(name) = self.known_name(account_hex) {
             return name;
         }
+        match self.fetch_name(account_hex, relay_hints).await {
+            Some(name) => name,
+            None => marmot_app::default_profile_pseudonym(account_hex),
+        }
+    }
+
+    /// The name in another account's profile as the relays have it now, from `relay_hints`
+    /// and our relays. MDK keeps what it finds. `None` when there is no profile with a name, or
+    /// the relays didn't answer in time.
+    pub async fn fetch_name(&self, account_hex: &str, relay_hints: &[String]) -> Option<String> {
         let relays: Vec<String> = relay_hints
             .iter()
             .chain(&self.relays)
@@ -570,16 +580,54 @@ impl Messaging {
         )
         .await;
         match fetched {
-            Ok(Ok(Some(profile))) => {
-                if let Some(name) = profile_name(&profile) {
-                    return name;
-                }
-            }
+            Ok(Ok(Some(profile))) => return profile_name(&profile),
             Ok(Ok(None)) => log::info!("the contact has no profile on the relays"),
             Ok(Err(error)) => log::info!("could not fetch the contact's profile: {error}"),
             Err(_) => log::info!("fetching the contact's profile timed out"),
         }
-        marmot_app::default_profile_pseudonym(account_hex)
+        None
+    }
+
+    /// What the account's own profile says about it, as this device last saw it (#93).
+    pub fn own_about(&self, account_hex: &str) -> String {
+        self.cached_profile(account_hex)
+            .and_then(|profile| profile.about)
+            .unwrap_or_default()
+    }
+
+    /// Publishes the account's profile with a new name and about (#93). Everything else in the
+    /// profile stays as it was: the photo, and what other apps put there. MDK replaces each of
+    /// those fields with what it is given, so they come from the profile as this device has
+    /// it.
+    pub async fn update_profile(
+        &self,
+        account_hex: &str,
+        name: &str,
+        about: &str,
+    ) -> Result<(), MessagingError> {
+        let mut profile = self.cached_profile(account_hex).unwrap_or_default();
+        profile.name = Some(name.to_owned());
+        profile.display_name = Some(name.to_owned());
+        profile.about = (!about.is_empty()).then(|| about.to_owned());
+        self.runtime
+            .publish_user_profile_using_account_relays(account_hex, profile)
+            .await?;
+        Ok(())
+    }
+
+    /// An account's profile as this device last saw it.
+    fn cached_profile(&self, account_hex: &str) -> Option<UserProfileMetadata> {
+        match self
+            .app
+            .directory()
+            .directory_entry_for_account_id(account_hex)
+        {
+            Ok(entry) => entry.and_then(|entry| entry.profile),
+            Err(error) => {
+                log::warn!("could not read a profile from this device: {error}");
+                None
+            }
+        }
     }
 
     /// Sends `text` in the chat `chat_id` and returns the message's id.

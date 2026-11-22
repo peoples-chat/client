@@ -55,6 +55,7 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     },
 
     createAccount: (name) => call<Account>("create_account", { name }),
+    updateProfile: (name, about) => call<Account>("update_profile", { name, about }),
     deleteAccount: () => call<void>("delete_account"),
     addContact: (inviteLink) => call<Chat>("add_contact", { inviteLink }),
     acceptInvitation: (invitationId) => call<Chat>("accept_invitation", { invitationId }),

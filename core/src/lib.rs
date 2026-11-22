@@ -12,7 +12,7 @@ mod messaging;
 pub mod radio;
 mod reach;
 
-pub use app::{Core, MIN_EXPORT_PASSWORD_CHARS};
+pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};
 pub use messaging::{
     DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
     MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, TextMessages,

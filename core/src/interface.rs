@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 pub struct Account {
     /// The profile name.
     pub name: String,
+    /// A few words about the user, from the profile. Empty when there are none (#93).
+    #[serde(default)]
+    pub about: String,
     /// The account's public key, in hex.
     pub public_key: String,
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
@@ -199,6 +202,15 @@ pub enum CoreEvent {
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {
         relays: Vec<Relay>,
+    },
+    /// The user changed their profile (#93).
+    AccountChanged {
+        account: Account,
+    },
+    /// A contact's profile changed, for example their name. Applies to their chats and
+    /// invitations alike (#93).
+    ContactChanged {
+        contact: Contact,
     },
 }
 
