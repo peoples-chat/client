@@ -180,6 +180,17 @@ much later, up to several minutes in the tests (#78; [mdk.md](mdk.md#relay-reach
 relay on the Mac (below) and type `block` in its window; `unblock` brings it back. With public relays, turning off
 Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, which the radio needs.
 
+**What the chat shows** (#48):
+
+- **The header:** "Reachable by radio" in the radio colour, or "Not reachable". On the internet it shows nothing extra.
+- **A notice above the field** says where messages go: "Messages now go by radio", or "Messages wait until it is
+  back". It opens Radio and privacy, which says what radio protects and what it doesn't.
+- **Each radio message** is marked "Radio", in the radio colour, next to its time and delivery.
+- **In radio mode, the field** takes short text only. A counter shows UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in
+  `src/core/types.ts`), and Send stays off past it.
+
+Only the mock reaches a chat by radio for now; the core's radio comes with #40, #44 and #45.
+
 ## Planned: radio and transport
 
 These shapes are sketches. The issues settle them together with their screens.
@@ -196,7 +207,8 @@ The app uses the real core since it covers the whole flow (#20): creating the ac
 
 **The mock**
 
-- The browser preview (`pnpm dev`) always uses the mock with demo data.
+- The browser preview (`pnpm dev`) always uses the mock with demo data. Its demo has a chat reached by radio, to show
+  the radio interface: what it sends there goes by radio, and the other radio confirms it.
 - To see the demo data in the app, start it with `VITE_CORE=mock`, for example `VITE_CORE=mock pnpm tauri dev`. This
   works the same for `pnpm tauri ios dev` and `pnpm tauri android dev`.
 - Settings says "demo data" only while the mock is in use.

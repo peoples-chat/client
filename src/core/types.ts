@@ -32,6 +32,12 @@ export interface Contact {
 export type Transport = "internet" | "radio";
 
 /**
+ * The longest text one radio message carries, in UTF-8 bytes: what fits in one packet
+ * (`docs/radio-format-v0.md`, #38). Longer text waits for the internet.
+ */
+export const RADIO_TEXT_LIMIT = 96;
+
+/**
  * Delivery of an outgoing message.
  * - `waiting`: not sent yet, for example because there is no path.
  * - `sent`: a relay acknowledged it.

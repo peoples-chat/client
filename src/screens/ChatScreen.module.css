@@ -1,0 +1,35 @@
+/* The notice while the internet is down (#48): a pill above the composer, as in the design's
+   radio chat. It leads to what radio protects. */
+.notice {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: 0 12px 8px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.notice svg {
+  flex-shrink: 0;
+}
+
+.radio {
+  background: var(--color-amber-bg);
+  color: var(--color-amber-fg);
+}
+
+.reachRadio {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-amber-fg);
+}

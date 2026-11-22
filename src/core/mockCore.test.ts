@@ -32,17 +32,17 @@ describe("mock core", () => {
     expect(await core.load()).toEqual({ account: null, chats: [], invitations: [] });
   });
 
-  it("creates an account with a demo chat and a message request", async () => {
+  it("creates an account with demo chats and a message request", async () => {
     const { core, events } = setup();
     const account = await core.createAccount("  Emil Dahl ");
 
     expect(account.name).toBe("Emil Dahl");
     expect(account.inviteLink).toMatch(/^peopleschat:demo-invite\//);
-    expect(events.map((e) => e.type)).toEqual(["accountCreated", "chatAdded", "invitationReceived"]);
+    expect(events.map((e) => e.type)).toEqual(["accountCreated", "chatAdded", "chatAdded", "invitationReceived"]);
 
     const snapshot = await core.load();
     expect(snapshot.account).toEqual(account);
-    expect(snapshot.chats).toHaveLength(1);
+    expect(snapshot.chats.map((c) => c.reach)).toEqual(["internet", "radio"]);
     expect(snapshot.invitations[0].messages[0].text).toMatch(/^Hi Emil,/);
   });
 
@@ -69,6 +69,24 @@ describe("mock core", () => {
     vi.advanceTimersByTime(1500);
     expect(events[2]).toMatchObject({ type: "messageAdded", chatId: chat.id, message: { direction: "in" } });
     expect((await core.load()).chats[0].messages).toHaveLength(4);
+  });
+
+  it("sends by radio where the chat is reached by radio, and the other radio confirms", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const chat = (await core.load()).chats.find((c) => c.reach === "radio")!;
+    events.length = 0;
+
+    const message = await core.sendMessage(chat.id, "Are you okay?");
+    expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
+    vi.advanceTimersByTime(600);
+    expect(events[1]).toEqual({ type: "deliveryChanged", chatId: chat.id, messageId: message.id, delivery: "confirmed" });
+    vi.advanceTimersByTime(1500);
+    expect(events[2]).toMatchObject({ type: "messageAdded", message: { direction: "in", transport: "radio" } });
+
+    // Radio carries 96 bytes at most; ☔ takes three.
+    await expect(core.sendMessage(chat.id, "☔".repeat(33))).rejects.toThrow("too long for radio");
+    await core.sendMessage(chat.id, "☔".repeat(32));
   });
 
   it("refuses an empty message and an unknown chat", async () => {

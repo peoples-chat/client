@@ -72,3 +72,20 @@
 .delivery {
   display: flex;
 }
+
+/* Sent or received by radio (#48). */
+.out.radio {
+  background: var(--color-amber-bg);
+  color: var(--color-text);
+}
+
+.radio .meta {
+  font-weight: 500;
+  color: var(--color-amber-fg);
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
