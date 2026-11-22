@@ -107,13 +107,14 @@ The interface uses the mock with demo data until the real core covers the whole 
 
 **Relays**
 
+- New accounts publish to three public relays ([mdk.md](mdk.md#relays)), so a test account's name and public key end
+  up on them.
+- To use other relays, set `PEOPLES_CHAT_RELAYS` (comma-separated) when you build.
+- To see what gets published, use the relay on the Mac:
+  1. Run it with `cargo run -p peoples-chat-core --example local_relay`.
+  2. Build the app with `PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777`. Only debug builds accept it.
+  3. On Android, also run `adb reverse tcp:7777 tcp:7777`.
 - MDK needs a relay to set up an account. The relay doesn't need to be reachable: publishing waits until it is.
-- Debug builds use `ws://127.0.0.1:7777`. To use other relays, set `PEOPLES_CHAT_RELAYS` (comma-separated) when you
-  build.
-- To see what gets published:
-  1. Run the relay on the Mac with `cargo run -p peoples-chat-core --example local_relay`.
-  2. On Android, also run `adb reverse tcp:7777 tcp:7777`.
-- Release builds have no relays until #18 sets defaults, so creating an account says so.
 
 **Keys and data**
 
