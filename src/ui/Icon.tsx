@@ -131,6 +131,37 @@ const ICONS = {
     </>
   ),
   trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+    </>
+  ),
+  block: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M5.6 5.6l12.8 12.8" />
+    </>
+  ),
+  checks: (
+    <>
+      <path d="M2 12.5l4.5 4.5L16 7.5" />
+      <path d="M11.5 16l1 1L22 7.5" />
+    </>
+  ),
+  timer: (
+    <>
+      <circle cx="12" cy="13" r="8" />
+      <path d="M12 9v4l2.5 2.5M9 2h6" />
+    </>
+  ),
+  image: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <circle cx="8.5" cy="10" r="1.5" />
+      <path d="M21 16l-5-5-8 8" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof ICONS;

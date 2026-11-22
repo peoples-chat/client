@@ -64,6 +64,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
 | `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
+| `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -71,12 +72,13 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 
 | Type | Fields |
 | --- | --- |
-| `Snapshot` | `account` (or `null`), `chats`, `invitations` |
+| `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays` |
 | `Account` | `name`, `publicKey` (hex), `inviteLink` |
 | `Contact` | `publicKey`, `name` |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
+| `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
 
 - A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
   an outage.
@@ -85,6 +87,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
   - `sent`: a relay acknowledged it.
   - `confirmed`: the other radio confirmed it. Radio only.
 - `reach` says how the chat's messages can travel now; see [Reach](#reach).
+- `relays` are the account's relays; see [Relays](#relays).
 - `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
 - An invitation's `id` is the id of the chat that accepting it opens.
 
@@ -191,6 +194,24 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
   `src/core/types.ts`), and Send stays off past it.
 
 Only the mock reaches a chat by radio for now; the core's radio comes with #40, #44 and #45.
+
+## Relays
+
+The snapshot lists the account's relays, and `relaysChanged` carries all of them whenever one changes (#88):
+
+- `url`: the relay's address, such as `wss://nos.lol`.
+- `operator`: `peoplesChat` for a relay the project runs, `independent` for any other. The project runs none yet (#11),
+  so every relay is `independent` for now. The core's list of them is `PROJECT_RELAYS` in `core/src/messaging.rs`.
+- `status`:
+  - `connected`;
+  - `connecting` while the connection opens, or during a drop shorter than 10 seconds;
+  - `unreachable` once it has stayed closed for 10 seconds, the same wait as a chat's [reach](#reach).
+
+The project's relays come first, then the others, each by address. Without an account the list is empty.
+
+**What the interface shows.** Settings → Privacy → Relays and servers lists each relay's address without `wss://`, who
+runs it and its status, with "Not reachable" in red. Blocking the relay on the Mac (below) shows it. Adding a relay, and
+the media and notification servers, aren't built yet; the mock shows the design's three relays.
 
 ## Key export
 

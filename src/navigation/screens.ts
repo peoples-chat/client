@@ -12,6 +12,8 @@ export type Screen =
   | { name: "exportKey" }
   | { name: "radioSettings" }
   | { name: "radioNotice" }
+  | { name: "privacy" }
+  | { name: "relays" }
   | { name: "profile" };
 
 export function screenKey(screen: Screen): string {

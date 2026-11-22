@@ -1,0 +1,11 @@
+/* The line above the first section. */
+.intro {
+  margin: 14px 20px 2px;
+  font-size: 15.5px;
+  color: var(--color-muted);
+}
+
+/* A relay that can't be reached says so in red, as in the design. */
+.unreachable {
+  color: var(--color-danger);
+}
