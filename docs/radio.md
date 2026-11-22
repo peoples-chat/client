@@ -81,7 +81,7 @@ radio. Waiting for radios: #12.
 | Receiving text | push `MSG_WAITING`, then `SYNC_NEXT_MESSAGE` until none are left | Yes, both message formats |
 | Hearing contacts | pushes `ADVERT`, `NEW_ADVERT` | `ADVERT` keeps only the key's prefix; `NEW_ADVERT` is right |
 | Raw data | `SEND_RAW_DATA` (25), push `RAW_DATA` | Receiving only |
-| Channel data | `SEND_CHANNEL_DATA` (62), `CHANNEL_DATA_RECV` (27), since v1.15 | No |
+| Channel data | `SEND_CHANNEL_DATA` (62), `CHANNEL_DATA_RECV` (27), since v1.15 | No. Its main branch adds `send_channel_data()`, unreleased as of 22 November 2026 |
 | Resetting a route | `RESET_PATH` (13) | No |
 | Radio settings | `SET_RADIO_PARAMS` (11) | No. The app never changes them without asking anyway |
 | Path discovery, trace, control data, statistics, CLI | 52, 36, 55, 56, 66 | No, or parsed wrongly |
@@ -134,7 +134,7 @@ These come from the firmware source at `companion-v1.18.0`.
 | --- | --- | --- | --- | --- |
 | Text-encoded data in a plain message | Yes | Yes | 160 bytes, no NUL | Works with meshcore-rs today |
 | `SEND_RAW_DATA` | No | No | About 170 bytes | Direct or one hop only; reaches only an app that is connected at the time |
-| Channel data on a private channel (62) | By the channel key | No | 165 bytes | No sender identity; not in meshcore-rs |
+| Channel data on a private channel (62) | By the channel key | No | 165 bytes | No sender identity; not in meshcore-rs 0.2.0 |
 
 ## Tests
 
