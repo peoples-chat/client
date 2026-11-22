@@ -1,0 +1,8 @@
+# TLS in front of strfry. setup.sh replaces relay.peoples.chat with the host name.
+relay.peoples.chat {
+    # Keep the metrics page private.
+    @metrics path /metrics
+    respond @metrics 404
+
+    reverse_proxy 127.0.0.1:7777
+}
