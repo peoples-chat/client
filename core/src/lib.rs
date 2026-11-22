@@ -9,6 +9,7 @@ mod app;
 pub mod interface;
 mod invite;
 mod messaging;
+mod photo;
 pub mod radio;
 mod reach;
 

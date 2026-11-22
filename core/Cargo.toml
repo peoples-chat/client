@@ -22,6 +22,12 @@ base64 = "0.22"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+# Profile photos (#94): decoded, turned upright, cut square and saved again as JPEG, which drops
+# their metadata. MDK already builds this version with these formats.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+# Fetches photos from a media server on this machine, in tests and debug builds; everything else
+# goes through MDK's own safe download. MDK already builds this version.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 zeroize = "1"
 log = "0.4"
 # Reads the relay hints in invite links (NIP-19 nprofile), and the tests read exported keys back

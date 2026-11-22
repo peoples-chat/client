@@ -17,6 +17,8 @@ export interface Account {
   name: string;
   /** A few words about the user, from the profile. Empty when there are none (#93). */
   about: string;
+  /** The profile photo, small and square, as a `data:image/jpeg` URL (#94). */
+  photo?: string;
   publicKey: PublicKey;
   /**
    * Link that other people open or scan to start a chat. The user's QR code encodes it. From the
@@ -28,6 +30,8 @@ export interface Account {
 export interface Contact {
   publicKey: PublicKey;
   name: string;
+  /** Their profile photo, small and square, as a `data:image/jpeg` URL (#94). */
+  photo?: string;
 }
 
 /** How a message travelled. */
@@ -158,6 +162,13 @@ export interface Core {
    * can be empty. Needs a relay: offline, it fails and nothing changes.
    */
   updateProfile(name: string, about: string): Promise<Account>;
+  /**
+   * Sets the profile photo (#94). The core turns it upright, cuts it square, shrinks it and saves
+   * it again as JPEG, which drops its metadata, then uploads it and publishes its address.
+   */
+  setProfilePhoto(photo: Uint8Array): Promise<Account>;
+  /** Removes the profile photo (#94). */
+  removeProfilePhoto(): Promise<Account>;
   /** Removes the profile, leaves every chat and deletes the account's data from this device. */
   deleteAccount(): Promise<void>;
   /**

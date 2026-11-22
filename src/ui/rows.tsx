@@ -54,13 +54,14 @@ export function InfoRow({ icon, label, description }: { icon: IconName; label: s
 interface ContactRowProps {
   name: string;
   tint: Tint;
+  photo?: string;
   onClick?: () => void;
 }
 
-export function ContactRow({ name, tint, onClick }: ContactRowProps) {
+export function ContactRow({ name, tint, photo, onClick }: ContactRowProps) {
   return (
     <button type="button" className={styles.contactRow} onClick={onClick}>
-      <Avatar name={name} size={44} tint={tint} />
+      <Avatar name={name} size={44} tint={tint} photo={photo} />
       <span className={styles.contactName}>{name}</span>
     </button>
   );
@@ -69,6 +70,7 @@ export function ContactRow({ name, tint, onClick }: ContactRowProps) {
 interface ChatRowProps {
   name: string;
   tint: Tint;
+  photo?: string;
   time: string;
   preview: ReactNode;
   /** A message request: its preview is highlighted. */
@@ -76,10 +78,10 @@ interface ChatRowProps {
   onClick: () => void;
 }
 
-export function ChatRow({ name, tint, time, preview, request, onClick }: ChatRowProps) {
+export function ChatRow({ name, tint, photo, time, preview, request, onClick }: ChatRowProps) {
   return (
     <button type="button" className={styles.chatRow} onClick={onClick}>
-      <Avatar name={name} size={52} tint={tint} />
+      <Avatar name={name} size={52} tint={tint} photo={photo} />
       <span className={styles.chatBody}>
         <span className={styles.chatTop}>
           <span className={styles.chatName}>{name}</span>

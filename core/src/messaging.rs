@@ -27,6 +27,8 @@ use marmot_app::{
     UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
+
+use crate::photo::MAX_PHOTO_BYTES;
 use zeroize::Zeroizing;
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
@@ -68,6 +70,10 @@ pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.primal.net",
 ];
 
+/// Where profile photos are uploaded (#94): White Noise's server for profile photos, the proof of
+/// concept's choice on 22 November 2026. The project's own media server comes with #11.
+pub const DEFAULT_MEDIA_SERVER: &str = "https://blossom.primal.net";
+
 /// Relays the project runs, which the interface shows as run by peoples.chat (#88). None yet:
 /// who runs the project's relays is decided later (#11).
 pub const PROJECT_RELAYS: &[&str] = &[];
@@ -82,8 +88,19 @@ pub struct MessagingOptions {
     pub relays: Vec<String>,
     /// Keychain service under which account keys are stored, one entry per account.
     pub keychain_service: String,
-    /// Allows `ws://` relays on the loopback interface, for tests and local development.
-    pub allow_loopback_relays: bool,
+    /// Allows relays (`ws://`) and media servers (`http://`) on the loopback interface, for tests
+    /// and local development.
+    pub allow_loopback: bool,
+    /// The media server profile photos go to; `None` for [`DEFAULT_MEDIA_SERVER`] (#94).
+    pub media_server: Option<String>,
+}
+
+/// What another account's profile says about it, as the relays have it now.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContactProfile {
+    pub name: Option<String>,
+    /// The address of the account's photo.
+    pub picture: Option<String>,
 }
 
 /// An account created on this device.
@@ -327,6 +344,8 @@ pub enum MessagingError {
     InvalidChatId(String),
     #[error("the chat is changing: a change to it waits for the relays")]
     EpochUnsettled,
+    #[error("could not download the photo: {0}")]
+    PhotoDownload(String),
 }
 
 /// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
@@ -366,6 +385,8 @@ pub struct Messaging {
     app: MarmotApp,
     runtime: MarmotAppRuntime,
     relays: Vec<String>,
+    media_server: String,
+    allow_loopback: bool,
 }
 
 impl Messaging {
@@ -375,7 +396,8 @@ impl Messaging {
         let home = AccountHome::open_with_keychain(&options.data_dir, options.keychain_service)
             .map_err(AppError::from)?;
         let config = MarmotAppConfig::default()
-            .with_allow_loopback_relay_endpoints(options.allow_loopback_relays);
+            .with_allow_loopback_relay_endpoints(options.allow_loopback)
+            .with_allow_loopback_blob_endpoints(options.allow_loopback);
         let app = MarmotApp::try_with_relays_and_account_home_and_config(
             &options.data_dir,
             options.relays.clone(),
@@ -388,6 +410,10 @@ impl Messaging {
             app,
             runtime,
             relays: options.relays,
+            media_server: options
+                .media_server
+                .unwrap_or_else(|| DEFAULT_MEDIA_SERVER.to_owned()),
+            allow_loopback: options.allow_loopback,
         })
     }
 
@@ -556,16 +582,24 @@ impl Messaging {
         if let Some(name) = self.known_name(account_hex) {
             return name;
         }
-        match self.fetch_name(account_hex, relay_hints).await {
+        match self
+            .fetch_profile(account_hex, relay_hints)
+            .await
+            .and_then(|profile| profile.name)
+        {
             Some(name) => name,
             None => marmot_app::default_profile_pseudonym(account_hex),
         }
     }
 
-    /// The name in another account's profile as the relays have it now, from `relay_hints`
-    /// and our relays. MDK keeps what it finds. `None` when there is no profile with a name, or
-    /// the relays didn't answer in time.
-    pub async fn fetch_name(&self, account_hex: &str, relay_hints: &[String]) -> Option<String> {
+    /// Another account's profile as the relays have it now, from `relay_hints` and our relays.
+    /// MDK keeps what it finds. `None` when there is no profile, or the relays didn't answer in
+    /// time.
+    pub async fn fetch_profile(
+        &self,
+        account_hex: &str,
+        relay_hints: &[String],
+    ) -> Option<ContactProfile> {
         let relays: Vec<String> = relay_hints
             .iter()
             .chain(&self.relays)
@@ -580,7 +614,12 @@ impl Messaging {
         )
         .await;
         match fetched {
-            Ok(Ok(Some(profile))) => return profile_name(&profile),
+            Ok(Ok(Some(profile))) => {
+                return Some(ContactProfile {
+                    name: profile_name(&profile),
+                    picture: profile_picture(&profile),
+                });
+            }
             Ok(Ok(None)) => log::info!("the contact has no profile on the relays"),
             Ok(Err(error)) => log::info!("could not fetch the contact's profile: {error}"),
             Err(_) => log::info!("fetching the contact's profile timed out"),
@@ -595,24 +634,78 @@ impl Messaging {
             .unwrap_or_default()
     }
 
-    /// Publishes the account's profile with a new name and about (#93). Everything else in the
-    /// profile stays as it was: the photo, and what other apps put there. MDK replaces each of
-    /// those fields with what it is given, so they come from the profile as this device has
-    /// it.
+    /// The address of an account's photo, as this device last saw its profile (#94).
+    pub fn known_picture(&self, account_hex: &str) -> Option<String> {
+        self.cached_profile(account_hex)
+            .and_then(|profile| profile_picture(&profile))
+    }
+
+    /// Publishes the account's profile with a new name and about (#93).
     pub async fn update_profile(
         &self,
         account_hex: &str,
         name: &str,
         about: &str,
     ) -> Result<(), MessagingError> {
+        self.publish_profile(account_hex, |profile| {
+            profile.name = Some(name.to_owned());
+            profile.display_name = Some(name.to_owned());
+            profile.about = (!about.is_empty()).then(|| about.to_owned());
+        })
+        .await
+    }
+
+    /// Publishes the account's profile with `picture` as its photo's address, or without a photo
+    /// (#94).
+    pub async fn set_picture(
+        &self,
+        account_hex: &str,
+        picture: Option<&str>,
+    ) -> Result<(), MessagingError> {
+        self.publish_profile(account_hex, |profile| {
+            profile.picture = picture.map(str::to_owned);
+        })
+        .await
+    }
+
+    /// Publishes the account's profile with `change` made to it. Everything else in the profile
+    /// stays as it was, including what other apps put there: MDK replaces name, about, picture,
+    /// NIP-05 and lightning address with whatever it is given, so they come from the profile as
+    /// this device has it.
+    async fn publish_profile(
+        &self,
+        account_hex: &str,
+        change: impl FnOnce(&mut UserProfileMetadata),
+    ) -> Result<(), MessagingError> {
         let mut profile = self.cached_profile(account_hex).unwrap_or_default();
-        profile.name = Some(name.to_owned());
-        profile.display_name = Some(name.to_owned());
-        profile.about = (!about.is_empty()).then(|| about.to_owned());
+        change(&mut profile);
         self.runtime
             .publish_user_profile_using_account_relays(account_hex, profile)
             .await?;
         Ok(())
+    }
+
+    /// Uploads a profile photo to the media server and returns its address (#94). The photo is a
+    /// JPEG the core made, without metadata: MDK uploads what it is given.
+    pub async fn upload_photo(
+        &self,
+        account_hex: &str,
+        jpeg: Vec<u8>,
+    ) -> Result<String, MessagingError> {
+        Ok(self
+            .runtime
+            .upload_profile_image(account_hex, jpeg, "image/jpeg", Some(&self.media_server))
+            .await?)
+    }
+
+    /// Downloads the photo at `url`, up to [`MAX_PHOTO_BYTES`] (#94). MDK's download takes public
+    /// HTTPS addresses only. With loopback allowed, a media server on this machine is fetched
+    /// directly, for tests and local development.
+    pub async fn download_photo(&self, url: &str) -> Result<Vec<u8>, MessagingError> {
+        if self.allow_loopback && is_loopback_http(url) {
+            return fetch_loopback(url).await;
+        }
+        Ok(marmot_app::download_profile_image(url.to_owned(), MAX_PHOTO_BYTES as u64).await?)
     }
 
     /// An account's profile as this device last saw it.
@@ -836,6 +929,47 @@ fn client_token() -> String {
 }
 
 /// The name a profile shows: its display name, else its name.
+fn profile_picture(profile: &UserProfileMetadata) -> Option<String> {
+    profile
+        .picture
+        .as_deref()
+        .map(str::trim)
+        .filter(|picture| !picture.is_empty())
+        .map(str::to_owned)
+}
+
+/// Whether `url` is plain HTTP on this machine.
+fn is_loopback_http(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    url.scheme() == "http"
+        && (host == "localhost"
+            || host
+                .trim_matches(|c| c == '[' || c == ']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback()))
+}
+
+async fn fetch_loopback(url: &str) -> Result<Vec<u8>, MessagingError> {
+    let failed = |error: reqwest::Error| MessagingError::PhotoDownload(error.to_string());
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(PROFILE_TIMEOUT)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(failed)?;
+    let bytes = response.bytes().await.map_err(failed)?;
+    if bytes.len() > MAX_PHOTO_BYTES {
+        return Err(MessagingError::PhotoDownload(
+            "the photo is too large".into(),
+        ));
+    }
+    Ok(bytes.to_vec())
+}
+
 fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
     [&profile.display_name, &profile.name]
         .into_iter()

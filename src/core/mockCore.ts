@@ -171,6 +171,24 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       return structuredClone(state.account);
     },
 
+    // The demo shows the photo the interface prepared, as it is.
+    async setProfilePhoto(photo) {
+      const account = requireAccount();
+      if (photo.length === 0) throw new CoreError("This photo can't be used. Try another one.");
+      state.account = { ...account, photo: `data:image/jpeg;base64,${toBase64(photo)}` };
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
+    },
+
+    async removeProfilePhoto() {
+      const account = requireAccount();
+      if (!account.photo) return structuredClone(account);
+      state.account = { ...account };
+      delete state.account.photo;
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
+    },
+
     async deleteAccount() {
       requireAccount();
       for (const timer of timers) clearTimeout(timer);
@@ -395,6 +413,12 @@ function restore(storage: StorageLike | null): MockState | null {
   } catch {
     return null;
   }
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function randomBech32(length: number): string {

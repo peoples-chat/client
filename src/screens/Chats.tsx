@@ -23,6 +23,7 @@ export function Chats() {
       <TabHeader
         title="Chats"
         accountName={state.account?.name ?? ""}
+        accountPhoto={state.account?.photo}
         onOpenSettings={() => navigation.push({ name: "settings" })}
         action={<IconButton label="New chat" icon="edit" onClick={() => navigation.push({ name: "newChat" })} />}
       />
@@ -47,6 +48,7 @@ export function Chats() {
                   <ChatRow
                     name={item.chat.contact.name}
                     tint={tintFor(item.chat.contact.name)}
+                    photo={item.chat.contact.photo}
                     time={item.time ? formatListTime(item.time, now) : ""}
                     preview={item.chat.messages[item.chat.messages.length - 1]?.text ?? "No messages yet"}
                     onClick={() => navigation.push({ name: "chat", chatId: item.chat.id })}
@@ -57,6 +59,7 @@ export function Chats() {
                   <ChatRow
                     name={item.invitation.from.name}
                     tint={tintFor(item.invitation.from.name)}
+                    photo={item.invitation.from.photo}
                     time={formatListTime(item.time, now)}
                     preview="Message request"
                     request

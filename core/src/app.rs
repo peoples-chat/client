@@ -23,6 +23,7 @@ use crate::messaging::{
     DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink,
     RelayLinks, TextMessage, canonical_relay,
 };
+use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
 use crate::reach::Reachability;
 
@@ -53,6 +54,8 @@ struct Inner {
     watchers: Mutex<Vec<JoinHandle<()>>>,
     /// Which chats can reach their relays (#43). Whoever holds both locks takes `state` first.
     reach: Mutex<Reachability>,
+    /// Avatars made from profile photos (#94).
+    avatars: Avatars,
 }
 
 impl Core {
@@ -60,11 +63,13 @@ impl Core {
     /// already on this device, if any, with its chats and their latest messages; chats whose
     /// contacts' names aren't known yet follow as events. Must run inside a Tokio runtime.
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
+        let avatars = Avatars::new(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
             Some(existing) => Some(account_view(
                 &messaging,
+                &avatars,
                 existing.public_key_hex,
                 existing.name.unwrap_or_default(),
             )?),
@@ -86,6 +91,7 @@ impl Core {
                 account_commands: tokio::sync::Mutex::new(()),
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
+                avatars,
             }),
         };
         if let Some(account) = account {
@@ -131,6 +137,7 @@ impl Core {
                 })?;
         let account = account_view(
             &self.inner.messaging,
+            &self.inner.avatars,
             created.public_key_hex,
             name.to_owned(),
         )
@@ -165,23 +172,76 @@ impl Core {
             .messaging
             .update_profile(&account.public_key, name, about)
             .await
-            .map_err(|error| {
-                // MDK publishes the profile at once, or not at all.
-                if self.any_relay_connected() {
-                    failed("update your profile", error)
-                } else {
-                    log::warn!("could not update the profile without relays: {error}");
-                    CommandError::new("Could not reach the relays. Try again when you are online.")
-                }
-            })?;
+            .map_err(|error| self.profile_not_published("update your profile", error))?;
         log::info!("profile updated");
+        self.change_account(|account| {
+            account.name = name.to_owned();
+            account.about = about.to_owned();
+        })
+    }
 
+    /// Sets the profile photo (#94). The core turns `photo` upright, cuts it to a centred
+    /// square, shrinks it and saves it again as JPEG, which drops its metadata, such as where it
+    /// was taken. It then uploads it to the media server and publishes its address in the
+    /// profile. Emits [`CoreEvent::AccountChanged`].
+    pub async fn set_profile_photo(&self, photo: &[u8]) -> Result<Account, CommandError> {
+        self.account()?;
+        let upload = photo::square_jpeg(photo, UPLOAD_SIDE).map_err(|error| {
+            log::info!("a photo was refused: {error}");
+            CommandError::new("This photo can't be used. Try another one.")
+        })?;
+        let avatar = photo::square_jpeg(&upload, AVATAR_SIDE)
+            .map_err(|error| failed("set your photo", error))?;
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        let url = self
+            .inner
+            .messaging
+            .upload_photo(&account.public_key, upload)
+            .await
+            .map_err(|error| failed("upload your photo", error))?;
+        self.inner
+            .messaging
+            .set_picture(&account.public_key, Some(&url))
+            .await
+            .map_err(|error| self.profile_not_published("set your photo", error))?;
+        log::info!("profile photo set");
+        if let Err(error) = self.inner.avatars.put(&url, &avatar) {
+            log::warn!("could not keep the avatar: {error}");
+        }
+        self.change_account(|account| account.photo = Some(photo::data_url(&avatar)))
+    }
+
+    /// Removes the profile photo (#94). Emits [`CoreEvent::AccountChanged`]. The photo stays on
+    /// the media server: its address is just no longer in the profile.
+    pub async fn remove_profile_photo(&self) -> Result<Account, CommandError> {
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        if account.photo.is_none()
+            && self
+                .inner
+                .messaging
+                .known_picture(&account.public_key)
+                .is_none()
+        {
+            return Ok(account);
+        }
+        self.inner
+            .messaging
+            .set_picture(&account.public_key, None)
+            .await
+            .map_err(|error| self.profile_not_published("remove your photo", error))?;
+        log::info!("profile photo removed");
+        self.change_account(|account| account.photo = None)
+    }
+
+    /// Applies `change` to the account in the snapshot and emits [`CoreEvent::AccountChanged`].
+    fn change_account(&self, change: impl FnOnce(&mut Account)) -> Result<Account, CommandError> {
         let mut state = self.state();
         let Some(current) = state.account.as_mut() else {
             return Err(CommandError::new("Create an account first."));
         };
-        current.name = name.to_owned();
-        current.about = about.to_owned();
+        change(current);
         let account = current.clone();
         self.emit(CoreEvent::AccountChanged {
             account: account.clone(),
@@ -189,28 +249,92 @@ impl Core {
         Ok(account)
     }
 
+    /// Why a profile wasn't published. MDK publishes at once, or not at all.
+    fn profile_not_published(&self, action: &str, error: MessagingError) -> CommandError {
+        if self.any_relay_connected() {
+            failed(action, error)
+        } else {
+            log::warn!("could not {action} without relays: {error}");
+            CommandError::new("Could not reach the relays. Try again when you are online.")
+        }
+    }
+
     /// Fetches the contacts' profiles again, and emits [`CoreEvent::ContactChanged`] for each
-    /// contact whose name changed (#93). The core does this as it starts following the account
-    /// and every few minutes after; MDK doesn't follow other people's profiles by itself.
+    /// contact whose name or photo changed (#93, #94). The core does this as it starts following
+    /// the account and every few minutes after; MDK doesn't follow other people's profiles by
+    /// itself.
     pub async fn refresh_contacts(&self) {
-        let contacts: std::collections::BTreeMap<String, String> = {
+        let contacts: std::collections::BTreeSet<String> = {
             let state = self.state();
             state
                 .chats
                 .iter()
-                .map(|chat| &chat.contact)
-                .chain(state.invitations.iter().map(|invitation| &invitation.from))
-                .map(|contact| (contact.public_key.clone(), contact.name.clone()))
+                .map(|chat| chat.contact.public_key.clone())
+                .chain(
+                    state
+                        .invitations
+                        .iter()
+                        .map(|invitation| invitation.from.public_key.clone()),
+                )
                 .collect()
         };
-        for (public_key, name) in contacts {
-            let Some(fetched) = self.inner.messaging.fetch_name(&public_key, &[]).await else {
+        for public_key in contacts {
+            let Some(profile) = self.inner.messaging.fetch_profile(&public_key, &[]).await else {
                 continue;
             };
-            if fetched != name {
-                self.rename_contact(&public_key, &fetched);
-            }
+            let photo = match &profile.picture {
+                Some(url) => self.avatar_for(url).await,
+                None => None,
+            };
+            self.update_contact(&public_key, profile.name, photo);
         }
+    }
+
+    /// The avatar for the photo at `url`: kept on this device, or downloaded and made now.
+    /// `None` when the photo can't be had; the contact then has no photo for now.
+    async fn avatar_for(&self, url: &str) -> Option<String> {
+        let avatar = match self.inner.avatars.get(url) {
+            Some(avatar) => avatar,
+            None => {
+                let downloaded = match self.inner.messaging.download_photo(url).await {
+                    Ok(downloaded) => downloaded,
+                    Err(error) => {
+                        log::info!("could not download a contact's photo: {error}");
+                        return None;
+                    }
+                };
+                let avatar = match photo::square_jpeg(&downloaded, AVATAR_SIDE) {
+                    Ok(avatar) => avatar,
+                    Err(error) => {
+                        log::info!("a contact's photo can't be shown: {error}");
+                        return None;
+                    }
+                };
+                if let Err(error) = self.inner.avatars.put(url, &avatar) {
+                    log::warn!("could not keep a contact's avatar: {error}");
+                }
+                avatar
+            }
+        };
+        Some(photo::data_url(&avatar))
+    }
+
+    /// A contact's photo as this device has it already, without fetching anything. Starts
+    /// fetching the avatar when only the photo's address is known.
+    fn known_photo(&self, contact: &str) -> Option<String> {
+        let url = self.inner.messaging.known_picture(contact)?;
+        if let Some(avatar) = self.inner.avatars.get(&url) {
+            return Some(photo::data_url(&avatar));
+        }
+        let core = self.clone();
+        let contact = contact.to_owned();
+        tokio::spawn(async move {
+            let photo = core.avatar_for(&url).await;
+            if photo.is_some() {
+                core.update_contact(&contact, None, photo);
+            }
+        });
+        None
     }
 
     fn any_relay_connected(&self) -> bool {
@@ -220,31 +344,30 @@ impl Core {
             .any(|(_, status)| *status == RelayStatus::Connected)
     }
 
-    /// Gives the contact with `public_key` a new name in their chats and invitations.
-    fn rename_contact(&self, public_key: &str, name: &str) {
+    /// Gives the contact with `public_key` their current name and photo in their chats and
+    /// invitations, and emits [`CoreEvent::ContactChanged`] if that changed anything. Without a
+    /// `name`, the contact keeps the one they have.
+    fn update_contact(&self, public_key: &str, name: Option<String>, photo: Option<String>) {
         let mut state = self.state();
         let state = &mut *state;
-        let mut changed = false;
+        let mut changed = None;
         let contacts = state.chats.iter_mut().map(|chat| &mut chat.contact).chain(
             state
                 .invitations
                 .iter_mut()
                 .map(|invitation| &mut invitation.from),
         );
-        for contact in contacts {
-            if contact.public_key == public_key && contact.name != name {
-                contact.name = name.to_owned();
-                changed = true;
+        for contact in contacts.filter(|contact| contact.public_key == public_key) {
+            let name = name.clone().unwrap_or_else(|| contact.name.clone());
+            if contact.name != name || contact.photo != photo {
+                contact.name = name;
+                contact.photo = photo.clone();
+                changed = Some(contact.clone());
             }
         }
-        if changed {
-            log::info!("a contact's name changed");
-            self.emit(CoreEvent::ContactChanged {
-                contact: Contact {
-                    public_key: public_key.to_owned(),
-                    name: name.to_owned(),
-                },
-            });
+        if let Some(contact) = changed {
+            log::info!("a contact's profile changed");
+            self.emit(CoreEvent::ContactChanged { contact });
         }
     }
 
@@ -271,6 +394,9 @@ impl Core {
         log::info!("account deleted");
         *self.state() = Snapshot::default();
         *self.reach() = Reachability::default();
+        if let Err(error) = self.inner.avatars.clear() {
+            log::warn!("could not remove the avatars: {error}");
+        }
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
     }
@@ -641,9 +767,11 @@ impl Core {
             .invitations
             .iter()
             .position(|invitation| invitation.id == chat.id);
+        // Only a new contact looks for a photo; the refresh keeps it current after that.
         let contact = || Contact {
             public_key: chat.peer_hex.clone(),
             name: contact_name.clone(),
+            photo: self.known_photo(&chat.peer_hex),
         };
 
         let mut events = Vec::new();
@@ -924,13 +1052,19 @@ fn checked_name(name: &str) -> Result<&str, CommandError> {
 /// publish to as hints (#19).
 fn account_view(
     messaging: &Messaging,
+    avatars: &Avatars,
     public_key_hex: String,
     name: String,
 ) -> Result<Account, MessagingError> {
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
+    let photo = messaging
+        .known_picture(&public_key_hex)
+        .and_then(|url| avatars.get(&url))
+        .map(|avatar| photo::data_url(&avatar));
     Ok(Account {
         name,
         about: messaging.own_about(&public_key_hex),
+        photo,
         invite_link,
         public_key: public_key_hex,
     })

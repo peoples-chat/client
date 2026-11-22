@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { core } from "../core";
 import { MAX_ABOUT, MAX_NAME, type Account } from "../core/types";
 import { useNavigation } from "../navigation/Navigator";
-import { canShare, share } from "../platform";
+import { canShare, photoBytes, share, UnreadablePhoto } from "../platform";
 import { useAppState } from "../state";
 import { Button } from "../ui/Button";
 import { TextField } from "../ui/fields";
@@ -51,7 +51,7 @@ export function Profile() {
     <div className={layout.screen}>
       <ScreenHeader title="Profile" onLeading={navigation.back} />
       <main className={`${layout.scroll} ${styles.main}`}>
-        <ProfilePhoto name={account.name} size={88} />
+        <PhotoPicker account={account} />
         <ProfileFields account={account} />
         <section className={styles.code} aria-labelledby="code-title">
           <div className={styles.qrTile}>
@@ -73,6 +73,57 @@ export function Profile() {
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+type PhotoState = { kind: "idle" } | { kind: "uploading" } | { kind: "removing" } | { kind: "failed"; message: string };
+
+/** The photo, with the button that sets a new one, and a way to remove it (#94). */
+function PhotoPicker({ account }: { account: Account }) {
+  const [state, setState] = useState<PhotoState>({ kind: "idle" });
+  const busy = state.kind === "uploading" || state.kind === "removing";
+
+  async function choose(file: File) {
+    setState({ kind: "uploading" });
+    try {
+      await core.setProfilePhoto(await photoBytes(file));
+      setState({ kind: "idle" });
+    } catch (error) {
+      const message =
+        error instanceof UnreadablePhoto ? "This photo can't be used. Try another one." : errorText(error);
+      setState({ kind: "failed", message });
+    }
+  }
+
+  async function remove() {
+    setState({ kind: "removing" });
+    try {
+      await core.removeProfilePhoto();
+      setState({ kind: "idle" });
+    } catch (error) {
+      setState({ kind: "failed", message: errorText(error) });
+    }
+  }
+
+  return (
+    <div className={styles.photo}>
+      <ProfilePhoto name={account.name} size={88} photo={account.photo} onChoose={choose} busy={busy} />
+      {state.kind === "failed" ? (
+        <p className={styles.saveError} role="alert">
+          {state.message}
+        </p>
+      ) : busy ? (
+        <p className={styles.saveState} aria-live="polite">
+          {state.kind === "uploading" ? "Uploading the photo…" : "Removing the photo…"}
+        </p>
+      ) : (
+        account.photo && (
+          <button type="button" className={styles.removePhoto} onClick={remove}>
+            Remove photo
+          </button>
+        )
+      )}
     </div>
   );
 }

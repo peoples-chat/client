@@ -46,6 +46,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `load()` | `core_snapshot` | `Snapshot` | | Done (#16) |
 | `createAccount(name)` | `create_account` | `Account` | `accountCreated` | Done (#16) |
 | `updateProfile(name, about)` | `update_profile` | `Account` | `accountChanged` | Done (#93) |
+| `setProfilePhoto(photo)` | `set_profile_photo` (raw body) | `Account` | `accountChanged` | Done (#94) |
+| `removeProfilePhoto()` | `remove_profile_photo` | `Account` | `accountChanged` | Done (#94) |
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
 | `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
@@ -67,7 +69,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
-| `contactChanged` | `contact` | A contact's profile changed, for example their name | Done (#93) |
+| `contactChanged` | `contact` | A contact's name or photo changed | Done (#93, #94) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -76,8 +78,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays` |
-| `Account` | `name`, `about`, `publicKey` (hex), `inviteLink` |
-| `Contact` | `publicKey`, `name` |
+| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink` |
+| `Contact` | `publicKey`, `name`, `photo` (optional) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
@@ -163,6 +165,25 @@ starts following the account and every 5 minutes after. A new name updates the c
 
 **What the interface shows.** Profile has Name and About. They save when the user leaves a field or presses Enter, and
 say "Saved" or why not.
+
+**Photos** (#94):
+
+- `setProfilePhoto(photo)` takes the photo's bytes as the request's raw body, not as JSON.
+- The core decodes the photo and turns it upright. It cuts a centred square, shrinks it to 512 pixels and saves it
+  again as JPEG. Saving it again keeps the pixels only, so a phone photo's location doesn't travel with it; MDK would
+  upload the file as it is.
+- It uploads the photo to the media server, blossom.primal.net for the PoC, and publishes its address in the profile.
+  Then `accountChanged` follows. Removing the photo takes the address out of the profile; the file stays on the server.
+- Errors:
+  - A file that isn't a photo, or is larger than 10 MB: "This photo can't be used. Try another one."
+  - A failed upload: "Could not upload your photo. Try again."
+  - Without a relay, the profile can't be published: the offline message above.
+- `photo`, on the account and on contacts, is a small square JPEG as a `data:` URL. The core makes it, so the web view
+  never contacts a media server. A contact's photo comes with their profile: when a chat starts, and with the refresh
+  every 5 minutes. The core keeps each one in the data folder, and deletes them with the account.
+- **The interface:** Profile's photo button opens the phone's picker, which offers the library and the camera. It hands
+  the core the photo as JPEG, at most 1024 pixels on a side; drawing it first turns an iPhone's HEIC into JPEG. "Remove
+  photo" appears once there is one. A photo chosen on Create profile is set once the account exists.
 
 **Usernames are left out for now** (decided 22 November 2026). The design's Username, `emil@peoples.chat`, is a
 Nostr address (NIP-05). It would need a name service at peoples.chat and rules for claiming names. People connect by
@@ -294,6 +315,9 @@ The app uses the real core since it covers the whole flow (#20): creating the ac
   3. On Android, also run `adb reverse tcp:7777 tcp:7777`.
   4. Type `block` and Enter to cut the apps off, and `unblock` to let them back in ([Reach](#reach)).
 - MDK needs a relay to set up an account. The relay doesn't need to be reachable: publishing waits until it is.
+- Profile photos go to blossom.primal.net. To keep them on the Mac too, run `cargo run -p peoples-chat-core --example
+  local_media` and build with `TAURI_PEOPLES_CHAT_MEDIA_SERVER=http://127.0.0.1:7778` (on Android also `adb reverse
+  tcp:7778 tcp:7778`). Only debug builds accept it.
 
 **Keys and data**
 

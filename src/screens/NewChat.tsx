@@ -83,6 +83,7 @@ export function NewChat() {
                   <ContactRow
                     name={chat.contact.name}
                     tint={tintFor(chat.contact.name)}
+                    photo={chat.contact.photo}
                     onClick={() => navigation.replace({ name: "chat", chatId: chat.id })}
                   />
                 </li>
