@@ -26,6 +26,9 @@ pub struct Account {
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
     /// NIP-21 `nostr:nprofile1…` URI: the public key and relay hints (#19).
     pub invite_link: String,
+    /// The same as a web link, `https://peoples.chat/i#nprofile1…`, for sharing: tapped on a
+    /// phone, it opens the app (#72).
+    pub share_link: String,
 }
 
 /// Someone the user can chat with.

@@ -37,9 +37,11 @@ interface NavigatorProps {
   initial: Screen;
   /** Renders one screen. Screens below the top stay mounted but hidden, so they keep their state. */
   children: (screen: Screen) => ReactNode;
+  /** Rendered once next to the screens, inside the navigation: listeners that navigate. */
+  alongside?: ReactNode;
 }
 
-export function Navigator({ initial, children }: NavigatorProps) {
+export function Navigator({ initial, children, alongside }: NavigatorProps) {
   const stackRef = useRef<Screen[]>([initial]);
   const pendingReset = useRef<Screen[] | null>(null);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
@@ -124,6 +126,7 @@ export function Navigator({ initial, children }: NavigatorProps) {
           {children(screen)}
         </div>
       ))}
+      {alongside}
     </NavigationContext.Provider>
   );
 }

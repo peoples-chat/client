@@ -64,7 +64,7 @@ describe("Tauri core", () => {
   });
 
   it("sends commands with their arguments", async () => {
-    const account = { name: "Emil Dahl", about: "", publicKey: "ab", inviteLink: "nostr:nprofile1" };
+    const account = { name: "Emil Dahl", about: "", publicKey: "ab", inviteLink: "nostr:nprofile1", shareLink: "https://peoples.chat/i#nprofile1" };
     const chat = shared.snapshot.chats[0];
     const message = chat.messages[1];
     const answers: Record<string, unknown> = {

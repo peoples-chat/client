@@ -32,5 +32,21 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": [
+            "https"
+          ],
+          "host": "peoples.chat",
+          "pathPrefix": [
+            "/i"
+          ],
+          "appLink": true
+        }
+      ]
+    }
   }
 }

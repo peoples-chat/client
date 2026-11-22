@@ -16,6 +16,7 @@ import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
 import { Welcome } from "./screens/Welcome";
 import { useAppState } from "./state";
+import { OpenedLinks } from "./navigation/OpenedLinks";
 import layout from "./ui/layout.module.css";
 import styles from "./App.module.css";
 
@@ -24,7 +25,7 @@ export default function App() {
   return (
     <div className={styles.app}>
       {state.status === "ready" && (
-        <Navigator initial={state.account ? { name: "chats" } : { name: "welcome" }}>
+        <Navigator initial={state.account ? { name: "chats" } : { name: "welcome" }} alongside={<OpenedLinks />}>
           {(screen) => <ScreenView screen={screen} />}
         </Navigator>
       )}
@@ -49,7 +50,7 @@ function ScreenView({ screen }: { screen: Screen }) {
     case "chat":
       return <ChatScreen chatId={screen.chatId} />;
     case "newChat":
-      return <NewChat />;
+      return <NewChat link={screen.link} />;
     case "scan":
       return <Scan />;
     case "request":

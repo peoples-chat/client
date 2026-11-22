@@ -78,7 +78,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays` |
-| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink` |
+| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
@@ -100,11 +100,12 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 
 **The invite link** is a NIP-21 `nostr:nprofile1…` URI. It carries the account's public key, plus up to three relays
 where the account publishes, as hints for finding it. The QR code encodes the same string. White Noise's phone apps
-scan it too. [mdk.md](mdk.md#contacts-and-invitations) explains the choice.
+scan it too. [mdk.md](mdk.md#contacts-and-invitations) explains the choice. Shared, it travels as a web link that opens
+the app ([Links that open the app](#links-that-open-the-app)).
 
 **`addContact` reads** the forms Marmot apps hand out:
 
-- our links, and `nprofile`, `npub` or hex keys, with or without `nostr:`;
+- our links, both forms, and `nprofile`, `npub` or hex keys, with or without `nostr:`;
 - White Noise's `marmot://profile/<key>` (also `whitenoise://`), with anything after `?` or `#` ignored.
 
 It refuses the following with a message to show. The text is never logged, since it may be a secret key pasted by
@@ -139,7 +140,8 @@ mistake.
 
 - deleting or blocking an invitation;
 - group chats: the core shows direct chats only;
-- opening an invite link tapped in another app. The link has to be pasted into New chat.
+- opening an invite link tapped in another app on an iPhone: that needs the Apple developer account (#61). See [Links that
+  open the app](#links-that-open-the-app).
 
 ## Profile
 
@@ -188,6 +190,26 @@ say "Saved" or why not.
 **Usernames are left out for now** (decided 22 November 2026). The design's Username, `emil@peoples.chat`, is a
 Nostr address (NIP-05). It would need a name service at peoples.chat and rules for claiming names. People connect by
 link and QR code instead. The name stays free text: not unique, and changeable.
+
+## Links that open the app
+
+**The shared link** is a web link, `shareLink`: `https://peoples.chat/i#nprofile1…`, the same key and hints as
+`inviteLink` (#72). Profile's Share and Copy use it. The QR code keeps `inviteLink`, the `nostr:` form, which White
+Noise's scanners read.
+
+- **With the app,** tapping the link opens the app: Android App Links and iOS universal links, through Tauri's
+  deep-link plugin. The app opens New chat with the link filled in, so the user confirms before a chat starts. This
+  works whether the app was closed or running.
+- **Before there is an account,** the link waits, and New chat opens with it once the account exists.
+- **Without the app,** the link opens the page `peoples.chat/i` (the `peoples-chat/www` repository). It says how to
+  get the app and shows the key to paste. The key comes after the `#`, which browsers don't send.
+- **A phone opens the app only for a domain that vouches for it:**
+  - Android: `peoples.chat/.well-known/assetlinks.json`, with the certificate the app is signed with.
+  - iOS: `apple-app-site-association`, which names the app by its Apple team ID, so it waits for #61.
+  - Until the site serves the Android file, an emulator can approve the domain by hand: `adb shell pm
+    set-app-links-user-selection --user cur --package chat.peoples.client true peoples.chat`.
+  - `adb shell am start -a android.intent.action.VIEW -d 'https://peoples.chat/i#…'` then opens a link as a tap would.
+- **After the `#`, the key may be followed by `/` and more.** That is room for #95's invitations.
 
 ## Messages
 

@@ -90,7 +90,8 @@ function sameAccount(a: Account, b: Account): boolean {
     a.about === b.about &&
     a.photo === b.photo &&
     a.publicKey === b.publicKey &&
-    a.inviteLink === b.inviteLink
+    a.inviteLink === b.inviteLink &&
+    a.shareLink === b.shareLink
   );
 }
 

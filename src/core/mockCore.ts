@@ -136,11 +136,13 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const trimmed = checkedName(name);
       if (state.account) throw new CoreError("This device already has an account.");
 
+      const invite = randomHex(6);
       const account: Account = {
         name: trimmed,
         about: "",
         publicKey: randomHex(32),
-        inviteLink: INVITE_PREFIX + randomHex(6),
+        inviteLink: INVITE_PREFIX + invite,
+        shareLink: `https://peoples.chat/i#demo-invite-${invite}`,
       };
       const chat = demoChat(now());
       const radioChat = demoRadioChat(now());
@@ -399,8 +401,11 @@ function restore(storage: StorageLike | null): MockState | null {
       return null;
     }
     const restored = { ...emptyState(), ...state } as MockState;
-    // Saved before profiles had an about (#93).
+    // Saved before profiles had an about (#93) and accounts a web link (#72).
     if (restored.account && typeof restored.account.about !== "string") restored.account.about = "";
+    if (restored.account && typeof restored.account.shareLink !== "string") {
+      restored.account.shareLink = `https://peoples.chat/i#${restored.account.inviteLink.replace(INVITE_PREFIX, "demo-invite-")}`;
+    }
     // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
     // in a chat that can't be reached.
     for (const chat of restored.chats) {

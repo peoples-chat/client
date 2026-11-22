@@ -26,7 +26,9 @@ export function Profile() {
   useEffect(() => () => clearTimeout(resetTimer.current), []);
 
   if (!account) return null;
-  const link = account.inviteLink;
+  // The QR code keeps the nostr: link, which White Noise scans too; sharing uses the web link,
+  // which opens the app when tapped (#72).
+  const link = account.shareLink;
 
   async function copyLink() {
     try {
@@ -55,7 +57,7 @@ export function Profile() {
         <ProfileFields account={account} />
         <section className={styles.code} aria-labelledby="code-title">
           <div className={styles.qrTile}>
-            <QrCode value={link} size={84} label="Your QR code" />
+            <QrCode value={account.inviteLink} size={84} label="Your QR code" />
           </div>
           <div className={styles.codeText}>
             <h2 id="code-title" className={styles.codeTitle}>
