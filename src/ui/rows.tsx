@@ -51,6 +51,38 @@ export function InfoRow({ icon, label, description }: { icon: IconName; label: s
   );
 }
 
+interface SwitchRowProps {
+  icon: IconName;
+  label: string;
+  description?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}
+
+/** A setting that is on or off, with the design's switch. The whole row toggles it. */
+export function SwitchRow({ icon, label, description, checked, disabled, onChange }: SwitchRowProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={styles.actionRow}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <Icon name={icon} size={22} className={styles.actionIcon} />
+      <span className={styles.actionText}>
+        <span>{label}</span>
+        {description && <span className={styles.actionDescription}>{description}</span>}
+      </span>
+      <span className={`${styles.switchTrack} ${checked ? styles.switchOn : ""}`} aria-hidden="true">
+        <span className={styles.switchKnob} />
+      </span>
+    </button>
+  );
+}
+
 interface ContactRowProps {
   name: string;
   tint: Tint;

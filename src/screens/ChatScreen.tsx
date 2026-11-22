@@ -26,7 +26,7 @@ import styles from "./ChatScreen.module.css";
  * link (`invited`), it says who invited the user and suggests a first message (#95).
  */
 export function ChatScreen({ chatId, invited = false }: { chatId: string; invited?: boolean }) {
-  const { chats, invites } = useAppState();
+  const { chats, invites, radio } = useAppState();
   const navigation = useNavigation();
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -37,6 +37,8 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
   const first = firstName(name);
   // Snapshots from before #43 have no reach; their chats were on the internet.
   const reach: Reach = chat.reach ?? "internet";
+  // With the switch on, everything goes by radio (#40).
+  const byRadio = reach === "radio" || radio.forced;
   const joined = invites.some((invite) => invite.joinedChatId === chatId);
   const suggestions =
     invited && chat.messages.length === 0 ? [`Hi ${first}, I made it`, "What is the radio part?"] : [];
@@ -92,6 +94,12 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           />
         }
       />
+      {reach === "internet" && radio.forced && (
+        <button type="button" className={`${styles.notice} ${styles.radio}`} onClick={() => navigation.push({ name: "radioSettings" })}>
+          <Icon name="radio" size={14} strokeWidth={2.2} />
+          <span>Testing: every message goes by radio.</span>
+        </button>
+      )}
       {reach !== "internet" && (
         <button
           type="button"
@@ -126,7 +134,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           ))}
         </div>
       )}
-      <Composer onSend={send} mode={reach === "radio" ? "radio" : "internet"} />
+      <Composer onSend={send} mode={byRadio ? "radio" : "internet"} />
     </div>
   );
 }

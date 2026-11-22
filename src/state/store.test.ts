@@ -19,7 +19,8 @@ const chat = (id: string, messages: Message[] = []): Chat => ({
   reach: "internet",
 });
 
-const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [], relays: [], invites: [] });
+const ready = (chats: Chat[] = []) =>
+  fromSnapshot({ account: null, chats, invitations: [], relays: [], invites: [], radio: { forced: false } });
 
 const relay = (url: string, status: Relay["status"]): Relay => ({ url, operator: "independent", status });
 
@@ -183,7 +184,14 @@ describe("createStore", () => {
   }
 
   it("applies events that arrive while the snapshot loads", async () => {
-    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [], relays: [], invites: [] });
+    const { core, emit, finishLoad } = fakeCore({
+      account: null,
+      chats: [chat("a")],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false },
+    });
     const store = createStore(core);
     let notified = 0;
     store.subscribe(() => notified++);

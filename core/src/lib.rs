@@ -12,6 +12,7 @@ mod invites;
 mod messaging;
 mod photo;
 pub mod radio;
+mod radio_store;
 mod reach;
 
 pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};

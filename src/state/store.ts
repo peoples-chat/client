@@ -1,4 +1,16 @@
-import type { Account, Chat, Contact, Core, CoreEvent, Invitation, Message, Relay, SentInvite, Snapshot } from "../core/types";
+import type {
+  Account,
+  Chat,
+  Contact,
+  Core,
+  CoreEvent,
+  Invitation,
+  Message,
+  RadioStatus,
+  Relay,
+  SentInvite,
+  Snapshot,
+} from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -9,9 +21,12 @@ export interface AppState {
   invitations: Invitation[];
   relays: Relay[];
   invites: SentInvite[];
+  radio: RadioStatus;
   /** Why loading failed. */
   error?: string;
 }
+
+const NO_RADIO: RadioStatus = { forced: false };
 
 export const initialState: AppState = {
   status: "loading",
@@ -20,6 +35,7 @@ export const initialState: AppState = {
   invitations: [],
   relays: [],
   invites: [],
+  radio: NO_RADIO,
 };
 
 export function fromSnapshot(snapshot: Snapshot): AppState {
@@ -30,6 +46,8 @@ export function fromSnapshot(snapshot: Snapshot): AppState {
     invitations: snapshot.invitations,
     relays: snapshot.relays,
     invites: snapshot.invites,
+    // Snapshots from before #40 have no radio.
+    radio: snapshot.radio ?? NO_RADIO,
   };
 }
 
@@ -43,7 +61,8 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "accountDeleted":
-      return { ...state, account: null, chats: [], invitations: [], relays: [], invites: [] };
+      // The core forgets the radio with the account.
+      return { ...state, account: null, chats: [], invitations: [], relays: [], invites: [], radio: NO_RADIO };
 
     case "chatAdded":
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
@@ -91,6 +110,9 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
     case "contactChanged":
       return updateContact(state, event.contact);
 
+    case "radioChanged":
+      return sameRadio(state.radio, event.radio) ? state : { ...state, radio: event.radio };
+
     case "inviteChanged": {
       const known = state.invites.find((i) => i.id === event.invite.id);
       if (known && known.joinedChatId === event.invite.joinedChatId && known.link === event.invite.link) return state;
@@ -122,6 +144,15 @@ function updateContact(state: AppState, contact: Contact): AppState {
     chats: state.chats.map((c) => (outdated(c.contact) ? { ...c, contact } : c)),
     invitations: state.invitations.map((i) => (outdated(i.from) ? { ...i, from: contact } : i)),
   };
+}
+
+function sameRadio(a: RadioStatus, b: RadioStatus): boolean {
+  return (
+    a.forced === b.forced &&
+    a.paired?.name === b.paired?.name &&
+    a.paired?.publicKey === b.paired?.publicKey &&
+    a.paired?.connected === b.paired?.connected
+  );
 }
 
 function sameRelays(a: Relay[], b: Relay[]): boolean {

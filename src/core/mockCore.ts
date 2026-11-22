@@ -49,6 +49,8 @@ interface MockState {
   chats: Chat[];
   invitations: Invitation[];
   invites: SentInvite[];
+  /** Every message goes by radio: the switch for testing (#40). */
+  forceRadio: boolean;
   /** Invite links already used, and the chat each one opened. */
   links: Record<string, string>;
   demoContactsAdded: number;
@@ -128,6 +130,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         invitations: state.invitations,
         relays: state.account ? demoRelays() : [],
         invites: state.invites,
+        radio: { forced: state.forceRadio },
       });
     },
 
@@ -274,8 +277,9 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
 
-      // As the core will: radio carries short text, and a chat that can't be reached keeps it.
-      const radio = chat.reach === "radio";
+      // As the core does: radio carries short text, also when it is forced (#40), and a chat
+      // that can't be reached keeps it.
+      const radio = chat.reach === "radio" || state.forceRadio;
       if (radio && radioBytes(body) > RADIO_TEXT_LIMIT) {
         throw new CoreError(`That is too long for radio. Keep it to ${RADIO_TEXT_LIMIT} bytes.`);
       }
@@ -289,7 +293,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
-      if (chat.reach === "unreachable") return structuredClone(message);
+      if (chat.reach === "unreachable" && !radio) return structuredClone(message);
 
       later(delays.sent, () => {
         // On radio, the other radio confirms; on the internet, a relay acknowledges.
@@ -299,6 +303,14 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         scheduleReply(chatId);
       });
       return structuredClone(message);
+    },
+
+    // The demo's radio reaches every contact, so the switch is all it takes.
+    async setForceRadio(forced) {
+      state.forceRadio = forced;
+      const radio = { forced };
+      emit({ type: "radioChanged", radio });
+      return structuredClone(radio);
     },
 
     // The demo has no real key: these look like the real core's copies, and open nowhere.
@@ -403,7 +415,16 @@ function demoInvitation(now: number, firstName: string): Invitation {
 }
 
 function emptyState(): MockState {
-  return { account: null, chats: [], invitations: [], invites: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
+  return {
+    account: null,
+    chats: [],
+    invitations: [],
+    invites: [],
+    forceRadio: false,
+    links: {},
+    demoContactsAdded: 0,
+    repliesSent: 0,
+  };
 }
 
 function browserStorage(): StorageLike | null {

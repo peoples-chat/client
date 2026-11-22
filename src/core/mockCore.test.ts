@@ -29,7 +29,14 @@ describe("mock core", () => {
 
   it("starts without an account", async () => {
     const { core } = setup();
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [], invites: [] });
+    expect(await core.load()).toEqual({
+      account: null,
+      chats: [],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false },
+    });
   });
 
   it("creates an account with demo chats and a message request", async () => {
@@ -99,6 +106,26 @@ describe("mock core", () => {
     // Radio carries 96 bytes at most; ☔ takes three.
     await expect(core.sendMessage(chat.id, "☔".repeat(33))).rejects.toThrow("too long for radio");
     await core.sendMessage(chat.id, "☔".repeat(32));
+  });
+
+  it("sends everything by radio with the switch on, as short text the other radio confirms", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const chat = (await core.load()).chats.find((c) => c.reach === "internet")!;
+    events.length = 0;
+
+    expect(await core.setForceRadio(true)).toEqual({ forced: true });
+    expect(events).toEqual([{ type: "radioChanged", radio: { forced: true } }]);
+    expect((await core.load()).radio).toEqual({ forced: true });
+
+    const message = await core.sendMessage(chat.id, "By radio");
+    expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
+    vi.advanceTimersByTime(600);
+    expect(events[2]).toEqual({ type: "deliveryChanged", chatId: chat.id, messageId: message.id, delivery: "confirmed" });
+    await expect(core.sendMessage(chat.id, "x".repeat(97))).rejects.toThrow("too long for radio");
+
+    await core.setForceRadio(false);
+    expect((await core.sendMessage(chat.id, "x".repeat(97))).transport).toBe("internet");
   });
 
   it("exports a demo copy of the key, protected by a long enough password or plain", async () => {
@@ -229,7 +256,14 @@ describe("mock core", () => {
 
     await core.deleteAccount();
     expect(events).toEqual([{ type: "accountDeleted" }]);
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [], invites: [] });
+    expect(await core.load()).toEqual({
+      account: null,
+      chats: [],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false },
+    });
 
     // The pending acknowledgement and reply belonged to the deleted account.
     vi.advanceTimersByTime(5000);
