@@ -21,6 +21,7 @@ use crate::messaging::{
     DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, RelayLink, RelayLinks,
     TextMessage,
 };
+use crate::radio::RadioKeys;
 use crate::reach::Reachability;
 
 /// How many events a listener may fall behind before it misses some.
@@ -287,6 +288,43 @@ impl Core {
                     .find(|message| message.id == message_id)
             })
             .ok_or_else(|| failed("send the message", "the message is missing after sending"))
+    }
+
+    /// The keys for radio messages in the chat `chat_id`, in its current MLS epoch (#37). For the
+    /// radio transport inside the core (#39), not for an interface: the keys never leave the core.
+    pub async fn radio_keys(&self, chat_id: &str) -> Result<RadioKeys, CommandError> {
+        let account = self.account()?;
+        let chat = self
+            .chat(chat_id)
+            .ok_or_else(|| CommandError::new("This chat no longer exists."))?;
+        let secret = self
+            .inner
+            .messaging
+            .chat_secret(&account.public_key, chat_id)
+            .await
+            .map_err(|error| failed("derive the radio keys", error))?;
+        RadioKeys::derive(
+            &secret.secret,
+            secret.epoch,
+            &account.public_key,
+            &chat.contact.public_key,
+        )
+        .map_err(|error| failed("derive the radio keys", error))
+    }
+
+    /// Updates the account's own key in the chat `chat_id`. Once the relays confirm it, the
+    /// chat is in a new MLS epoch, with new radio keys. MDK does this by itself every 24 to 36
+    /// days.
+    pub async fn update_own_key(&self, chat_id: &str) -> Result<(), CommandError> {
+        let account = self.account()?;
+        if self.chat(chat_id).is_none() {
+            return Err(CommandError::new("This chat no longer exists."));
+        }
+        self.inner
+            .messaging
+            .update_own_key(&account.public_key, chat_id)
+            .await
+            .map_err(|error| failed("update the key", error))
     }
 
     /// Waits until the relays have the account's relay lists, profile and KeyPackage, so that

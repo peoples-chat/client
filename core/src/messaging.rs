@@ -19,13 +19,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
 use marmot_app::{
-    AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupRecord, MarmotApp,
-    MarmotAppConfig, MarmotAppRuntime, RelayLiveness, RelayLivenessStatus,
-    RuntimeChatsSubscription, RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
-    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
-    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, UserProfileMetadata,
+    AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, RelayLiveness,
+    RelayLivenessStatus, RuntimeChatsSubscription, RuntimeRelayLivenessSubscription,
+    RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
+    TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
+    UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
+use zeroize::Zeroizing;
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
 const READINESS_POLL: Duration = Duration::from_millis(50);
@@ -36,6 +38,14 @@ const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
 const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 /// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
 const HISTORY_LIMIT: usize = 200;
+/// MDK's name for `MLS-Exporter("marmot", "group-event", 32)`, one of the three exporter secrets
+/// it computes for every epoch and lets the app read.
+const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
+const EXPORTER_BYTES: usize = 32;
+/// How often [`Messaging::chat_secret`] tries while the chat is changing, and how long it waits
+/// in between.
+const SECRET_ATTEMPTS: usize = 5;
+const SECRET_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
 /// The mark MDK puts on a message of ours that no relay would take.
@@ -308,6 +318,25 @@ pub enum MessagingError {
     RecoveryRequired,
     #[error("{0:?} is not a chat id")]
     InvalidChatId(String),
+    #[error("the chat is changing: a change to it waits for the relays")]
+    EpochUnsettled,
+}
+
+/// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
+pub struct ChatSecret {
+    pub epoch: u64,
+    /// `MLS-Exporter("marmot", "group-event", 32)`. MDK derives the key for the chat's events on
+    /// the relays from it, so it never leaves the core.
+    pub secret: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for ChatSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatSecret")
+            .field("epoch", &self.epoch)
+            .field("secret", &"<redacted>")
+            .finish()
+    }
 }
 
 impl MessagingError {
@@ -638,6 +667,59 @@ impl Messaging {
         if let Err(error) = self.runtime.notify_connectivity_restored().await {
             log::info!("could not hurry the messages waiting to go out: {error}");
         }
+    }
+
+    /// The secret both members of the chat `chat_id` hold in its current MLS epoch (#37).
+    ///
+    /// MDK lets the app read three exporter secrets of a chat, all of the current epoch; this is
+    /// the one for group events. While the account has a change to the chat that the relays
+    /// haven't confirmed yet, MDK gives the secret of the epoch that change starts but reports
+    /// the epoch before it, so this reads only while the chat is settled, and fails if it doesn't
+    /// settle within half a second. `docs/spikes/37-radio-keys.md` explains the choice.
+    pub async fn chat_secret(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<ChatSecret, MessagingError> {
+        let group_id = group_id(chat_id)?;
+        let accounts = self.runtime.accounts();
+        let settled =
+            |state: &AppGroupMlsState| state.lifecycle_state == AppGroupLifecycleState::Stable;
+        for attempt in 0..SECRET_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(SECRET_RETRY).await;
+            }
+            let before = self.runtime.group_mls_state(account_hex, &group_id).await?;
+            if !settled(&before) {
+                continue;
+            }
+            let secret = accounts
+                .exporter_secret(account_hex, &group_id, GROUP_EVENT_EXPORTER, EXPORTER_BYTES)
+                .await?;
+            let after = self.runtime.group_mls_state(account_hex, &group_id).await?;
+            if settled(&after) && before.epoch == after.epoch {
+                return Ok(ChatSecret {
+                    epoch: after.epoch,
+                    secret,
+                });
+            }
+        }
+        Err(MessagingError::EpochUnsettled)
+    }
+
+    /// Updates the account's own key in the chat `chat_id`, which starts a new MLS epoch once
+    /// the relays confirm it. MDK does this by itself every 24 to 36 days.
+    pub async fn update_own_key(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .schedule_manual_self_update(account_hex, &group_id(chat_id)?)
+            .await?;
+        // Scheduling only marks it as due; MDK's next maintenance pass would run it.
+        self.runtime.run_due_maintenance(account_hex).await?;
+        Ok(())
     }
 
     /// When this device first saw the direct chat `chat_id`, in milliseconds since the Unix

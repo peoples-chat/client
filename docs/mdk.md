@@ -28,6 +28,8 @@ lower `marmot-session` crate.
 | `follow_messages` | `subscribe_timeline_messages` |
 | `follow_relays` | `subscribe_relay_liveness` |
 | `connectivity_restored` | `notify_connectivity_restored` |
+| `chat_secret` | `group_mls_state`, `AccountManager::exporter_secret` (`marmot/group-event`) |
+| `update_own_key` | `schedule_manual_self_update`, `run_due_maintenance` |
 | `close` | `shutdown_and_close` |
 
 Invite links (`core/src/invite.rs`) use `nprofile_for_account_id`, `account_id_hex_from_ref` and `is_nostr_secret`, and
@@ -319,6 +321,12 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.
+
+`core/tests/radio_keys.rs` has two contacts derive their chat's radio keys (#37):
+
+- what one sends with, the other receives with, and a restart keeps the keys;
+- a slow test, ignored unless asked for (`--include-ignored`), checks that both move to new keys after MDK's
+  post-join key update and after one asked for. Each took about 100 seconds.
 
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.
