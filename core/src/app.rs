@@ -74,7 +74,8 @@ impl Core {
     /// First launch: creates the account's key and `name` as its profile name. Emits
     /// [`CoreEvent::AccountCreated`].
     ///
-    /// The key stays in the core: it goes to the OS keychain, and only the public key leaves.
+    /// The key stays in the core: it goes to the platform's key store, and only the public key
+    /// leaves.
     pub async fn create_account(&self, name: &str) -> Result<Account, CommandError> {
         let name = name.trim();
         if name.is_empty() {

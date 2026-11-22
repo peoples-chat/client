@@ -2,8 +2,11 @@
 //!
 //! This is the link to MDK (#59): open the runtime, create, list and delete accounts, and wait
 //! until an account's relay lists, profile and KeyPackage are on the relays. [`crate::Core`]
-//! builds the interface's commands and events on it (#16); signing through a signer interface
-//! comes with #17.
+//! builds the interface's commands and events on it (#16).
+//!
+//! Account keys stay inside MDK (#17). It keeps them in the platform's key store and signs with
+//! them itself, and an external signer can take their place. Nothing here reads them. Details:
+//! `docs/mdk.md`, "The account key".
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -65,8 +68,8 @@ pub struct Messaging {
 }
 
 impl Messaging {
-    /// Opens the stores in the data folder and starts the runtime. Account keys live in the OS
-    /// keychain. Must run inside a Tokio runtime, which MDK's relay tasks use.
+    /// Opens the stores in the data folder and starts the runtime. Account keys live in the
+    /// platform's key store. Must run inside a Tokio runtime, which MDK's relay tasks use.
     pub async fn open(options: MessagingOptions) -> Result<Self, MessagingError> {
         let home = AccountHome::open_with_keychain(&options.data_dir, options.keychain_service)
             .map_err(AppError::from)?;

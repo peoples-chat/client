@@ -44,7 +44,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Interface (`Core` in `src/core/types.ts`) | Tauri command | Result | Events | Status |
 | --- | --- | --- | --- | --- |
 | `load()` | `core_snapshot` | `Snapshot` | | Done (#16) |
-| `createAccount(name)` | `create_account` | `Account` | `accountCreated` | Done (#16). The signer interface comes with #17 |
+| `createAccount(name)` | `create_account` | `Account` | `accountCreated` | Done (#16) |
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
 | `addContact(inviteLink)` | | `Chat` | `chatAdded` | #19 |
 | `acceptInvitation(invitationId)` | | `Chat` | `invitationRemoved`, `chatAdded` | #19 |
@@ -117,7 +117,8 @@ The interface uses the mock with demo data until the real core covers the whole 
 
 **Keys and data**
 
-- Keys are stored under the keychain service `chat.peoples.client`. On a Mac that is your login keychain.
+- Keys are stored in the platform's key store under the service `chat.peoples.client`. On a Mac that is your login
+  keychain. Where they live on phones, and how signing works: [mdk.md](mdk.md#the-account-key).
 - To remove a test account, use Settings → Account → Delete account.
 - Data lives in the app's data folder, under `core/`.
 

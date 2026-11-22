@@ -13,11 +13,11 @@ The caveats concern the build setup and what simulators can't show; see [Caveats
 
 ## Relay round trip
 
-A command that exists only in debug builds (`src-tauri/src/spike.rs`) runs the test:
+A command that existed only in debug builds (`src-tauri/src/spike.rs`, removed in #17) ran the test:
 
-1. It opens the core's `Messaging` in a fresh folder.
-2. It creates an account named "Spike".
-3. It waits until the relay has acknowledged every event the account publishes.
+1. It opened the core's `Messaging` in a fresh folder.
+2. It created an account named "Spike".
+3. It waited until the relay had acknowledged every event the account publishes.
 
 The relay runs on the Mac (`core/examples/local_relay.rs`) and prints each event it stores.
 
@@ -109,7 +109,7 @@ App store download sizes will differ; these numbers compare like with like.
   - Linking, signing and running on an iPhone wait for #12. The simulator build links the same code for the same CPU,
     so we expect no surprises.
 - **Real devices, mainly their key stores.** These include keychain access in a signed iPhone app and Android's
-  hardware-backed keystore. The spike command stays in debug builds, so the same run can be repeated on devices.
+  hardware-backed keystore. The app's own account commands repeat the run on devices; see [Run it again](#run-it-again).
 - **Android 7.**
   - MDK's Markdown parser builds for Android API 26 unless told otherwise. `.cargo/config.toml` now sets `ANDROID_API`
     to 24, the app's `minSdk`.
@@ -123,9 +123,9 @@ App store download sizes will differ; these numbers compare like with like.
 ## What the spike changed
 
 - **`src-tauri/src/spike.rs`**:
-  - The debug-only command `spike_relay_round_trip`. It also runs at launch when `PEOPLES_CHAT_SPIKE_RELAY` holds a
+  - The debug-only command `spike_relay_round_trip`. It also ran at launch when `PEOPLES_CHAT_SPIKE_RELAY` held a
     relay URL.
-  - It can go once the real core commands (#17) cover the same ground.
+  - #17 removed it: the real core commands from #16 cover the same ground.
 - **`core/examples/local_relay.rs`**: a relay for the Mac that prints each event it stores.
 - **`src-tauri/src/lib.rs`**:
   - Tauri's async runtime now has 8 MiB thread stacks. Unoptimized OpenMLS can outgrow the default 2 MiB, and MDK's
@@ -138,7 +138,7 @@ App store download sizes will differ; these numbers compare like with like.
 
 ## Run it again
 
-Spike accounts use their own folder and key store service, separate from the app's own.
+The spike command is gone (#17). The app's own account commands now do the same work.
 
 1. Start the relay:
 
@@ -146,37 +146,15 @@ Spike accounts use their own folder and key store service, separate from the app
    cargo run -p peoples-chat-core --example local_relay -- 7777
    ```
 
-2. On a booted iOS simulator:
+2. Start the app with the real core: `VITE_CORE=rust pnpm tauri ios dev` or `VITE_CORE=rust pnpm tauri android dev`. On
+   Android, also run `adb reverse tcp:7777 tcp:7777`. Details: [Running the app with the real
+   core](../core-interface.md#running-the-app-with-the-real-core).
+3. Create an account. The relay prints each event it stores:
+   - the relay lists (kinds 10002 and 10050);
+   - the follow list (kind 3);
+   - the profile (kind 0);
+   - the KeyPackage (kind 30443).
+4. Delete the account in Settings → Account. The relay then receives a deletion request (kind 5).
 
-   ```sh
-   pnpm tauri ios build --debug --target aarch64-sim
-   xcrun simctl install booted src-tauri/gen/apple/build/arm64-sim/peopleschat.app
-   SIMCTL_CHILD_PEOPLES_CHAT_SPIKE_RELAY=ws://127.0.0.1:7777 \
-     xcrun simctl launch --terminate-running-process booted chat.peoples.client
-   ```
-
-   After a few seconds, read the outcome:
-
-   ```sh
-   find "$(xcrun simctl get_app_container booted chat.peoples.client data)" -path '*/spike/latest.json' -exec cat {} \;
-   ```
-
-3. On a running Android emulator, with the environment from the README:
-
-   ```sh
-   pnpm tauri android build --debug --apk --target aarch64
-   adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-   adb reverse tcp:7777 tcp:7777
-   ```
-
-   Then:
-
-   1. Start the app.
-   2. Open `chrome://inspect` in Chrome and inspect the app's web view.
-   3. Run this in the console:
-
-      ```js
-      await __TAURI_INTERNALS__.invoke("spike_relay_round_trip", { relay: "ws://127.0.0.1:7777" })
-      ```
-
-   The outcome is also stored in the app; read it with `adb shell run-as chat.peoples.client cat spike/latest.json`.
+Devices that ran the spike still hold its test accounts: under `spike/` in the app's data folder, with keys under the
+service `chat.peoples.client.spike`. On iOS the key stays in the keychain even after the app is removed.
