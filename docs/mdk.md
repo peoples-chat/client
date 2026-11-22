@@ -30,6 +30,7 @@ lower `marmot-session` crate.
 | `connectivity_restored` | `notify_connectivity_restored` |
 | `chat_secret` | `group_mls_state`, `AccountManager::exporter_secret` (`marmot/group-event`) |
 | `update_own_key` | `schedule_manual_self_update`, `run_due_maintenance` |
+| `export_key` | `export_encrypted_secret_key` (NIP-49), `reveal_nsec` |
 | `close` | `shutdown_and_close` |
 
 Invite links (`core/src/invite.rs`) use `nprofile_for_account_id`, `account_id_hex_from_ref` and `is_nostr_secret`, and
@@ -59,7 +60,7 @@ Choices:
 
 The spec's rule (Identity and keys): the app reaches the account key only through a signer interface, so external
 signers and threshold signing stay possible. MDK provides that interface, and the core adds none of its own. No code of
-ours reads, holds or passes the key.
+ours reads, holds or passes the key, except to export it when the user asks (below).
 
 **Where it lives.** `AccountHome::open_with_keychain` keeps one entry per account in the platform's key store:
 
@@ -90,7 +91,22 @@ ours reads, holds or passes the key.
 - A signer app (NIP-55) or threshold signing would plug in here without changing the interface. Neither is part of the
   PoC.
 
-**What the web view sees:** the public key and the invite link, never the key.
+**Exporting it** (#86; spec v0.2, Key export). `Core::export_account_key` returns a copy the user keeps:
+
+- **A protected copy:** with a password of at least 12 characters, MDK's `export_encrypted_secret_key` makes a NIP-49
+  `ncryptsec1…`, with scrypt at log_n 18 (about a second and 256 MiB). Other Nostr apps and signers open it with the
+  password.
+- **The plain key:** without a password, MDK's `reveal_nsec` gives the `nsec1…`. MDK then marks the key as handled
+  insecurely, for good, and every protected copy made later carries that mark (NIP-49's key security byte: weak
+  instead of unknown).
+- **The audit log:** MDK writes every export to the account's `audit-key-reveal.jsonl`, with the label
+  `peoples_chat_core::Core::export_account_key` and no key material.
+- **The device unlock comes first:** Face ID, Touch ID or a fingerprint, or the device passcode. The app shell asks for it
+  through `tauri-plugin-biometric`, so the web view can't skip it. Linux and Windows have no unlock there, so
+  exporting fails on them.
+
+**What the web view sees:** the public key and the invite link. The key itself only when the user exports it, and only
+on the screen that shows it.
 
 **Not checked yet:** keychain access in a signed iPhone app, and Android's hardware-backed keystore on a real phone (#12).
 

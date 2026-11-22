@@ -19,6 +19,9 @@ peoples-chat-core = { path = "../core" }
 log = "0.4"
 tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
+# The device unlock before the account key is exported (#86). Android, iOS and macOS; elsewhere
+# the export says the device can't be unlocked.
+tauri-plugin-biometric = "2"
 # Tauri's async runtime, built here with larger worker stacks for MDK, and the core's slot.
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 

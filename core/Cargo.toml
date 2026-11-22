@@ -24,9 +24,9 @@ hkdf = "0.12"
 sha2 = "0.10"
 zeroize = "1"
 log = "0.4"
-# Reads the relay hints in invite links (NIP-19 nprofile). The same fork and revision MDK pins,
-# so it adds nothing to the build.
-nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589", default-features = false, features = ["std"] }
+# Reads the relay hints in invite links (NIP-19 nprofile), and the tests read exported keys back
+# (NIP-49). The same fork, revision and features MDK uses, so it adds nothing to the build.
+nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589", default-features = false, features = ["std", "nip49"] }
 # The interface's types travel as JSON (src/interface.rs).
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

@@ -38,6 +38,19 @@ export function ActionRow({ icon, label, description, accent, danger, chevron = 
   );
 }
 
+/** A row that only tells something: the look of an action row, without the action. */
+export function InfoRow({ icon, label, description }: { icon: IconName; label: string; description?: string }) {
+  return (
+    <div className={styles.actionRow}>
+      <Icon name={icon} size={22} className={styles.actionIcon} />
+      <span className={styles.actionText}>
+        <span>{label}</span>
+        {description && <span className={styles.actionDescription}>{description}</span>}
+      </span>
+    </div>
+  );
+}
+
 interface ContactRowProps {
   name: string;
   tint: Tint;

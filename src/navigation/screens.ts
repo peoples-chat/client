@@ -9,6 +9,7 @@ export type Screen =
   | { name: "request"; invitationId: string }
   | { name: "settings" }
   | { name: "account" }
+  | { name: "exportKey" }
   | { name: "radioSettings" }
   | { name: "radioNotice" }
   | { name: "profile" };

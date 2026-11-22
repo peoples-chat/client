@@ -4,6 +4,7 @@ import { Account } from "./screens/Account";
 import { ChatScreen } from "./screens/ChatScreen";
 import { Chats } from "./screens/Chats";
 import { CreateProfile } from "./screens/CreateProfile";
+import { ExportKey } from "./screens/ExportKey";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
 import { Profile } from "./screens/Profile";
@@ -55,6 +56,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <Settings />;
     case "account":
       return <Account />;
+    case "exportKey":
+      return <ExportKey />;
     case "radioSettings":
       return <RadioSettings />;
     case "radioNotice":

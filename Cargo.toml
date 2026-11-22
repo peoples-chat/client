@@ -24,6 +24,13 @@ debug = false
 [profile.dev.package.libsqlite3-sys]
 opt-level = 3
 
+# NIP-49's scrypt, for exported keys (#86), takes about 9 seconds per key unoptimized.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
 # MDK's recommended release profile: thin LTO and one codegen unit. Panics must unwind, because
 # MDK isolates failures per account worker; panic = "abort" would end the whole app instead.
 [profile.release]

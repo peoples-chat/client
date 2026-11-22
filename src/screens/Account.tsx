@@ -2,16 +2,16 @@ import { useState } from "react";
 import { core } from "../core";
 import { useNavigation } from "../navigation/Navigator";
 import { Button } from "../ui/Button";
-import { ActionRow, SectionTitle } from "../ui/rows";
+import { ActionRow, InfoRow, SectionTitle } from "../ui/rows";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import layout from "../ui/layout.module.css";
 import { errorText } from "./shared";
 import styles from "./Account.module.css";
 
 /**
- * Account, reached from Settings. Only Delete account is built; it asks once more before it
- * deletes, because it cannot be undone. The design shows no confirmation, so this one is
- * minimal.
+ * Account, reached from Settings. Export account key (#86) and Delete account are built. Delete
+ * asks once more before it deletes, because it cannot be undone. The design shows no
+ * confirmation, so this one is minimal.
  */
 export function Account() {
   const navigation = useNavigation();
@@ -35,10 +35,16 @@ export function Account() {
     <div className={layout.screen}>
       <ScreenHeader title="Account" bordered onLeading={navigation.back} />
       <main className={layout.scroll}>
-        {/* Usernames, the key, signer apps and recovery are not built yet (#63). */}
+        {/* Usernames, signer apps and recovery are not built yet (#63). */}
         <SectionTitle>Sign-in</SectionTitle>
         <ActionRow icon="person" label="Username" disabled />
-        <ActionRow icon="key" label="Account key" description="Kept on this phone only" disabled />
+        <InfoRow icon="key" label="Account key" description="Kept on this phone only" />
+        <ActionRow
+          icon="download"
+          label="Export account key"
+          description="Keep a copy of your own"
+          onClick={() => navigation.push({ name: "exportKey" })}
+        />
         <ActionRow icon="shield" label="Move the key to a signer app" description="For extra protection" disabled />
         <SectionTitle>Recovery</SectionTitle>
         <ActionRow icon="group" label="Guardians" disabled />

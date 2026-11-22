@@ -59,6 +59,9 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     addContact: (inviteLink) => call<Chat>("add_contact", { inviteLink }),
     acceptInvitation: (invitationId) => call<Chat>("accept_invitation", { invitationId }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
+    // Without a password the core exports the plain key.
+    exportAccountKey: (copy) =>
+      call<string>("export_account_key", { password: copy.kind === "protected" ? copy.password : null }),
   };
 }
 

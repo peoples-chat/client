@@ -49,6 +49,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
 | `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20) |
+| `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
 
 ## Events
@@ -190,6 +191,21 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
   `src/core/types.ts`), and Send stays off past it.
 
 Only the mock reaches a chat by radio for now; the core's radio comes with #40, #44 and #45.
+
+## Key export
+
+`exportAccountKey` returns a copy of the account key for the user to keep (spec v0.2, Key export):
+
+- `{ kind: "protected", password }`: a NIP-49 `ncryptsec1…` that other Nostr apps and signers open with the password.
+  The password needs at least 12 characters (`MIN_EXPORT_PASSWORD`); a shorter one gives "Use a password of at least 12
+  characters."
+- `{ kind: "plain" }`: the `nsec1…` itself, as an explicit choice. From then on, protected copies record that the key
+  was once shown plain.
+
+The shell asks for the device unlock before every export, and "Unlock your device to export the key." means the person
+didn't pass it. The interface keeps the result only while it shows it. The Export account key screen saves a protected
+copy as a file through the share sheet, or shows it as a QR code; it shows a plain key as text. The mock returns copies
+that look the same and open nowhere. MDK's side is in [mdk.md](mdk.md#the-account-key).
 
 ## Planned: radio and transport
 
