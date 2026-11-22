@@ -179,7 +179,18 @@ with the same keys as epoch 7, to test the hint and the counter's low bits.
 - `message_id`, the id rebuild.
 
 Its unit tests check it against the vectors above, against changed and reflected packets, and against 20,000 random
-inputs in CI. Keeping counters, kept epochs and the replay window is up to the receiving side (#40, #42).
+inputs in CI.
+
+**Receiving.** `RadioInbox` in `core/src/radio/inbox.rs` applies the rules above to every incoming packet (#42):
+
+- It keeps each direct chat's keys for four epochs.
+- It finds the chat by the sending radio, or by trying each chat's keys.
+- It opens the packet and checks its counter against a 64-wide replay window per epoch.
+- It refuses a message whose id the chat has already.
+
+Only an authentic packet counts against the window, so a forgery can't use up a counter. The windows live in memory; after a
+restart, a replayed packet is caught by its message id, because received radio messages are stored with it (#40). A
+refusal returns nothing to show and nothing to send. Wiring it to the radio is #40.
 
 **Fuzzing.** `core/fuzz` holds a cargo-fuzz target. It feeds arbitrary input to the decoder, as raw packets and as text
 messages, and checks two things: nothing panics, and a packet that opens seals back to the same bytes. It needs cargo-fuzz and a

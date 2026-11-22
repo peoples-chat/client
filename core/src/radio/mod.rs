@@ -11,6 +11,7 @@
 //! strings, as elsewhere in the core. Details: `docs/radio.md`.
 
 pub mod format;
+mod inbox;
 mod keys;
 mod meshcore;
 mod mock;
@@ -20,6 +21,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
+pub use self::inbox::{KEPT_EPOCHS, REPLAY_WINDOW, RadioInbox, ReceivedText, Refusal};
 pub use self::keys::{RADIO_KEY_BYTES, RADIO_KEY_LABEL, RadioKey, RadioKeyError, RadioKeys};
 pub use self::meshcore::{MAX_TEXT_BYTES, MeshCoreRadio};
 pub use self::mock::{MockMesh, MockRadio};
