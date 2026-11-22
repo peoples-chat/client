@@ -6,6 +6,10 @@ different meshes can't talk to each other, and a radio runs one mesh at a time. 
 
 Nothing in the app uses the radio yet. Pairing comes with #24, and radio messages with #36 to #40.
 
+**Keys.** Radio messages are encrypted with keys derived from the chat's MLS state (#37), with one key per direction.
+`core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
+including the rules for epochs and nonces.
+
 ## The interface
 
 `Radio` in `core/src/radio/mod.rs`:

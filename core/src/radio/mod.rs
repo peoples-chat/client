@@ -10,6 +10,7 @@
 //! has its own constructors; everything after that goes through [`Radio`]. Public keys are hex
 //! strings, as elsewhere in the core. Details: `docs/radio.md`.
 
+mod keys;
 mod meshcore;
 mod mock;
 
@@ -18,6 +19,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
+pub use self::keys::{RADIO_KEY_BYTES, RADIO_KEY_LABEL, RadioKey, RadioKeyError, RadioKeys};
 pub use self::meshcore::{MAX_TEXT_BYTES, MeshCoreRadio};
 pub use self::mock::{MockMesh, MockRadio};
 

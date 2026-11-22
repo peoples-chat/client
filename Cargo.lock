@@ -5150,6 +5150,7 @@ dependencies = [
  "async-trait",
  "cgka-traits",
  "hex",
+ "hkdf 0.12.4",
  "keyring-core",
  "log",
  "marmot-account",
@@ -5160,10 +5161,12 @@ dependencies = [
  "nostr-sdk",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-serial",
+ "zeroize",
 ]
 
 [[package]]

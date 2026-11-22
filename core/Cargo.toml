@@ -15,6 +15,11 @@ cgka-traits = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" 
 async-trait = "0.1"
 # Chat ids are MLS group ids in hex.
 hex = "0.4"
+# Radio keys from the chat's MLS exporter secret (#37). MDK's dependencies already bring in these
+# versions.
+hkdf = "0.12"
+sha2 = "0.10"
+zeroize = "1"
 log = "0.4"
 # Reads the relay hints in invite links (NIP-19 nprofile). The same fork and revision MDK pins,
 # so it adds nothing to the build.
