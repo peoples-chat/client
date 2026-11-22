@@ -13,7 +13,7 @@ mod messaging;
 pub use app::Core;
 pub use messaging::{
     DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
-    MessagingOptions, NewAccount,
+    MessagingOptions, NewAccount, TextMessage, TextMessages,
 };
 
 /// Version of the core, shown by the shell to prove that the core is linked in.
