@@ -131,6 +131,7 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
     expect(state.invitations[0].from.name).toBe("Karen Winther");
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
+    expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);
     expect(state.relays.map((r) => r.operator)).toEqual(["peoplesChat", "independent"]);
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
@@ -145,6 +146,7 @@ describe("the JSON shared with the Rust core", () => {
           "Aarhus, Denmark",
           "data:image/jpeg;base64,",
         ]),
+      inviteChanged: (next) => expect(next.invites[0].joinedChatId).toBe("chat-1"),
       contactChanged: (next) =>
         expect([next.invitations[0].from.name, next.invitations[0].from.photo?.slice(0, 23)]).toEqual([
           "Karen W.",

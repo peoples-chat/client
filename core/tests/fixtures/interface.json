@@ -64,6 +64,15 @@
         "operator": "independent",
         "status": "connecting"
       }
+    ],
+    "invites": [
+      {
+        "id": "3f9a0c2e7b5d1a8c4e6f",
+        "name": "Sofie",
+        "link": "https://peoples.chat/i#nprofile1fixtureemildahl/3f9a0c2e7b5d1a8c4e6f",
+        "createdAt": 1795300000000,
+        "expiresAt": 1795904800000
+      }
     ]
   },
   "events": [
@@ -134,6 +143,17 @@
         "publicKey": "4a577124f4d699f2455a80e12b58d41a26465d4c01a65faae29b37189cd08375",
         "name": "Karen W.",
         "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+      }
+    },
+    {
+      "type": "inviteChanged",
+      "invite": {
+        "id": "3f9a0c2e7b5d1a8c4e6f",
+        "name": "Sofie",
+        "link": "https://peoples.chat/i#nprofile1fixtureemildahl/3f9a0c2e7b5d1a8c4e6f",
+        "createdAt": 1795300000000,
+        "expiresAt": 1795904800000,
+        "joinedChatId": "chat-1"
       }
     },
     {

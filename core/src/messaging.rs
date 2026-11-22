@@ -53,6 +53,10 @@ const SECRET_ATTEMPTS: usize = 5;
 const SECRET_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
+/// The app's own kind for an invitation's token (#95), which the invited person's app sends
+/// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
+/// It isn't text, so White Noise doesn't show it as a message.
+pub const INVITE_TOKEN_KIND: u64 = 9_910;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -217,30 +221,60 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
     })
 }
 
-/// The account's text messages in every chat as they are added or change, for example when a
-/// relay acknowledges one of ours.
-pub struct TextMessages {
-    subscription: RuntimeTimelineMessagesSubscription,
-    ready: VecDeque<TextMessage>,
+/// An invitation's token that the other person sent in a chat (#95).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteToken {
+    pub chat_id: String,
+    pub token: String,
 }
 
-impl TextMessages {
-    /// The next message that was added or changed. `None` once messaging has stopped.
-    pub async fn next(&mut self) -> Option<TextMessage> {
+/// The invitation's token in `record`, if it is one the other person sent.
+fn invite_token(record: &TimelineMessageRecord) -> Option<InviteToken> {
+    (record.kind == INVITE_TOKEN_KIND && record.direction == "received" && !record.deleted).then(
+        || InviteToken {
+            chat_id: record.group_id_hex.clone(),
+            token: record.plaintext.trim().to_owned(),
+        },
+    )
+}
+
+/// What can come in a chat, as the core follows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatItem {
+    Text(TextMessage),
+    InviteToken(InviteToken),
+}
+
+fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
+    text_message(record)
+        .map(ChatItem::Text)
+        .or_else(|| invite_token(record).map(ChatItem::InviteToken))
+}
+
+/// What comes in the account's chats as it is added or changes: text messages, for example
+/// when a relay acknowledges one of ours, and invitations' tokens.
+pub struct ChatItems {
+    subscription: RuntimeTimelineMessagesSubscription,
+    ready: VecDeque<ChatItem>,
+}
+
+impl ChatItems {
+    /// The next item that was added or changed. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<ChatItem> {
         loop {
-            if let Some(message) = self.ready.pop_front() {
-                return Some(message);
+            if let Some(item) = self.ready.pop_front() {
+                return Some(item);
             }
             match self.subscription.recv().await? {
                 // MDK fell behind and sends its latest messages again.
                 RuntimeTimelineMessageUpdate::Page { page } => {
                     self.ready
-                        .extend(page.messages.iter().filter_map(text_message));
+                        .extend(page.messages.iter().filter_map(chat_item));
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
                         if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(text_message(message));
+                            self.ready.extend(chat_item(message));
                         }
                     }
                 }
@@ -776,6 +810,46 @@ impl Messaging {
         Ok(page.messages.iter().filter_map(text_message).collect())
     }
 
+    /// The invitations' tokens the other person sent in the chat `chat_id` (#95).
+    pub fn invite_tokens(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<InviteToken>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(invite_token).collect())
+    }
+
+    /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
+    /// chat without a request (#95).
+    pub async fn send_invite_token(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        token: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .send_custom_event(
+                account_hex,
+                &group_id(chat_id)?,
+                INVITE_TOKEN_KIND,
+                Vec::new(),
+                token.to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// The message `message_id` in the chat `chat_id`, if MDK has it as a text message.
     pub fn chat_message(
         &self,
@@ -791,12 +865,12 @@ impl Messaging {
     }
 
     /// Follows the account's text messages in all its chats, from now on.
-    pub async fn follow_messages(&self, account_hex: &str) -> Result<TextMessages, MessagingError> {
+    pub async fn follow_messages(&self, account_hex: &str) -> Result<ChatItems, MessagingError> {
         let subscription = self
             .runtime
             .subscribe_timeline_messages(account_hex, TimelineMessageQuery::default())
             .await?;
-        Ok(TextMessages {
+        Ok(ChatItems {
             subscription,
             ready: VecDeque::new(),
         })

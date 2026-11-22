@@ -13,6 +13,7 @@ import {
   type Invitation,
   type Message,
   type Relay,
+  type SentInvite,
 } from "./types";
 
 // A stand-in for the Rust core with demo data: in the browser preview, and in the app when it is
@@ -46,6 +47,7 @@ interface MockState {
   account: Account | null;
   chats: Chat[];
   invitations: Invitation[];
+  invites: SentInvite[];
   /** Invite links already used, and the chat each one opened. */
   links: Record<string, string>;
   demoContactsAdded: number;
@@ -122,6 +124,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         chats: state.chats,
         invitations: state.invitations,
         relays: state.account ? demoRelays() : [],
+        invites: state.invites,
       });
     },
 
@@ -224,6 +227,29 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       state.links[link] = chat.id;
       emit({ type: "chatAdded", chat });
       return structuredClone(chat);
+    },
+
+    // The demo's links open nothing; the real core's are https://peoples.chat/i links (#95).
+    async createInvite(name) {
+      const account = requireAccount();
+      const trimmed = name.trim();
+      if (!trimmed) throw new CoreError("Enter a name.");
+      const id = randomHex(10);
+      const invite = {
+        id,
+        name: trimmed,
+        link: `${account.shareLink}/${id}`,
+        createdAt: now(),
+        expiresAt: now() + 7 * 24 * 60 * MINUTE,
+      };
+      state.invites.push(invite);
+      emit({ type: "inviteChanged", invite });
+      return structuredClone(invite);
+    },
+
+    async previewInvite(inviteLink) {
+      if (!LINK_PATTERN.test(inviteLink.trim())) throw new CoreError("That is not an invite link.");
+      return { publicKey: randomHex(32), name: "Emil Dahl" };
     },
 
     async acceptInvitation(invitationId) {
@@ -372,7 +398,7 @@ function demoInvitation(now: number, firstName: string): Invitation {
 }
 
 function emptyState(): MockState {
-  return { account: null, chats: [], invitations: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
+  return { account: null, chats: [], invitations: [], invites: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
 }
 
 function browserStorage(): StorageLike | null {

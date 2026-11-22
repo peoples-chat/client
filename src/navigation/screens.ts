@@ -13,6 +13,10 @@ export type Screen =
   | { name: "exportKey" }
   | { name: "radioSettings" }
   | { name: "radioNotice" }
+  | { name: "invite" }
+  | { name: "inviteOne" }
+  /** Someone without an account opened an invite link (#95). */
+  | { name: "invitedStart"; link: string }
   | { name: "privacy" }
   | { name: "relays" }
   | { name: "profile" };

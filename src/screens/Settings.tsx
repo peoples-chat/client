@@ -22,7 +22,7 @@ const SETTINGS: { icon: IconName; label: string; screen?: Screen }[] = [
   { icon: "bell", label: "Notifications" },
   { icon: "lock", label: "Privacy", screen: { name: "privacy" } },
   { icon: "help", label: "Help" },
-  { icon: "personAdd", label: "Invite friends" },
+  { icon: "personAdd", label: "Invite friends", screen: { name: "invite" } },
 ];
 
 export function Settings() {

@@ -119,6 +119,22 @@ export interface Invitation {
   messages: Message[];
 }
 
+/**
+ * An invitation the user sent: a personal link that works once and for 7 days (#95). The person
+ * who uses it lands in a chat with the user, without a request.
+ */
+export interface SentInvite {
+  id: string;
+  /** Whom it is for. Only the user sees it. */
+  name: string;
+  /** The link to share. Opaque to the interface. */
+  link: string;
+  createdAt: number;
+  expiresAt: number;
+  /** The chat that opened when the person joined, once they have. */
+  joinedChatId?: string;
+}
+
 /** Everything the interface shows, as the core holds it now. */
 export interface Snapshot {
   account: Account | null;
@@ -126,6 +142,8 @@ export interface Snapshot {
   invitations: Invitation[];
   /** The account's relays: the project's first, then the others, each by address. Empty without an account. */
   relays: Relay[];
+  /** The invitations the user sent, oldest first (#95). */
+  invites: SentInvite[];
 }
 
 /**
@@ -147,7 +165,9 @@ export type CoreEvent =
   /** The user changed their profile (#93). */
   | { type: "accountChanged"; account: Account }
   /** A contact's profile changed, for example their name. Applies to their chats and invitations (#93). */
-  | { type: "contactChanged"; contact: Contact };
+  | { type: "contactChanged"; contact: Contact }
+  /** The user sent an invitation, or the person used it (#95). */
+  | { type: "inviteChanged"; invite: SentInvite };
 
 export type CoreListener = (event: CoreEvent) => void;
 
@@ -181,6 +201,13 @@ export interface Core {
    * person an invitation. With an existing contact it returns their chat.
    */
   addContact(inviteLink: string): Promise<Chat>;
+  /**
+   * Makes a personal invitation for `name`, whom only the user sees (#95). Its link works once and
+   * for 7 days, and opens the chat without a request.
+   */
+  createInvite(name: string): Promise<SentInvite>;
+  /** Who an invite link is from, for someone who has no account yet (#95). */
+  previewInvite(inviteLink: string): Promise<Contact>;
   /** Accepts an invitation. The chat it opens has the invitation's id. */
   acceptInvitation(invitationId: string): Promise<Chat>;
   /** Sends text. The message is `waiting` until a relay has acknowledged it, then `sent`. */

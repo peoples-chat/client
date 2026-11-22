@@ -124,6 +124,7 @@ const ICONS = {
   ),
   shield: <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />,
   download: <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />,
+  share: <path d="M12 15V4M7 8l5-5 5 5M5 14v6h14v-6" />,
   eye: (
     <>
       <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />

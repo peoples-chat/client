@@ -1,4 +1,4 @@
-import type { Account, Chat, Contact, Core, CoreEvent, Invitation, Message, Relay, Snapshot } from "../core/types";
+import type { Account, Chat, Contact, Core, CoreEvent, Invitation, Message, Relay, SentInvite, Snapshot } from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -8,11 +8,19 @@ export interface AppState {
   chats: Chat[];
   invitations: Invitation[];
   relays: Relay[];
+  invites: SentInvite[];
   /** Why loading failed. */
   error?: string;
 }
 
-export const initialState: AppState = { status: "loading", account: null, chats: [], invitations: [], relays: [] };
+export const initialState: AppState = {
+  status: "loading",
+  account: null,
+  chats: [],
+  invitations: [],
+  relays: [],
+  invites: [],
+};
 
 export function fromSnapshot(snapshot: Snapshot): AppState {
   return {
@@ -21,6 +29,7 @@ export function fromSnapshot(snapshot: Snapshot): AppState {
     chats: snapshot.chats,
     invitations: snapshot.invitations,
     relays: snapshot.relays,
+    invites: snapshot.invites,
   };
 }
 
@@ -34,7 +43,7 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "accountDeleted":
-      return { ...state, account: null, chats: [], invitations: [], relays: [] };
+      return { ...state, account: null, chats: [], invitations: [], relays: [], invites: [] };
 
     case "chatAdded":
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
@@ -81,6 +90,14 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
 
     case "contactChanged":
       return updateContact(state, event.contact);
+
+    case "inviteChanged": {
+      const known = state.invites.find((i) => i.id === event.invite.id);
+      if (known && known.joinedChatId === event.invite.joinedChatId && known.link === event.invite.link) return state;
+      return known
+        ? { ...state, invites: state.invites.map((i) => (i.id === event.invite.id ? event.invite : i)) }
+        : { ...state, invites: [...state.invites, event.invite] };
+    }
   }
 }
 

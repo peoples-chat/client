@@ -19,7 +19,7 @@ const chat = (id: string, messages: Message[] = []): Chat => ({
   reach: "internet",
 });
 
-const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [], relays: [] });
+const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [], relays: [], invites: [] });
 
 const relay = (url: string, status: Relay["status"]): Relay => ({ url, operator: "independent", status });
 
@@ -106,6 +106,17 @@ describe("applyEvent", () => {
     expect(without.chats[0].contact.photo).toBeUndefined();
   });
 
+  it("adds a sent invitation, and marks it used once, when the person joins", () => {
+    const invite = { id: "t1", name: "Sofie", link: "https://peoples.chat/i#x/t1", createdAt: 1, expiresAt: 2 };
+    const added = applyEvent(ready(), { type: "inviteChanged", invite });
+    expect(added.invites).toEqual([invite]);
+    expect(applyEvent(added, { type: "inviteChanged", invite: { ...invite } })).toBe(added);
+
+    const joined = applyEvent(added, { type: "inviteChanged", invite: { ...invite, joinedChatId: "c1" } });
+    expect(joined.invites).toEqual([{ ...invite, joinedChatId: "c1" }]);
+    expect(applyEvent(joined, { type: "accountDeleted" }).invites).toEqual([]);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);
@@ -172,7 +183,7 @@ describe("createStore", () => {
   }
 
   it("applies events that arrive while the snapshot loads", async () => {
-    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [], relays: [] });
+    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [], relays: [], invites: [] });
     const store = createStore(core);
     let notified = 0;
     store.subscribe(() => notified++);

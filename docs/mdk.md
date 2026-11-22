@@ -24,6 +24,7 @@ lower `marmot-session` crate.
 | `known_name`, `contact_name`, `fetch_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
 | `own_about`, `known_picture`, `update_profile`, `set_picture` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
 | `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
+| `send_invite_token`, `invite_tokens`, `follow_messages` (tokens) | `send_custom_event`, `timeline_messages_with_query`, `subscribe_timeline_messages` |
 | `chat_started_at` | `chat_list_row` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
@@ -283,6 +284,18 @@ every 5 minutes after, from our relays.
   - The same option lets MDK upload to such a server (`with_allow_loopback_blob_endpoints`), and connect to relays on
     this machine. It was called `allow_loopback_relays` before.
 
+## App events
+
+**Personal invitations' tokens** (#95) travel as app events: `send_custom_event` sends an event of a kind the app
+chooses, inside the chat's encryption.
+
+- MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`).
+- The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
+  notification.
+- It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
+  does text.
+
 ## Relay reachability
 
 Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
@@ -372,6 +385,15 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.
+
+`core/tests/invites.rs` has three phones share one personal invitation (#95):
+
+- the invited person, without an account, sees who invited her, then creates an account and starts the chat;
+- the inviter's core opens the chat without a request and marks the invitation as used;
+- a third person using the same link arrives as an ordinary request;
+- the invitation stays across a restart, and deleting the account deletes it.
+
+The invitation store has unit tests in `core/src/invites.rs`.
 
 `core/tests/photos.rs` has a contact set a photo straight from a camera (#94), through a media server inside the test
 (`core/tests/support/blossom.rs`):

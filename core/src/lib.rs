@@ -8,6 +8,7 @@
 mod app;
 pub mod interface;
 mod invite;
+mod invites;
 mod messaging;
 mod photo;
 pub mod radio;
@@ -15,8 +16,9 @@ mod reach;
 
 pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};
 pub use messaging::{
-    DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
-    MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, TextMessages,
+    ChatItem, ChatItems, DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, InviteToken,
+    Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks,
+    TextMessage,
 };
 pub use reach::DOWN_AFTER;
 
