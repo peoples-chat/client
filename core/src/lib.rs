@@ -18,8 +18,8 @@ mod reach;
 pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};
 pub use messaging::{
     ChatItem, ChatItems, DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, InviteToken,
-    Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks,
-    TextMessage,
+    Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RadioAddressItem,
+    RelayLink, RelayLinks, TextMessage,
 };
 pub use reach::DOWN_AFTER;
 

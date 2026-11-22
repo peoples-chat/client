@@ -12,7 +12,10 @@
         "id": "chat-1",
         "contact": {
           "publicKey": "3e22bf168fae1e1be96fb407cde13c487568c9bcc716236ee4842dc734ff9df8",
-          "name": "Astrid Holm"
+          "name": "Astrid Holm",
+          "meshes": [
+            "meshCore"
+          ]
         },
         "messages": [
           {

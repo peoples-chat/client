@@ -4,7 +4,8 @@
 //! - **The counters** for what this phone sends: each chat's next counter in each epoch. A
 //!   counter is stored before its packet goes out, so that it is never used twice with one key
 //!   (`docs/radio-format-v0.md`).
-//! - **The contacts' radios:** the address book, which the radio address records fill (#34).
+//! - **The contacts' radios:** the address book, which their radio address records fill (#34),
+//!   and which record this phone shared in each chat.
 //! - **Every message that travelled by radio,** sent or received, with its id. A received one is
 //!   in no other store until its relay copy arrives, and the ids catch a replayed packet after a
 //!   restart (#42).
@@ -16,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
+
+use crate::radio::RadioAddress;
 
 /// A message that travelled by radio.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,13 +40,6 @@ pub struct RadioMessage {
     /// within the same second.
     #[serde(default)]
     pub kept_at: u64,
-}
-
-/// A contact's radio, as the address book holds it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContactRadio {
-    /// The radio's public key, in hex: its address on the mesh.
-    pub public_key: String,
 }
 
 /// Why no counter can be had.
@@ -70,9 +66,16 @@ struct Data {
     counters_lost: bool,
     #[serde(default)]
     send_from: BTreeMap<String, u64>,
-    /// Contact's account key → their radio.
+    /// Contact's account key → their radio's newest record.
     #[serde(default)]
-    contacts: BTreeMap<String, ContactRadio>,
+    contacts: BTreeMap<String, RadioAddress>,
+    /// This phone's record for the radio it uses: kept, so that the record of the same radio
+    /// keeps the time it was first made.
+    #[serde(default)]
+    own: Option<RadioAddress>,
+    /// Chat → the record of this phone's radio that was shared in it last.
+    #[serde(default)]
+    shared: BTreeMap<String, RadioAddress>,
     /// Oldest first.
     #[serde(default)]
     messages: Vec<RadioMessage>,
@@ -158,7 +161,7 @@ impl RadioStore {
     }
 
     /// The radio of the contact whose account key is `contact`.
-    pub fn contact_radio(&self, contact: &str) -> Option<ContactRadio> {
+    pub fn contact_radio(&self, contact: &str) -> Option<RadioAddress> {
         self.lock().contacts.get(contact).cloned()
     }
 
@@ -167,13 +170,54 @@ impl RadioStore {
         self.lock()
             .contacts
             .iter()
-            .find(|(_, known)| known.public_key == radio)
+            .find(|(_, known)| known.key == radio)
             .map(|(contact, _)| contact.clone())
     }
 
-    pub fn set_contact_radio(&self, contact: &str, radio: ContactRadio) -> std::io::Result<()> {
+    /// Keeps `record` as the radio of the contact `contact`, unless the contact has a newer
+    /// record, or this one already. Returns whether it was kept. Of two records made at the same
+    /// time, the one that came last counts.
+    pub fn set_contact_radio(&self, contact: &str, record: RadioAddress) -> std::io::Result<bool> {
         let mut data = self.lock();
-        data.contacts.insert(contact.to_owned(), radio);
+        if data
+            .contacts
+            .get(contact)
+            .is_some_and(|known| known.at > record.at || *known == record)
+        {
+            return Ok(false);
+        }
+        data.contacts.insert(contact.to_owned(), record);
+        self.save(&data)?;
+        Ok(true)
+    }
+
+    /// This phone's record for the radio `info` describes: the one kept, if it is for the same
+    /// radio with the same settings, or a new one made at `now`.
+    pub fn own_record(
+        &self,
+        info: &crate::radio::RadioInfo,
+        now: u64,
+    ) -> std::io::Result<RadioAddress> {
+        let mut data = self.lock();
+        let current = RadioAddress::new(info, now);
+        if let Some(own) = &data.own
+            && own.same_radio(&current)
+        {
+            return Ok(own.clone());
+        }
+        data.own = Some(current.clone());
+        self.save(&data)?;
+        Ok(current)
+    }
+
+    /// Whether `record` is what was shared in the chat `chat_id` last.
+    pub fn is_shared(&self, chat_id: &str, record: &RadioAddress) -> bool {
+        self.lock().shared.get(chat_id) == Some(record)
+    }
+
+    pub fn set_shared(&self, chat_id: &str, record: RadioAddress) -> std::io::Result<()> {
+        let mut data = self.lock();
+        data.shared.insert(chat_id.to_owned(), record);
         self.save(&data)
     }
 
@@ -314,24 +358,39 @@ mod tests {
         assert_eq!(reopened.take_counter("a", 8).unwrap(), 1);
     }
 
+    fn record(key: &str, at: u64) -> RadioAddress {
+        RadioAddress::parse(&format!(
+            r#"{{"v":0,"mesh":"meshcore","key":"{key}","freq":869618,"bw":62500,"sf":8,"cr":8,"at":{at}}}"#
+        ))
+        .unwrap()
+    }
+
     #[test]
     fn keeps_the_switch_the_contacts_and_the_messages() {
         let data = tempfile::tempdir().unwrap();
         let store = RadioStore::open(data.path());
         assert!(!store.forced());
         store.set_forced(true).unwrap();
-        let radio = ContactRadio {
-            public_key: "beef".to_owned(),
-        };
-        store.set_contact_radio("bea", radio.clone()).unwrap();
+        let radio = record(&"be".repeat(32), 10);
+        assert!(store.set_contact_radio("bea", radio.clone()).unwrap());
+        // An older record, or the same again, doesn't replace it.
+        assert!(
+            !store
+                .set_contact_radio("bea", record(&"cd".repeat(32), 9))
+                .unwrap()
+        );
+        assert!(!store.set_contact_radio("bea", radio.clone()).unwrap());
         assert!(store.add_message(sent("m1", "0001")).unwrap());
         assert!(!store.add_message(sent("m1", "0002")).unwrap());
 
         let reopened = RadioStore::open(data.path());
         assert!(reopened.forced());
         assert_eq!(reopened.contact_radio("bea"), Some(radio));
-        assert_eq!(reopened.contact_with_radio("beef").as_deref(), Some("bea"));
-        assert_eq!(reopened.contact_with_radio("cafe"), None);
+        assert_eq!(
+            reopened.contact_with_radio(&"be".repeat(32)).as_deref(),
+            Some("bea")
+        );
+        assert_eq!(reopened.contact_with_radio(&"cd".repeat(32)), None);
         assert_eq!(reopened.messages_in("chat"), vec![sent("m1", "0001")]);
         assert!(reopened.messages_in("other").is_empty());
 
@@ -346,11 +405,57 @@ mod tests {
                 .confirmed
         );
 
+        // A newer record does, and so does another made at the same time.
+        assert!(
+            reopened
+                .set_contact_radio("bea", record(&"cd".repeat(32), 11))
+                .unwrap()
+        );
+        assert_eq!(reopened.contact_radio("bea").unwrap().at, 11);
+        assert!(
+            reopened
+                .set_contact_radio("bea", record(&"ef".repeat(32), 11))
+                .unwrap()
+        );
+        assert_eq!(reopened.contact_radio("bea").unwrap().key, "ef".repeat(32));
+
         reopened.clear().unwrap();
         reopened.clear().unwrap();
         let cleared = RadioStore::open(data.path());
         assert!(!cleared.forced());
         assert!(cleared.message("m1").is_none());
         assert_eq!(cleared.take_counter("chat", 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn the_own_record_keeps_its_time_until_the_radio_changes() {
+        use crate::radio::{Mesh, RadioInfo, RadioSettings};
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let mut info = RadioInfo {
+            mesh: Mesh::MeshCore,
+            public_key: "ab".repeat(32),
+            name: "Ada's radio".to_owned(),
+            settings: RadioSettings {
+                frequency_mhz: 869.618,
+                bandwidth_khz: 62.5,
+                spreading_factor: 8,
+                coding_rate: 8,
+                tx_power_dbm: 22,
+            },
+            firmware: None,
+            model: None,
+        };
+        let first = store.own_record(&info, 100).unwrap();
+        assert_eq!(first.at, 100);
+        assert_eq!(store.own_record(&info, 200).unwrap(), first);
+        assert!(!store.is_shared("chat", &first));
+        store.set_shared("chat", first.clone()).unwrap();
+        assert!(RadioStore::open(data.path()).is_shared("chat", &first));
+
+        info.settings.spreading_factor = 7;
+        let changed = store.own_record(&info, 300).unwrap();
+        assert_eq!(changed.at, 300);
+        assert!(!store.is_shared("chat", &changed));
     }
 }

@@ -37,3 +37,40 @@
   font-size: 14px;
   color: var(--color-muted);
 }
+
+/* Your contacts by mesh, as in the design's Radio screen (#34). */
+.meshRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 20px;
+}
+
+.meshName {
+  width: 96px;
+  font-size: 15px;
+}
+
+.meshBar {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.meshBar > span {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--color-amber-strong);
+}
+
+.meshCount {
+  width: 20px;
+  text-align: right;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}

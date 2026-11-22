@@ -1,5 +1,6 @@
-//! Chat text over radio (#40): Ada and Bea each have a radio on one mock mesh. With the relay
-//! blocked and radio forced, they exchange text both ways. Each message is marked as radio and
+//! Chat text over radio (#40): Ada and Bea each have a radio on one mock mesh, and their apps
+//! exchange the radios' address records (#34). With the relay blocked and radio forced, they
+//! exchange text both ways. Each message is marked as radio and
 //! confirmed by the other radio, and stays across a restart; a captured packet sent again shows
 //! nothing, before and after the restart.
 
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use peoples_chat_core::Core;
-use peoples_chat_core::interface::{CoreEvent, DeliveryState, Direction, Message, Transport};
+use peoples_chat_core::interface::{CoreEvent, DeliveryState, Direction, Mesh, Message, Transport};
 use peoples_chat_core::radio::{MockMesh, Radio, RadioEvent};
 use support::{Phone, TestRelay, WAIT, make_contacts, next_event, until};
 use tokio::time::Instant;
@@ -29,6 +30,18 @@ async fn message(core: &Core, chat_id: &str, id: &str) -> Message {
         messages(core, chat_id).into_iter().find(|m| m.id == id)
     })
     .await
+}
+
+/// Waits until the chat's contact has a radio, from their radio address record (#34).
+async fn knows_radio(core: &Core, chat_id: &str) {
+    until("the contact's radio", || {
+        core.snapshot()
+            .chats
+            .iter()
+            .any(|chat| chat.id == chat_id && chat.contact.meshes == vec![Mesh::MeshCore])
+            .then_some(())
+    })
+    .await;
 }
 
 /// Waits until both phones have the chat's radio keys in the same epoch: the chat has settled
@@ -56,8 +69,8 @@ async fn two_phones_chat_by_radio_while_the_relay_is_blocked() {
     let bea_phone = Phone::new("radio-chat-bea", &url);
     let ada = ada_phone.start().await;
     let bea = bea_phone.start().await;
-    let ada_account = ada.create_account("Ada Lund").await.unwrap();
-    let bea_account = bea.create_account("Bea Holm").await.unwrap();
+    ada.create_account("Ada Lund").await.unwrap();
+    bea.create_account("Bea Holm").await.unwrap();
     let chat_id = make_contacts(&ada, &bea).await;
     until("Bea's chat", || {
         bea.snapshot()
@@ -69,7 +82,7 @@ async fn two_phones_chat_by_radio_while_the_relay_is_blocked() {
     .await;
     settled(&ada, &bea, &chat_id).await;
 
-    // Each has a radio on one mesh. Without the switch on, messages go by the internet.
+    // Ada has a radio. Without the switch on, messages go by the internet.
     let mesh = MockMesh::new();
     let ada_radio = Arc::new(mesh.radio("Ada's radio"));
     let bea_radio = Arc::new(mesh.radio("Bea's radio"));
@@ -78,7 +91,6 @@ async fn two_phones_chat_by_radio_while_the_relay_is_blocked() {
     assert_eq!(paired.name, "Ada's radio");
     assert_eq!(paired.public_key, ada_radio.public_key());
     assert!(paired.connected && !status.forced);
-    bea.attach_radio(bea_radio.clone()).await.unwrap();
 
     // The switch: the radio carries everything from now on, and says so.
     let mut ada_events = ada.subscribe();
@@ -88,15 +100,16 @@ async fn two_phones_chat_by_radio_while_the_relay_is_blocked() {
         other => panic!("expected the radio's change, got {other:?}"),
     }
     assert!(ada.snapshot().radio.forced);
-    bea.set_force_radio(true).unwrap();
 
-    // The radio needs the contact's radio: the radio address record brings it (#34).
+    // The radio needs Bea's radio, and she has none yet.
     let error = ada.send_message(&chat_id, "Hello?").await.unwrap_err();
     assert_eq!(error.message, "Bea Holm's radio isn't known yet.");
-    ada.set_contact_radio(&bea_account.public_key, bea_radio.public_key())
-        .unwrap();
-    bea.set_contact_radio(&ada_account.public_key, ada_radio.public_key())
-        .unwrap();
+
+    // Bea gets one. Their apps exchange the radios' address records in the chat (#34).
+    bea.attach_radio(bea_radio.clone()).await.unwrap();
+    bea.set_force_radio(true).unwrap();
+    knows_radio(&ada, &chat_id).await;
+    knows_radio(&bea, &chat_id).await;
 
     // The relay goes away.
     relay.block();
@@ -216,8 +229,8 @@ async fn a_message_that_comes_both_ways_shows_once() {
     let bea_phone = Phone::new("radio-both-bea", &url);
     let ada = ada_phone.start().await;
     let bea = bea_phone.start().await;
-    let ada_account = ada.create_account("Ada Lund").await.unwrap();
-    let bea_account = bea.create_account("Bea Holm").await.unwrap();
+    ada.create_account("Ada Lund").await.unwrap();
+    bea.create_account("Bea Holm").await.unwrap();
     let chat_id = make_contacts(&ada, &bea).await;
     until("Bea's chat", || {
         bea.snapshot()
@@ -234,10 +247,8 @@ async fn a_message_that_comes_both_ways_shows_once() {
     let bea_radio = Arc::new(mesh.radio("Bea's radio"));
     ada.attach_radio(ada_radio.clone()).await.unwrap();
     bea.attach_radio(bea_radio.clone()).await.unwrap();
-    ada.set_contact_radio(&bea_account.public_key, bea_radio.public_key())
-        .unwrap();
-    bea.set_contact_radio(&ada_account.public_key, ada_radio.public_key())
-        .unwrap();
+    knows_radio(&ada, &chat_id).await;
+    knows_radio(&bea, &chat_id).await;
     ada.set_force_radio(true).unwrap();
 
     let sent = ada.send_message(&chat_id, "Both ways").await.unwrap();

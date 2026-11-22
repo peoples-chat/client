@@ -286,11 +286,12 @@ every 5 minutes after, from our relays.
 
 ## App events
 
-**Personal invitations' tokens** (#95) travel as app events: `send_custom_event` sends an event of a kind the app
-chooses, inside the chat's encryption.
+**Personal invitations' tokens** (#95) and **radio address records** (#34) travel as app events: `send_custom_event`
+sends an event of a kind the app chooses, inside the chat's encryption.
 
 - MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
-  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`).
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens and 9911 (`RADIO_ADDRESS_KIND`) for
+  records. Both are provisional: Marmot assigns kinds only to adopted specs.
 - The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
   notification.
 - It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
