@@ -23,6 +23,9 @@ lower `marmot-session` crate.
 | `follow_direct_chats` | `subscribe_chats` |
 | `known_name`, `contact_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
 | `chat_started_at` | `chat_list_row` |
+| `send_text` | `submit_text` |
+| `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
+| `follow_messages` | `subscribe_timeline_messages` |
 | `close` | `shutdown_and_close` |
 
 Invite links (`core/src/invite.rs`) use `nprofile_for_account_id`, `account_id_hex_from_ref` and `is_nostr_secret`, and
@@ -179,6 +182,49 @@ White Noise shows.
 - **Late names.** A name learned after a chat appears reaches the interface only after a restart.
 - **Opening a tapped link.** The app doesn't register a link scheme, so a link has to be pasted into New chat.
 
+## Messages
+
+Text in a direct chat (#20). The interface's side is in [core-interface.md](core-interface.md#messages).
+
+**On the wire.**
+
+- A message is a kind-9 event signed by the account. It is encrypted as an MLS application message and published to
+  the chat's relays as a kind-445 event.
+- Its id is the id of that inner kind-9 event. Both phones store the message under it, from sending through every
+  restart, and it is the message's `id` in the interface.
+- The id covers the text and the time in whole seconds, so the same text twice within a second would be one message.
+  MDK refuses the second; the core sends it again a second later.
+
+**Sending** uses `submit_text`, not `send_message`.
+
+- `submit_text` stores the message and returns its id before any network work. The account's worker then publishes it.
+- `send_message` waits up to 20 seconds for a relay and returns the id only afterwards.
+- Unreachable relays are tried again every 5 seconds. When it is unclear whether a relay took a message, MDK backs
+  off from 30 seconds to an hour.
+- MDK resends the same signed bytes, so a message never doubles, and its queue survives a restart.
+- `notify_connectivity_restored` cuts the backoff short. The core doesn't call it yet; #43 watches relay reachability.
+
+**Delivery.** MDK's timeline record has no delivery field. The core reads it as MDK's chat list does:
+
+- `sent` once the record has the published event's id (`source_message_id_hex`), or the recipient confirmed it;
+- `waiting` before that.
+
+A message that every relay refused is marked `local_publish_failed`; it stays `waiting` in the interface for now.
+
+**Following.**
+
+- `subscribe_timeline_messages` with no group follows every chat of the account. A received message, the user's own
+  message when it is stored, and the same message once it is published each arrive as an upsert of its record.
+- The core keeps kind-9 text. It drops system rows, media, stickers, deleted messages, and messages withdrawn while
+  the chat's state was settled.
+- It subscribes before it reads the chats' histories, so a message that arrives in between is never missed.
+
+**History** comes from `timeline_messages_with_query`, at most 200 messages per chat: MDK's largest page. With a chat
+given, MDK orders by MLS epoch, then by time and id. Its times are whole seconds.
+
+**Messages before accepting.** MDK stores and shows messages that arrive in a chat whose invitation is still pending,
+so the core adds them to the invitation.
+
 ## Tests
 
 `core/tests/relay_round_trip.rs` creates an account against a relay running inside the test
@@ -204,6 +250,18 @@ account's relay lists and fetches its KeyPackage, which is what it needs to invi
 - the commands' error messages.
 
 The link parsing has unit tests in `core/src/invite.rs`, including White Noise's link shapes.
+
+`core/tests/messages.rs` has two contacts exchange text (#20):
+
+- each message arrives under the same id and time;
+- delivery moves from `waiting` to `sent`;
+- both histories survive a restart;
+- the same text twice within a second makes two messages;
+- a message sent before the invitation is accepted comes with it;
+- the error messages.
+
+The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
+other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.
 
 ## Phones
 
