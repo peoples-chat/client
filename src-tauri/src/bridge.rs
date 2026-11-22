@@ -3,7 +3,7 @@
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
 use peoples_chat_core::interface::{Account, CommandError, CoreEvent, Snapshot};
-use peoples_chat_core::{Core, MessagingOptions};
+use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::OnceCell;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -15,11 +15,10 @@ const EVENT: &str = "core-event";
 const KEYCHAIN_SERVICE: &str = "chat.peoples.client";
 
 /// Relays for new accounts, comma-separated, taken from the environment when the app is built.
+/// Without it the app uses the core's public [`DEFAULT_RELAYS`]. To use the relay that
+/// `core/examples/local_relay.rs` runs on the Mac, build with
+/// `PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777`; only debug builds accept loopback relays.
 const RELAYS: Option<&str> = option_env!("PEOPLES_CHAT_RELAYS");
-
-/// Debug builds without `PEOPLES_CHAT_RELAYS` use the relay that `core/examples/local_relay.rs`
-/// runs on the Mac. MDK needs a relay to set an account up, though not a reachable one.
-const DEV_RELAY: &str = "ws://127.0.0.1:7777";
 
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
@@ -58,25 +57,32 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 }
 
 fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
+    let relays = relays();
+    log::info!("relays for new accounts: {}", relays.join(", "));
     Ok(MessagingOptions {
         data_dir: app.path().app_data_dir()?.join("core"),
-        relays: relays(),
+        relays,
         keychain_service: KEYCHAIN_SERVICE.to_owned(),
         allow_loopback_relays: cfg!(debug_assertions),
     })
 }
 
+/// `PEOPLES_CHAT_RELAYS` when it names at least one relay, otherwise the core's defaults.
 fn relays() -> Vec<String> {
-    match RELAYS {
-        Some(list) => list
-            .split(',')
-            .map(str::trim)
-            .filter(|relay| !relay.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        None if cfg!(debug_assertions) => vec![DEV_RELAY.to_owned()],
-        // Release builds get default relays with #18. Until then, creating an account says so.
-        None => Vec::new(),
+    let chosen: Vec<String> = RELAYS
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|relay| !relay.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if chosen.is_empty() {
+        DEFAULT_RELAYS
+            .iter()
+            .map(|relay| (*relay).to_owned())
+            .collect()
+    } else {
+        chosen
     }
 }
 

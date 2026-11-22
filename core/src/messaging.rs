@@ -21,6 +21,18 @@ use marmot_app::{
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
 const READINESS_POLL: Duration = Duration::from_millis(50);
 
+/// Relays for new accounts unless the app is built with others (#18). New accounts publish their
+/// relay lists, profile and KeyPackage here.
+///
+/// These are public, general-purpose relays. Who runs the project's own relays is decided later
+/// (#11). nos.lol and relay.primal.net are also among the relays White Noise searches for relay
+/// lists, so White Noise users can find accounts made here.
+pub const DEFAULT_RELAYS: &[&str] = &[
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+];
+
 /// Where the core keeps its messaging data and which relays it starts with.
 #[derive(Clone, Debug)]
 pub struct MessagingOptions {

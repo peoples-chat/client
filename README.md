@@ -75,8 +75,9 @@ together.
 quickest way to work on screens. Anything the app cannot do yet is disabled.
 
 The app uses the mock core too, unless you start it with `VITE_CORE=rust`, for example
-`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account so far. Relays, keys and the rest are
-in [docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
+`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account so far, and it publishes new accounts
+to public relays. Relays, keys and the rest are in
+[docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
 
 The app's product name is `peopleschat`, without the dot, because `pnpm tauri ios build` cannot find the built app
 when the name has one. People still see "peoples.chat": on iOS through `CFBundleDisplayName` in

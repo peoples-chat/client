@@ -118,7 +118,9 @@ App store download sizes will differ; these numbers compare like with like.
   - The spike used `ws://` to a relay on the Mac. The iOS simulator shares the Mac's network, and the emulator reached
     the relay through `adb reverse`.
   - Real relays use `wss://`. The relay connection uses rustls with bundled root certificates (`webpki-roots`), so TLS
-    should need no phone-specific setup. It hasn't run on a phone yet.
+    should need no phone-specific setup.
+  - Update (#18): the app published to public `wss://` relays from the iOS simulator and the Android emulator with no
+    extra setup. Real phones are still to come (#12).
 
 ## What the spike changed
 
@@ -146,7 +148,8 @@ The spike command is gone (#17). The app's own account commands now do the same 
    cargo run -p peoples-chat-core --example local_relay -- 7777
    ```
 
-2. Start the app with the real core: `VITE_CORE=rust pnpm tauri ios dev` or `VITE_CORE=rust pnpm tauri android dev`. On
+2. Start the app with the real core and the local relay:
+   `PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777 VITE_CORE=rust pnpm tauri ios dev`, or the same with `android dev`. On
    Android, also run `adb reverse tcp:7777 tcp:7777`. Details: [Running the app with the real
    core](../core-interface.md#running-the-app-with-the-real-core).
 3. Create an account. The relay prints each event it stores:

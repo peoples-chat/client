@@ -35,9 +35,10 @@ Choices:
   lists (kinds 10002 and 10050), an empty follow list (kind 3), its profile (kind 0) and its KeyPackage (kind 30443)
   continues in the background, and each needs a relay's acknowledgement.
 - **Relays are required.** MDK refuses to set up an account without default relays (`MissingDefaultRelays`), but they
-  don't need to be reachable.
+  don't need to be reachable. See [Relays](#relays) for the ones we use.
 - **Deleting wipes.** `sign_out_and_wipe` removes the account's databases and its key. Telling relays and groups is
-  best effort and never blocks the local wipe.
+  best effort and never blocks the local wipe. On the relays, the deletion request removed the KeyPackage; the profile,
+  follow list and relay lists stayed.
 
 ## The account key
 
@@ -78,12 +79,53 @@ ours reads, holds or passes the key.
 
 **Not checked yet:** keychain access in a signed iPhone app, and Android's hardware-backed keystore on a real phone (#12).
 
+## Relays
+
+**Defaults.** New accounts use three public, general-purpose relays: `wss://relay.damus.io`, `wss://nos.lol` and
+`wss://relay.primal.net` (`DEFAULT_RELAYS` in `core/src/messaging.rs`). Who runs the project's own relays is decided
+later (#11). Building with `PEOPLES_CHAT_RELAYS` (comma-separated) replaces them; see
+[core-interface.md](core-interface.md#running-the-app-with-the-real-core).
+
+**How other clients find an account.**
+
+1. They look up its relay lists (kinds 10002 and 10050) on discovery relays of their own.
+2. They fetch its KeyPackage (kind 30443) from the relays the list names.
+
+White Noise's discovery relays are `purplepag.es`, `relay.vertexlab.io`, `nos.lol`, `relay.ditto.pub` and
+`relay.primal.net`. When we checked on 22 November 2026:
+
+- `nos.lol`, `relay.ditto.pub` and `relay.primal.net` found a new account and its KeyPackage. Ditto found it even
+  though we don't publish there.
+- `purplepag.es` and `relay.vertexlab.io` didn't.
+- `relay.damus.io` answered WebSocket connections with HTTP 503 that day. The account's events reached the other two
+  relays only.
+
+**Checking an account with `wn`.** MDK's command-line client makes the same lookup.
+
+1. Build it from the pinned tag. `ODIN` must point at the compiler from `scripts/install-odin.sh`:
+
+   ```sh
+   ODIN=$PWD/.tools/odin/odin cargo install --git https://github.com/marmot-protocol/mdk --tag v0.18.0 wn-cli \
+     --bin wn --locked --debug --root /tmp/wn
+   ```
+
+2. Check the account through one discovery relay. Use an empty `--home` each time, because `wn` caches what it finds:
+
+   ```sh
+   RUST_MIN_STACK=8388608 /tmp/wn/bin/wn --home "$(mktemp -d)" --secret-store file --relay wss://nos.lol \
+     --json keys check <npub or hex>
+   ```
+
+`--secret-store file` keeps `wn` out of the keychain. `--relay` is a hidden option. Without it, `wn` asks no
+discovery relay unless its daemon is running.
+
 ## Tests
 
 `core/tests/relay_round_trip.rs` creates an account against a relay running inside the test
 (`nostr_relay_builder::MockRelay`, as MDK's own tests use) and reads the published events back with a separate
 `nostr-sdk` client. Keys go to `keyring-core`'s in-memory store, so the test never touches the machine's keychain and
-runs on CI without a Secret Service.
+runs on CI without a Secret Service. In a second test, another MDK instance that knows only the relay finds the
+account's relay lists and fetches its KeyPackage, which is what it needs to invite the account.
 
 `core/tests/core_interface.rs` does the same for `Core`:
 
