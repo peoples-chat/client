@@ -5076,10 +5076,12 @@ name = "peoples-chat-core"
 version = "0.1.0"
 dependencies = [
  "cgka-traits",
+ "hex",
  "keyring-core",
  "log",
  "marmot-account",
  "marmot-app",
+ "nostr 0.45.5",
  "nostr-relay-builder",
  "nostr-sdk",
  "serde",

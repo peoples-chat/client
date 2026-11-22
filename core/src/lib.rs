@@ -7,11 +7,13 @@
 
 mod app;
 pub mod interface;
+mod invite;
 mod messaging;
 
 pub use app::Core;
 pub use messaging::{
-    DEFAULT_RELAYS, ExistingAccount, Messaging, MessagingError, MessagingOptions, NewAccount,
+    DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
+    MessagingOptions, NewAccount,
 };
 
 /// Version of the core, shown by the shell to prove that the core is linked in.

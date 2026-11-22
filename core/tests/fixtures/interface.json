@@ -3,7 +3,7 @@
     "account": {
       "name": "Emil Dahl",
       "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
-      "inviteLink": "nostr:npub1fixtureemildahl"
+      "inviteLink": "nostr:nprofile1fixtureemildahl"
     },
     "chats": [
       {
@@ -105,7 +105,7 @@
       "account": {
         "name": "Emil Dahl",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
-        "inviteLink": "nostr:npub1fixtureemildahl"
+        "inviteLink": "nostr:nprofile1fixtureemildahl"
       }
     }
   ],

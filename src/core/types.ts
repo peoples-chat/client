@@ -16,7 +16,10 @@ export type PublicKey = string;
 export interface Account {
   name: string;
   publicKey: PublicKey;
-  /** Link that other people open or scan to start a chat. The user's QR code encodes it. */
+  /**
+   * Link that other people open or scan to start a chat. The user's QR code encodes it. From the
+   * real core it is a `nostr:nprofile1…` URI; to the interface it is opaque.
+   */
   inviteLink: string;
 }
 
@@ -58,6 +61,7 @@ export interface Chat {
 
 /** An invitation to a direct chat from someone who is not a contact yet. */
 export interface Invitation {
+  /** The id of the chat that accepting the invitation opens. */
   id: string;
   from: Contact;
   receivedAt: number;
@@ -100,8 +104,12 @@ export interface Core {
   createAccount(name: string): Promise<Account>;
   /** Removes the profile, leaves every chat and deletes the account's data from this device. */
   deleteAccount(): Promise<void>;
-  /** Starts a direct chat from a scanned QR code or a pasted invite link. */
+  /**
+   * Starts a direct chat from a scanned QR code or a pasted invite link, and sends the other
+   * person an invitation. With an existing contact it returns their chat.
+   */
   addContact(inviteLink: string): Promise<Chat>;
+  /** Accepts an invitation. The chat it opens has the invitation's id. */
   acceptInvitation(invitationId: string): Promise<Chat>;
   sendMessage(chatId: string, text: string): Promise<Message>;
 }

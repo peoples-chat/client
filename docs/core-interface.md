@@ -46,8 +46,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `load()` | `core_snapshot` | `Snapshot` | | Done (#16) |
 | `createAccount(name)` | `create_account` | `Account` | `accountCreated` | Done (#16) |
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
-| `addContact(inviteLink)` | | `Chat` | `chatAdded` | #19 |
-| `acceptInvitation(invitationId)` | | `Chat` | `invitationRemoved`, `chatAdded` | #19 |
+| `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
+| `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
 | `sendMessage(chatId, text)` | | `Message` | `messageAdded`, then `deliveryChanged` | #20 |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
 
@@ -59,9 +59,9 @@ Until a command is done, the interface's bridge refuses it with "… is not avai
 | --- | --- | --- | --- |
 | `accountCreated` | `account` | The account was created on this device | Done (#16) |
 | `accountDeleted` | | The account and its data were removed from this device | Done (#16) |
-| `chatAdded` | `chat` | A direct chat starts: the user added a contact or accepted an invitation | #19 |
-| `invitationReceived` | `invitation` | Someone who is not a contact invites the user | #19 |
-| `invitationRemoved` | `invitationId` | The invitation was accepted or deleted | #19 |
+| `chatAdded` | `chat` | A direct chat starts: the user added a contact or accepted an invitation | Done (#19) |
+| `invitationReceived` | `invitation` | Someone who is not a contact invites the user | Done (#19) |
+| `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one | #20 |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | #20 |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
@@ -83,7 +83,53 @@ Until a command is done, the interface's bridge refuses it with "… is not avai
   - `waiting`: not sent yet, for example because there is no path.
   - `sent`: a relay acknowledged it.
   - `confirmed`: the other radio confirmed it. Radio only.
-- `inviteLink` is `nostr:npub…` for now; #19 settles the link format.
+- `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
+- An invitation's `id` is the id of the chat that accepting it opens.
+
+## Contacts and invitations
+
+**The invite link** is a NIP-21 `nostr:nprofile1…` URI. It carries the account's public key, plus up to three relays
+where the account publishes, as hints for finding it. The QR code encodes the same string. White Noise's phone apps
+scan it too. [mdk.md](mdk.md#contacts-and-invitations) explains the choice.
+
+**`addContact` reads** the forms Marmot apps hand out:
+
+- our links, and `nprofile`, `npub` or hex keys, with or without `nostr:`;
+- White Noise's `marmot://profile/<key>` (also `whitenoise://`), with anything after `?` or `#` ignored.
+
+It refuses the following with a message to show. The text is never logged, since it may be a secret key pasted by
+mistake.
+
+| Input | Message |
+| --- | --- |
+| A secret key (`nsec…`) | "That is your secret key. Never share it." |
+| A name or `name@domain` | "Finding people by name is not possible yet. Paste an invite link instead." |
+| Anything else | "That is not an invite link." |
+| The user's own link | "That is your own invite link." |
+
+**Adding a contact:**
+
+- **The chat opens at once**, with `chatAdded`. The other person gets an invitation in the background.
+- **With a contact the user already has**, it returns their chat.
+- **When that person has already invited the user**, it accepts the invitation instead, so two people who scan each
+  other's codes end up in one chat.
+- **When their account can't be found on the relays**, it says "Could not find this person's account. Try again
+  later." The lookup can take up to 50 seconds.
+
+**Receiving and accepting:**
+
+- **Invitations arrive while the app runs**, and ones sent while it was closed arrive when it starts.
+- **Accepting** turns the invitation into the chat with the same id: `invitationRemoved`, then `chatAdded`. The
+  sender isn't told; they are in the chat already.
+- **Contact names** come from the person's profile on the relays. If it can't be found, the name is a pseudonym
+  derived from the key ("Brave Otter"), the same one White Noise shows. A name found later doesn't reach the interface
+  yet.
+
+**Not built yet:**
+
+- deleting or blocking an invitation;
+- group chats: the core shows direct chats only;
+- opening an invite link tapped in another app. The link has to be pasted into New chat.
 
 ## Planned: radio and transport
 
@@ -97,7 +143,8 @@ These shapes are sketches. The issues settle them together with their screens.
 
 ## Running the app with the real core
 
-The interface uses the mock with demo data until the real core covers the whole flow (#20).
+The interface uses the mock with demo data until the real core covers the whole flow (#20). So far the real core
+creates and deletes the account, and two apps can become contacts (#19). Sending messages comes with #20.
 
 **Turning it on**
 

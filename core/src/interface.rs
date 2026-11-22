@@ -17,7 +17,8 @@ pub struct Account {
     pub name: String,
     /// The account's public key, in hex.
     pub public_key: String,
-    /// Link that other people open or scan to start a chat. The user's QR code encodes it.
+    /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
+    /// NIP-21 `nostr:nprofile1…` URI: the public key and relay hints (#19).
     pub invite_link: String,
 }
 
@@ -87,6 +88,7 @@ pub struct Chat {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Invitation {
+    /// The id of the chat that accepting the invitation opens.
     pub id: String,
     pub from: Contact,
     /// Milliseconds since the Unix epoch.

@@ -17,7 +17,7 @@ const STORAGE_KEY = "peoples-chat.mock-core";
 const STORAGE_VERSION = 1;
 const MINUTE = 60_000;
 
-/** Demo invite links. The real link format comes with #19. */
+/** Demo invite links. The real core's are `nostr:nprofile1…` URIs (#19). */
 const INVITE_PREFIX = "peopleschat:demo-invite/";
 /** The mock takes anything with a URI scheme as an invite link. */
 const LINK_PATTERN = /^[a-z][a-z0-9+.-]*:\S+$/i;
