@@ -58,10 +58,18 @@ export function MessageList({ messages, empty }: MessageListProps) {
 
 function MessageBubble({ message }: { message: Message }) {
   const outgoing = message.direction === "out";
+  // Radio messages say so, in the radio colour (#48). Internet is the usual way and says nothing.
+  const radio = message.transport === "radio";
   return (
-    <div className={`${styles.bubble} ${outgoing ? styles.out : styles.in}`}>
+    <div className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}>
       <div className={styles.text}>{message.text}</div>
       <div className={styles.meta}>
+        {radio && (
+          <span className={styles.transport}>
+            <Icon name="radio" size={12} strokeWidth={2.4} />
+            Radio
+          </span>
+        )}
         <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
         {outgoing && message.delivery && <Delivery state={message.delivery} />}
       </div>

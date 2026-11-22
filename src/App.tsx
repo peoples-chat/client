@@ -7,6 +7,7 @@ import { CreateProfile } from "./screens/CreateProfile";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
 import { Profile } from "./screens/Profile";
+import { RadioNotice } from "./screens/RadioNotice";
 import { RadioSettings } from "./screens/RadioSettings";
 import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
@@ -56,6 +57,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <Account />;
     case "radioSettings":
       return <RadioSettings />;
+    case "radioNotice":
+      return <RadioNotice />;
     case "profile":
       return <Profile />;
   }

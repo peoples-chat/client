@@ -1,5 +1,7 @@
+import { radioBytes } from "./radio";
 import {
   CoreError,
+  RADIO_TEXT_LIMIT,
   type Account,
   type Chat,
   type Core,
@@ -14,7 +16,8 @@ import {
 // as the real core, so the interface does not know which one it talks to.
 
 const STORAGE_KEY = "peoples-chat.mock-core";
-const STORAGE_VERSION = 1;
+// 2: chats have a reach, and the demo has a chat reached by radio (#48).
+const STORAGE_VERSION = 2;
 const MINUTE = 60_000;
 
 /** Demo invite links. The real core's are `nostr:nprofile1…` URIs (#19). */
@@ -99,7 +102,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         direction: "in",
         text: DEMO_REPLIES[state.repliesSent % DEMO_REPLIES.length],
         sentAt: now(),
-        transport: "internet",
+        transport: chat.reach === "radio" ? "radio" : "internet",
       };
       state.repliesSent += 1;
       chat.messages.push(message);
@@ -135,13 +138,15 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         inviteLink: INVITE_PREFIX + randomHex(6),
       };
       const chat = demoChat(now());
+      const radioChat = demoRadioChat(now());
       const invitation = demoInvitation(now(), trimmed.split(/\s+/)[0]);
       state.account = account;
-      state.chats.push(chat);
+      state.chats.push(chat, radioChat);
       state.invitations.push(invitation);
       emit(
         { type: "accountCreated", account },
         { type: "chatAdded", chat },
+        { type: "chatAdded", chat: radioChat },
         { type: "invitationReceived", invitation },
       );
       return structuredClone(account);
@@ -199,20 +204,28 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
 
+      // As the core will: radio carries short text, and a chat that can't be reached keeps it.
+      const radio = chat.reach === "radio";
+      if (radio && radioBytes(body) > RADIO_TEXT_LIMIT) {
+        throw new CoreError(`That is too long for radio. Keep it to ${RADIO_TEXT_LIMIT} bytes.`);
+      }
       const message: Message = {
         id: randomHex(8),
         direction: "out",
         text: body,
         sentAt: now(),
-        transport: "internet",
+        transport: radio ? "radio" : "internet",
         delivery: "waiting",
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
+      if (chat.reach === "unreachable") return structuredClone(message);
 
       later(delays.sent, () => {
-        message.delivery = "sent";
-        emit({ type: "deliveryChanged", chatId, messageId: message.id, delivery: "sent" });
+        // On radio, the other radio confirms; on the internet, a relay acknowledges.
+        const delivery = radio ? "confirmed" : "sent";
+        message.delivery = delivery;
+        emit({ type: "deliveryChanged", chatId, messageId: message.id, delivery });
         scheduleReply(chatId);
       });
       return structuredClone(message);
@@ -242,6 +255,32 @@ function demoChat(now: number): Chat {
       },
     ],
     reach: "internet",
+  };
+}
+
+/** A chat whose contact can be reached by radio only, as in the design's radio chat. */
+function demoRadioChat(now: number): Chat {
+  return {
+    id: randomHex(8),
+    contact: { publicKey: randomHex(32), name: "Hanne Vang" },
+    messages: [
+      {
+        id: randomHex(8),
+        direction: "in",
+        text: "Power is out on the whole street. Are you okay?",
+        sentAt: now - 20 * MINUTE,
+        transport: "radio",
+      },
+      {
+        id: randomHex(8),
+        direction: "out",
+        text: "All fine here. Check on Jonas next door if you can.",
+        sentAt: now - 19 * MINUTE,
+        transport: "radio",
+        delivery: "confirmed",
+      },
+    ],
+    reach: "radio",
   };
 }
 
@@ -293,10 +332,12 @@ function restore(storage: StorageLike | null): MockState | null {
       return null;
     }
     const restored = { ...emptyState(), ...state } as MockState;
-    // Acknowledgement timers do not survive a reload, so settle anything still waiting.
+    // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
+    // in a chat that can't be reached.
     for (const chat of restored.chats) {
+      if (chat.reach === "unreachable") continue;
       for (const message of chat.messages) {
-        if (message.delivery === "waiting") message.delivery = "sent";
+        if (message.delivery === "waiting") message.delivery = message.transport === "radio" ? "confirmed" : "sent";
       }
     }
     return restored;

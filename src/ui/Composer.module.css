@@ -43,3 +43,29 @@
   background: var(--color-primary);
   color: var(--color-on-primary);
 }
+
+/* Radio mode (#48): the radio colour, as in the design. */
+.radio {
+  background: var(--color-amber-strong);
+  color: #2a1f05;
+}
+
+/* Too long to go by radio. */
+.tooLongSend {
+  background: var(--color-disabled);
+  color: var(--color-bg);
+}
+
+/* Bytes used of what one radio message carries. */
+.count {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+}
+
+.tooLong {
+  font-weight: 600;
+  color: var(--color-danger);
+}
