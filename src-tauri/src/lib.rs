@@ -2,8 +2,6 @@
 //! No protocol logic belongs here.
 
 mod bridge;
-#[cfg(debug_assertions)]
-mod spike;
 
 /// Stack size of the async runtime's threads. Unoptimized OpenMLS, inside MDK, can outgrow the
 /// default 2 MiB when it creates a group; MDK's own runtime tests use 8 MiB. `RUST_MIN_STACK` in
@@ -39,31 +37,18 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
 
-    let builder = builder.setup(|app| {
-        // The core starts with the app, not when the web view first asks for it.
-        bridge::start(app.handle())?;
-        #[cfg(debug_assertions)]
-        spike::run_from_env(app.handle());
-        Ok(())
-    });
-
-    #[cfg(debug_assertions)]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        core_version,
-        bridge::core_snapshot,
-        bridge::create_account,
-        bridge::delete_account,
-        spike::spike_relay_round_trip
-    ]);
-    #[cfg(not(debug_assertions))]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        core_version,
-        bridge::core_snapshot,
-        bridge::create_account,
-        bridge::delete_account
-    ]);
-
     builder
+        .setup(|app| {
+            // The core starts with the app, not when the web view first asks for it.
+            bridge::start(app.handle())?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            core_version,
+            bridge::core_snapshot,
+            bridge::create_account,
+            bridge::delete_account
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
