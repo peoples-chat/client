@@ -97,7 +97,9 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
 
     case "reachChanged":
       return updateChat(state, event.chatId, (chat) =>
-        chat.reach === event.reach ? chat : { ...chat, reach: event.reach },
+        chat.reach === event.reach && chat.radioIssue === event.radioIssue
+          ? chat
+          : { ...chat, reach: event.reach, radioIssue: event.radioIssue },
       );
 
     case "relaysChanged":

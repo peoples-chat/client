@@ -110,6 +110,22 @@ pub enum Reach {
     Unreachable,
 }
 
+/// Why a chat can't be reached by radio, while no relay can reach it either (#44).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RadioIssue {
+    /// The user has no radio, or its link is down.
+    NoRadio,
+    /// The contact hasn't shared a radio.
+    NoContactRadio,
+    /// The contact's radio runs another mesh.
+    OtherMesh,
+    /// The contact's radio uses another region or preset.
+    OtherPreset,
+    /// The contact's radio hasn't been heard lately.
+    NotHeard,
+}
+
 /// A direct chat with one contact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +136,9 @@ pub struct Chat {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub reach: Reach,
+    /// Why the chat isn't reachable by radio, when it is `unreachable` (#44).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_issue: Option<RadioIssue>,
 }
 
 /// One of the relays the account's messages travel through (#88).
@@ -262,10 +281,14 @@ pub enum CoreEvent {
         message_id: String,
         delivery: DeliveryState,
     },
-    /// How a chat's messages can travel changed: its relays went away or came back.
+    /// How a chat's messages can travel changed: its relays went away or came back, or the
+    /// contact's radio was heard or not any more (#44).
     ReachChanged {
         chat_id: String,
         reach: Reach,
+        /// Why the chat isn't reachable by radio, when it is `unreachable`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radio_issue: Option<RadioIssue>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {

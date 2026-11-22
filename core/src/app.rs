@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
+    Reach, Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
 };
 use crate::invite;
 use crate::invites::{InviteRecord, Invites};
@@ -27,7 +27,7 @@ use crate::messaging::{
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
 use crate::radio_store::{RadioMessage, RadioStore};
-use crate::reach::Reachability;
+use crate::reach::{Reachability, radio_reach};
 
 mod radio;
 
@@ -58,6 +58,9 @@ struct Inner {
     watchers: Mutex<Vec<JoinHandle<()>>>,
     /// Which chats can reach their relays (#43). Whoever holds both locks takes `state` first.
     reach: Mutex<Reachability>,
+    /// Wakes the relays' watcher to look again at when a chat's reach changes next, as when a
+    /// radio was heard (#44).
+    reach_wake: Arc<tokio::sync::Notify>,
     /// Avatars made from profile photos (#94).
     avatars: Avatars,
     /// The invitations the user sent (#95).
@@ -111,6 +114,7 @@ impl Core {
                 account_commands: tokio::sync::Mutex::new(()),
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
+                reach_wake: Arc::new(tokio::sync::Notify::new()),
                 avatars,
                 invites,
                 radio_store,
@@ -882,6 +886,7 @@ impl Core {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
                 relays,
+                Arc::clone(&self.inner.reach_wake),
             )));
         }
         let previous = std::mem::replace(&mut *self.watchers(), watchers);
@@ -994,6 +999,8 @@ impl Core {
                 contact,
                 messages: self.history(&account_hex, &chat.id),
                 reach: self.reach().reach(&chat.id, Instant::now()),
+                // The radio's part follows right after, from `radio_chat_added`.
+                radio_issue: None,
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
@@ -1080,25 +1087,52 @@ impl Core {
     /// [`CoreEvent::ReachChanged`] and [`CoreEvent::RelaysChanged`] for what changed. Returns
     /// when a closed connection next makes its relay count as gone.
     fn refresh_reach(&self, now: Instant) -> Option<Instant> {
+        // Without the internet, a chat may be reachable by radio (#44).
+        let own_radio = self.own_radio_record();
         let mut state = self.state();
         let reachability = self.reach();
+        let heard = self.heard();
         let relays = relay_views(reachability.relays(now), PROJECT_RELAYS);
         if state.account.is_some() && state.relays != relays {
             state.relays = relays.clone();
             self.emit(CoreEvent::RelaysChanged { relays });
         }
         for chat in &mut state.chats {
-            let reach = reachability.reach(&chat.id, now);
-            if chat.reach != reach {
+            let (reach, radio_issue) = match reachability.reach(&chat.id, now) {
+                Reach::Internet => (Reach::Internet, None),
+                _ => {
+                    let contact = self
+                        .inner
+                        .radio_store
+                        .contact_radio(&chat.contact.public_key);
+                    match radio_reach(own_radio.as_ref(), contact.as_ref(), &heard, now) {
+                        Ok(()) => (Reach::Radio, None),
+                        Err(issue) => (Reach::Unreachable, Some(issue)),
+                    }
+                }
+            };
+            if chat.reach != reach || chat.radio_issue != radio_issue {
                 chat.reach = reach;
-                log::info!("a chat's reach is now {reach:?}");
+                chat.radio_issue = radio_issue;
+                log::info!("a chat's reach is now {reach:?}, {radio_issue:?}");
                 self.emit(CoreEvent::ReachChanged {
                     chat_id: chat.id.clone(),
                     reach,
+                    radio_issue,
                 });
             }
         }
-        reachability.next_change(now)
+        [reachability.next_change(now), heard.next_change(now)]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Looks at each chat's reach again now, and wakes the relays' watcher to look again when it
+    /// changes next.
+    fn reach_changed(&self) {
+        self.refresh_reach(Instant::now());
+        self.inner.reach_wake.notify_one();
     }
 
     /// The latest messages of a chat or invitation, with those that came by radio and whose
@@ -1210,7 +1244,7 @@ fn upgrade(core: &Weak<Inner>) -> Option<Core> {
 
 /// Follows the account's relays, and updates each chat's reach as relays come and go and as
 /// closed connections run out their time.
-async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
+async fn watch_relays(core: Weak<Inner>, relays: RelayLinks, wake: Arc<tokio::sync::Notify>) {
     let mut next = upgrade(&core).and_then(|core| core.refresh_reach(Instant::now()));
     loop {
         let time_is_up = async {
@@ -1225,6 +1259,8 @@ async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
                 None => return,
             },
             () = time_is_up => None,
+            // A radio was heard, or the radio changed: when the reach changes next may be sooner.
+            () = wake.notified() => None,
         };
         let Some(core) = upgrade(&core) else { return };
         next = match changed {

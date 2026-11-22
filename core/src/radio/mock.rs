@@ -13,8 +13,8 @@ use super::{
     RadioSettings, Sent, check_text, key_prefix,
 };
 
-/// The settings every mock radio reports: MeshCore's EU/UK narrow preset.
-const SETTINGS: RadioSettings = RadioSettings {
+/// The settings a mock radio reports unless it is given others: MeshCore's EU/UK narrow preset.
+pub const MOCK_SETTINGS: RadioSettings = RadioSettings {
     frequency_mhz: 869.618,
     bandwidth_khz: 62.5,
     spreading_factor: 8,
@@ -41,6 +41,7 @@ struct MeshState {
 
 struct Node {
     name: String,
+    settings: RadioSettings,
     events: broadcast::Sender<RadioEvent>,
     connected: bool,
 }
@@ -50,9 +51,16 @@ impl MockMesh {
         Self::default()
     }
 
-    /// Adds a connected radio called `name`. Its key is made from the name and its place on the
-    /// mesh, so a test can predict nothing else about it.
+    /// Adds a connected radio called `name`, with [`MOCK_SETTINGS`]. Its key is made from the
+    /// name and its place on the mesh, so a test can predict nothing else about it.
     pub fn radio(&self, name: &str) -> MockRadio {
+        self.radio_with(name, MOCK_SETTINGS)
+    }
+
+    /// Adds a connected radio called `name` that reports `settings`. The mock mesh carries its
+    /// messages whatever the settings; telling which radios can hear each other is the core's
+    /// job.
+    pub fn radio_with(&self, name: &str, settings: RadioSettings) -> MockRadio {
         let mut state = self.state();
         let mut key = [0u8; 32];
         let number = u64::try_from(state.radios.len()).unwrap_or(u64::MAX) + 1;
@@ -66,6 +74,7 @@ impl MockMesh {
             public_key.clone(),
             Node {
                 name: name.to_owned(),
+                settings,
                 events,
                 connected: true,
             },
@@ -136,11 +145,12 @@ impl Radio for MockRadio {
     async fn info(&self) -> Result<RadioInfo, RadioError> {
         let state = self.mesh.state();
         self.connected(&state)?;
+        let node = &state.radios[&self.public_key];
         Ok(RadioInfo {
             mesh: Mesh::MeshCore,
             public_key: self.public_key.clone(),
-            name: state.radios[&self.public_key].name.clone(),
-            settings: SETTINGS,
+            name: node.name.clone(),
+            settings: node.settings,
             firmware: Some("mock".to_owned()),
             model: Some("Mock radio".to_owned()),
         })
