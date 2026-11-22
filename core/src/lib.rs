@@ -10,7 +10,9 @@ pub mod interface;
 mod messaging;
 
 pub use app::Core;
-pub use messaging::{ExistingAccount, Messaging, MessagingError, MessagingOptions, NewAccount};
+pub use messaging::{
+    DEFAULT_RELAYS, ExistingAccount, Messaging, MessagingError, MessagingOptions, NewAccount,
+};
 
 /// Version of the core, shown by the shell to prove that the core is linked in.
 pub fn version() -> &'static str {
