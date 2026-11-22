@@ -1,4 +1,4 @@
-import type { Account, Chat, Core, CoreEvent, Invitation, Message, Snapshot } from "../core/types";
+import type { Account, Chat, Core, CoreEvent, Invitation, Message, Relay, Snapshot } from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -7,11 +7,12 @@ export interface AppState {
   account: Account | null;
   chats: Chat[];
   invitations: Invitation[];
+  relays: Relay[];
   /** Why loading failed. */
   error?: string;
 }
 
-export const initialState: AppState = { status: "loading", account: null, chats: [], invitations: [] };
+export const initialState: AppState = { status: "loading", account: null, chats: [], invitations: [], relays: [] };
 
 export function fromSnapshot(snapshot: Snapshot): AppState {
   return {
@@ -19,6 +20,7 @@ export function fromSnapshot(snapshot: Snapshot): AppState {
     account: snapshot.account,
     chats: snapshot.chats,
     invitations: snapshot.invitations,
+    relays: snapshot.relays,
   };
 }
 
@@ -32,7 +34,7 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "accountDeleted":
-      return { ...state, account: null, chats: [], invitations: [] };
+      return { ...state, account: null, chats: [], invitations: [], relays: [] };
 
     case "chatAdded":
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
@@ -69,7 +71,17 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return updateChat(state, event.chatId, (chat) =>
         chat.reach === event.reach ? chat : { ...chat, reach: event.reach },
       );
+
+    case "relaysChanged":
+      return sameRelays(state.relays, event.relays) ? state : { ...state, relays: event.relays };
   }
+}
+
+function sameRelays(a: Relay[], b: Relay[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((relay, i) => relay.url === b[i].url && relay.operator === b[i].operator && relay.status === b[i].status)
+  );
 }
 
 function addToInvitation(state: AppState, invitationId: string, message: Message): AppState {

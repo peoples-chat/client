@@ -121,15 +121,17 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.account?.name).toBe("Emil Dahl");
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
     expect(state.invitations[0].from.name).toBe("Karen Winther");
+    expect(state.relays.map((r) => r.operator)).toEqual(["peoplesChat", "independent"]);
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
       messageAdded: (next) => expect(next.chats[1].messages[0].delivery).toBe("waiting"),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
       reachChanged: (next) => expect(next.chats.map((c) => c.reach)).toEqual(["radio", "unreachable"]),
+      relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
       invitationReceived: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1", "inv-2"]),
       invitationRemoved: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1"]),
-      accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [] }),
+      accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [], relays: [] }),
       accountCreated: (next) => expect(next.account?.publicKey).toBe(shared.snapshot.account?.publicKey),
     };
 

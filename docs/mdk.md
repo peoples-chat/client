@@ -277,6 +277,9 @@ connecting, offline or not tried yet.
   then go out at once rather than at their next retry.
 - The phone's online flag plays no part: a phone can be online while no relay answers, behind a captive portal for
   example.
+- Each relay's own status goes to the interface too (#88): connected; connecting while it opens or during a drop
+  shorter than `DOWN_AFTER`; unreachable after that. Who runs a relay comes from `PROJECT_RELAYS`
+  (`core/src/messaging.rs`), which stays empty until the project runs one (#11).
 
 **Timing.** Blocking the relays makes a chat `unreachable` 10 seconds after MDK sees the connections close. Unblocking
 makes it `internet` again with MDK's next attempt, within 5 seconds.
@@ -331,9 +334,10 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 `core/tests/reachability.rs` blocks and unblocks the two phones' relay (#43):
 
 - a one-second drop changes nothing;
-- blocked, the chat becomes `unreachable` on both phones 10 to 15 seconds later, and a message written then waits;
-- unblocked, the chat is back within 10 seconds, and the waiting message goes out. The test doesn't wait for it to
-  arrive, which can take minutes ([After an outage](#relay-reachability));
+- blocked, the chat becomes `unreachable` on both phones 10 to 15 seconds later, and so does the relay in the
+  snapshot. A message written then waits;
+- unblocked, the chat and the relay are back within 10 seconds, and the waiting message goes out. The test doesn't wait
+  for it to arrive, which can take minutes ([After an outage](#relay-reachability));
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.

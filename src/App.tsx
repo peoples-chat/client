@@ -7,9 +7,11 @@ import { CreateProfile } from "./screens/CreateProfile";
 import { ExportKey } from "./screens/ExportKey";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
+import { Privacy } from "./screens/Privacy";
 import { Profile } from "./screens/Profile";
 import { RadioNotice } from "./screens/RadioNotice";
 import { RadioSettings } from "./screens/RadioSettings";
+import { Relays } from "./screens/Relays";
 import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
 import { Welcome } from "./screens/Welcome";
@@ -62,6 +64,10 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <RadioSettings />;
     case "radioNotice":
       return <RadioNotice />;
+    case "privacy":
+      return <Privacy />;
+    case "relays":
+      return <Relays />;
     case "profile":
       return <Profile />;
   }

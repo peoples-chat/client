@@ -68,6 +68,10 @@ pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.primal.net",
 ];
 
+/// Relays the project runs, which the interface shows as run by peoples.chat (#88). None yet:
+/// who runs the project's relays is decided later (#11).
+pub const PROJECT_RELAYS: &[&str] = &[];
+
 /// Where the core keeps its messaging data and which relays it starts with.
 #[derive(Clone, Debug)]
 pub struct MessagingOptions {

@@ -29,7 +29,7 @@ describe("mock core", () => {
 
   it("starts without an account", async () => {
     const { core } = setup();
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [] });
+    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
   });
 
   it("creates an account with demo chats and a message request", async () => {
@@ -38,10 +38,22 @@ describe("mock core", () => {
 
     expect(account.name).toBe("Emil Dahl");
     expect(account.inviteLink).toMatch(/^peopleschat:demo-invite\//);
-    expect(events.map((e) => e.type)).toEqual(["accountCreated", "chatAdded", "chatAdded", "invitationReceived"]);
+    expect(events.map((e) => e.type)).toEqual([
+      "accountCreated",
+      "relaysChanged",
+      "chatAdded",
+      "chatAdded",
+      "invitationReceived",
+    ]);
 
     const snapshot = await core.load();
     expect(snapshot.account).toEqual(account);
+    // As in the design: one relay run by the project, and one that can't be reached.
+    expect(snapshot.relays.map((r) => [r.operator, r.status])).toEqual([
+      ["peoplesChat", "connected"],
+      ["independent", "connected"],
+      ["independent", "unreachable"],
+    ]);
     expect(snapshot.chats.map((c) => c.reach)).toEqual(["internet", "radio"]);
     expect(snapshot.invitations[0].messages[0].text).toMatch(/^Hi Emil,/);
   });
@@ -155,7 +167,7 @@ describe("mock core", () => {
 
     await core.deleteAccount();
     expect(events).toEqual([{ type: "accountDeleted" }]);
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [] });
+    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
 
     // The pending acknowledgement and reply belonged to the deleted account.
     vi.advanceTimersByTime(5000);

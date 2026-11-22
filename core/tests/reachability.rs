@@ -6,7 +6,9 @@ mod support;
 
 use std::time::Duration;
 
-use peoples_chat_core::interface::{CoreEvent, DeliveryState, Reach};
+use peoples_chat_core::interface::{
+    CoreEvent, DeliveryState, Reach, Relay, RelayOperator, RelayStatus,
+};
 use peoples_chat_core::{Core, DOWN_AFTER};
 use support::{Phone, TestRelay, make_contacts, until};
 use tokio::sync::broadcast;
@@ -37,6 +39,15 @@ async fn next_reach(
     }
 }
 
+/// The one relay of the tests, as the snapshot shows it.
+fn only_relay(url: &str, status: RelayStatus) -> Vec<Relay> {
+    vec![Relay {
+        url: url.to_owned(),
+        operator: RelayOperator::Independent,
+        status,
+    }]
+}
+
 fn reach(core: &Core, chat_id: &str) -> Option<Reach> {
     let chats = core.snapshot().chats;
     chats
@@ -60,6 +71,10 @@ async fn a_chat_is_unreachable_while_its_relay_is_blocked() {
     let mut ada_events = ada.subscribe();
     let mut bea_events = bea.subscribe();
     assert_eq!(reach(&ada, &chat_id), Some(Reach::Internet));
+    assert_eq!(
+        ada.snapshot().relays,
+        only_relay(&url, RelayStatus::Connected)
+    );
 
     // A drop that MDK's next attempt mends changes nothing.
     relay.block();
@@ -82,6 +97,11 @@ async fn a_chat_is_unreachable_while_its_relay_is_blocked() {
     let took = blocked.elapsed();
     assert!(took >= DOWN_AFTER, "cut off after {took:?}");
     assert_eq!(reach(&ada, &chat_id), Some(Reach::Unreachable));
+    // The relay itself says so too.
+    assert_eq!(
+        ada.snapshot().relays,
+        only_relay(&url, RelayStatus::Unreachable)
+    );
     assert_eq!(
         next_reach(&mut bea_events, &chat_id, SLACK).await,
         Some(Reach::Unreachable)
@@ -98,6 +118,10 @@ async fn a_chat_is_unreachable_while_its_relay_is_blocked() {
         Some(Reach::Internet)
     );
     assert_eq!(reach(&ada, &chat_id), Some(Reach::Internet));
+    assert_eq!(
+        ada.snapshot().relays,
+        only_relay(&url, RelayStatus::Connected)
+    );
     assert_eq!(
         next_reach(&mut bea_events, &chat_id, RETRY + SLACK).await,
         Some(Reach::Internet)

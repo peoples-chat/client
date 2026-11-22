@@ -9,6 +9,7 @@ use nostr_sdk::prelude::{Keys, ToBech32};
 use peoples_chat_core::interface::{CommandError, CoreEvent, Snapshot};
 use peoples_chat_core::{Core, MessagingOptions};
 use serde_json::Value;
+use tokio::sync::broadcast;
 
 /// One example of every event, a snapshot and a command error, as `src/core/types.ts` expects
 /// them. The interface's tests read the same file.
@@ -32,7 +33,7 @@ fn the_shared_json_matches_the_core_types() {
     }
     assert_eq!(
         kinds.len(),
-        8,
+        9,
         "the fixture needs one example of every event"
     );
 
@@ -54,6 +55,7 @@ fn kind(event: &CoreEvent) -> &'static str {
         CoreEvent::MessageAdded { .. } => "messageAdded",
         CoreEvent::DeliveryChanged { .. } => "deliveryChanged",
         CoreEvent::ReachChanged { .. } => "reachChanged",
+        CoreEvent::RelaysChanged { .. } => "relaysChanged",
     }
 }
 
@@ -61,6 +63,16 @@ fn kind(event: &CoreEvent) -> &'static str {
 fn use_mock_keychain() {
     if keyring_core::get_default_store().is_none() {
         keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+    }
+}
+
+/// The next event, skipping relay updates: they come whenever a connection opens or closes.
+async fn next_event(events: &mut broadcast::Receiver<CoreEvent>) -> CoreEvent {
+    loop {
+        let event = events.recv().await.unwrap();
+        if !matches!(event, CoreEvent::RelaysChanged { .. }) {
+            return event;
+        }
     }
 }
 
@@ -95,7 +107,7 @@ async fn an_account_is_created_kept_across_a_restart_and_deleted() {
         account.invite_link
     );
     assert_eq!(
-        events.recv().await.unwrap(),
+        next_event(&mut events).await,
         CoreEvent::AccountCreated {
             account: account.clone()
         }
@@ -113,7 +125,7 @@ async fn an_account_is_created_kept_across_a_restart_and_deleted() {
 
     let mut events = core.subscribe();
     core.delete_account().await.unwrap();
-    assert_eq!(events.recv().await.unwrap(), CoreEvent::AccountDeleted);
+    assert_eq!(next_event(&mut events).await, CoreEvent::AccountDeleted);
     assert_eq!(core.snapshot(), Snapshot::default());
     core.close().await.unwrap();
 
@@ -134,7 +146,7 @@ async fn the_account_key_stays_in_the_key_store() {
     let core = Core::start(same_options()).await.unwrap();
     let mut events = core.subscribe();
     let account = core.create_account("Emil Dahl").await.unwrap();
-    let created = events.recv().await.unwrap();
+    let created = next_event(&mut events).await;
 
     // MDK keeps the secret key in hex, under the account's public key.
     let entry = keyring_core::Entry::new(service, &account.public_key).unwrap();

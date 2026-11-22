@@ -20,7 +20,7 @@ const SETTINGS: { icon: IconName; label: string; screen?: Screen }[] = [
   { icon: "moon", label: "Appearance" },
   { icon: "chat", label: "Chats and storage" },
   { icon: "bell", label: "Notifications" },
-  { icon: "lock", label: "Privacy" },
+  { icon: "lock", label: "Privacy", screen: { name: "privacy" } },
   { icon: "help", label: "Help" },
   { icon: "personAdd", label: "Invite friends" },
 ];

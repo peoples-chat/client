@@ -71,11 +71,17 @@ impl Phone {
     }
 }
 
+/// The next event, skipping relay updates: they come whenever a connection opens or closes.
 pub async fn next_event(events: &mut broadcast::Receiver<CoreEvent>) -> CoreEvent {
-    tokio::time::timeout(WAIT, events.recv())
-        .await
-        .expect("no event in time")
-        .expect("the core stopped sending events")
+    loop {
+        let event = tokio::time::timeout(WAIT, events.recv())
+            .await
+            .expect("no event in time")
+            .expect("the core stopped sending events");
+        if !matches!(event, CoreEvent::RelaysChanged { .. }) {
+            return event;
+        }
+    }
 }
 
 pub async fn next_invitation(events: &mut broadcast::Receiver<CoreEvent>) -> Invitation {
