@@ -259,13 +259,18 @@ async fn a_message_that_comes_both_ways_shows_once() {
     let ids: Vec<String> = messages(&bea, &chat_id).into_iter().map(|m| m.id).collect();
     assert_eq!(ids, vec![sent.id.clone(), reply.id.clone()]);
 
-    // Also after a restart, when the history comes from MDK and the radio store together.
+    // Also after a restart, when the history comes from MDK and the radio store together. (MDK
+    // orders messages of the same second by id, so the order may differ.)
     bea.close().await.unwrap();
     let bea = bea_phone.start().await;
     let kept = messages(&bea, &chat_id);
-    let ids: Vec<&str> = kept.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, vec![sent.id.as_str(), reply.id.as_str()]);
-    assert_eq!(kept[0].transport, Transport::Radio);
+    let mut ids: Vec<&str> = kept.iter().map(|m| m.id.as_str()).collect();
+    ids.sort_unstable();
+    let mut expected = vec![sent.id.as_str(), reply.id.as_str()];
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
+    let radio = kept.iter().find(|m| m.id == sent.id).unwrap();
+    assert_eq!(radio.transport, Transport::Radio);
 
     ada.close().await.unwrap();
     bea.close().await.unwrap();
