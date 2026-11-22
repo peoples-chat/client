@@ -1,10 +1,11 @@
 //! The core as an interface sees it (#16): the JSON both sides agree on, and the account
-//! commands with their events, through MDK.
+//! commands with their events, through MDK. The account key stays in the key store (#17).
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nostr_relay_builder::MockRelay;
+use nostr_sdk::prelude::{Keys, ToBech32};
 use peoples_chat_core::interface::{CommandError, CoreEvent, Snapshot};
 use peoples_chat_core::{Core, MessagingOptions};
 use serde_json::Value;
@@ -118,6 +119,86 @@ async fn an_account_is_created_kept_across_a_restart_and_deleted() {
     let core = Core::start(same_options()).await.unwrap();
     assert_eq!(core.snapshot().account, None);
     core.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_account_key_stays_in_the_key_store() {
+    use_mock_keychain();
+    let relay = MockRelay::run().await.unwrap();
+    let relays = vec![relay.url().await.to_string()];
+    let data = tempfile::tempdir().unwrap();
+    let service = "chat.peoples.client.test-key";
+    let same_options = || options(data.path(), relays.clone(), service);
+
+    let core = Core::start(same_options()).await.unwrap();
+    let mut events = core.subscribe();
+    let account = core.create_account("Emil Dahl").await.unwrap();
+    let created = events.recv().await.unwrap();
+
+    // MDK keeps the secret key in hex, under the account's public key.
+    let entry = keyring_core::Entry::new(service, &account.public_key).unwrap();
+    let secret_hex = entry.get_password().unwrap();
+    let keys = Keys::parse(&secret_hex).unwrap();
+    assert_eq!(keys.public_key().to_hex(), account.public_key);
+    let nsec = keys.secret_key().to_bech32().unwrap();
+    let holds_key = |text: &[u8]| {
+        [secret_hex.as_bytes(), nsec.as_bytes()]
+            .iter()
+            .any(|key| text.windows(key.len()).any(|window| window == *key))
+    };
+
+    // Everything the web view receives, as JSON: command results, events and snapshots.
+    let mut sent = vec![
+        serde_json::to_string(&account).unwrap(),
+        serde_json::to_string(&created).unwrap(),
+        serde_json::to_string(&core.snapshot()).unwrap(),
+    ];
+    core.close().await.unwrap();
+
+    // MDK's plain-text key file is not in use: no file in the data folder holds the key.
+    let files = files_under(data.path());
+    assert!(!files.is_empty());
+    for file in &files {
+        assert!(
+            !holds_key(&std::fs::read(file).unwrap()),
+            "{} holds the account key",
+            file.display()
+        );
+    }
+
+    let core = Core::start(same_options()).await.unwrap();
+    sent.push(serde_json::to_string(&core.snapshot()).unwrap());
+    for json in &sent {
+        assert!(
+            !holds_key(json.as_bytes()),
+            "the account key reached the interface: {json}"
+        );
+    }
+
+    // Deleting the account removes the key.
+    core.delete_account().await.unwrap();
+    assert!(matches!(
+        entry.get_password(),
+        Err(keyring_core::Error::NoEntry)
+    ));
+    core.close().await.unwrap();
+}
+
+/// Every file in `dir` and its subfolders.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
