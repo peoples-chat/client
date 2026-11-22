@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use marmot_app::AppError;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
@@ -17,8 +18,10 @@ use crate::interface::{
 };
 use crate::invite;
 use crate::messaging::{
-    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, TextMessage,
+    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, RelayLink, RelayLinks,
+    TextMessage,
 };
+use crate::reach::Reachability;
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
@@ -35,8 +38,10 @@ struct Inner {
     events: broadcast::Sender<CoreEvent>,
     /// Commands that create or delete the account run one at a time.
     account_commands: tokio::sync::Mutex<()>,
-    /// Follow the account's chats, invitations and messages while there is an account.
+    /// Follow the account's chats, invitations, messages and relays while there is an account.
     watchers: Mutex<Vec<JoinHandle<()>>>,
+    /// Which chats can reach their relays (#43). Whoever holds both locks takes `state` first.
+    reach: Mutex<Reachability>,
 }
 
 impl Core {
@@ -69,6 +74,7 @@ impl Core {
                 events,
                 account_commands: tokio::sync::Mutex::new(()),
                 watchers: Mutex::new(Vec::new()),
+                reach: Mutex::new(Reachability::default()),
             }),
         };
         if let Some(account) = account {
@@ -153,6 +159,7 @@ impl Core {
 
         log::info!("account deleted");
         *self.state() = Snapshot::default();
+        *self.reach() = Reachability::default();
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
     }
@@ -201,6 +208,7 @@ impl Core {
             peer_hex: invite.public_key_hex,
             invitation: false,
             active: true,
+            relays: Vec::new(),
         };
         self.apply(&started, name, now_ms());
         self.chat(&started.id)
@@ -230,6 +238,7 @@ impl Core {
             peer_hex: invitation.from.public_key.clone(),
             invitation: false,
             active: true,
+            relays: Vec::new(),
         };
         self.apply(&accepted, invitation.from.name, invitation.received_at);
         self.chat(&invitation.id)
@@ -304,7 +313,7 @@ impl Core {
 
     /// Puts the account's chats and invitations into the snapshot, with their latest messages,
     /// and keeps them up to date. Chats whose contacts' names are known go in now; the rest
-    /// arrive as events once their names are.
+    /// arrive as events once their names are. Follows the relays too, for each chat's reach.
     async fn follow(&self, account_hex: &str) {
         // Messages first: a message that arrives while the chats are being read is then either
         // in a chat's history already or among the messages followed from here.
@@ -317,8 +326,21 @@ impl Core {
                 return;
             }
         };
+        // The relays before the chats, so that the chats start out with their reach. Without
+        // them, every chat keeps the internet.
+        let relays = match self.inner.messaging.follow_relays(account_hex).await {
+            Ok(relays) => {
+                *self.reach() = Reachability::new(&relays.current(), Instant::now());
+                Some(relays)
+            }
+            Err(error) => {
+                log::warn!("could not follow the relays: {error}");
+                None
+            }
+        };
         let mut unnamed = Vec::new();
         for chat in chats.current() {
+            self.reach().set_chat_relays(&chat.id, &chat.relays);
             match self.inner.messaging.known_name(&chat.peer_hex) {
                 Some(name) => {
                     let started = self.started_at(&chat.id);
@@ -347,8 +369,14 @@ impl Core {
                 core.apply_message(&message);
             }
         });
-        let previous =
-            std::mem::replace(&mut *self.watchers(), vec![chat_watcher, message_watcher]);
+        let mut watchers = vec![chat_watcher, message_watcher];
+        if let Some(relays) = relays {
+            watchers.push(tokio::spawn(watch_relays(
+                Arc::downgrade(&self.inner),
+                relays,
+            )));
+        }
+        let previous = std::mem::replace(&mut *self.watchers(), watchers);
         for watcher in previous {
             watcher.abort();
         }
@@ -362,6 +390,9 @@ impl Core {
 
     /// Brings one chat from MDK into the snapshot, first finding the contact's name if needed.
     async fn follow_chat(&self, chat: DirectChat) {
+        // The relays the chat goes through may decide its reach.
+        self.reach().set_chat_relays(&chat.id, &chat.relays);
+        self.refresh_reach(Instant::now());
         if self.reflects(&chat) {
             return;
         }
@@ -448,6 +479,7 @@ impl Core {
                 id: chat.id.clone(),
                 contact,
                 messages: self.history(&account_hex, &chat.id),
+                reach: self.reach().reach(&chat.id, Instant::now()),
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
@@ -501,6 +533,39 @@ impl Core {
             Some(_) => return,
         };
         self.emit(event);
+    }
+
+    /// Takes the relays' connections as they are now, and updates each chat's reach with them.
+    /// Returns when to look again.
+    fn relays_changed(&self, links: &[RelayLink]) -> Option<Instant> {
+        let now = Instant::now();
+        if self.reach().update(links, now) {
+            log::info!("relays are back after an outage");
+            // Waiting messages go now, not at their next retry. That can take a while, and the
+            // chats' reach shouldn't wait for it.
+            let core = self.clone();
+            tokio::spawn(async move { core.inner.messaging.connectivity_restored().await });
+        }
+        self.refresh_reach(now)
+    }
+
+    /// Sets each chat's reach as it is at `now`, and emits [`CoreEvent::ReachChanged`] for those
+    /// that changed. Returns when a closed connection next makes its relay count as gone.
+    fn refresh_reach(&self, now: Instant) -> Option<Instant> {
+        let mut state = self.state();
+        let reachability = self.reach();
+        for chat in &mut state.chats {
+            let reach = reachability.reach(&chat.id, now);
+            if chat.reach != reach {
+                chat.reach = reach;
+                log::info!("a chat's reach is now {reach:?}");
+                self.emit(CoreEvent::ReachChanged {
+                    chat_id: chat.id.clone(),
+                    reach,
+                });
+            }
+        }
+        reachability.next_change(now)
     }
 
     /// The latest messages of a chat or invitation.
@@ -570,6 +635,13 @@ impl Core {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn reach(&self) -> MutexGuard<'_, Reachability> {
+        self.inner
+            .reach
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn emit(&self, event: CoreEvent) {
         // Having no listener is fine: the core runs without a web view.
         let _ = self.inner.events.send(event);
@@ -578,6 +650,32 @@ impl Core {
 
 fn upgrade(core: &Weak<Inner>) -> Option<Core> {
     core.upgrade().map(|inner| Core { inner })
+}
+
+/// Follows the account's relays, and updates each chat's reach as relays come and go and as
+/// closed connections run out their time.
+async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
+    let mut next = upgrade(&core).and_then(|core| core.refresh_reach(Instant::now()));
+    loop {
+        let time_is_up = async {
+            match next {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        let changed = tokio::select! {
+            links = relays.next() => match links {
+                Some(links) => Some(links),
+                None => return,
+            },
+            () = time_is_up => None,
+        };
+        let Some(core) = upgrade(&core) else { return };
+        next = match changed {
+            Some(links) => core.relays_changed(&links),
+            None => core.refresh_reach(Instant::now()),
+        };
+    }
 }
 
 /// The account as an interface sees it. The invite link carries the relays new accounts

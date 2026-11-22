@@ -28,7 +28,8 @@
             "transport": "radio",
             "delivery": "confirmed"
           }
-        ]
+        ],
+        "reach": "radio"
       }
     ],
     "invitations": [
@@ -60,7 +61,8 @@
           "publicKey": "a89ecb62193920de288123ea3d5e5f556118c4d180cbffc672804f3cd4689299",
           "name": "Jonas Kjær"
         },
-        "messages": []
+        "messages": [],
+        "reach": "internet"
       }
     },
     {
@@ -80,6 +82,11 @@
       "chatId": "chat-2",
       "messageId": "msg-4",
       "delivery": "sent"
+    },
+    {
+      "type": "reachChanged",
+      "chatId": "chat-2",
+      "reach": "unreachable"
     },
     {
       "type": "invitationReceived",

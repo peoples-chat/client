@@ -4,7 +4,7 @@ An everyday encrypted messenger that keeps working over LoRa radio when the inte
 identity and one contact list for both.
 
 **Status:** proof of concept. The app creates an account, adds contacts by QR code or invite link, and chats over
-Nostr relays. The radio is still to come.
+Nostr relays. The core notices when the relays can't be reached. The radio is still to come.
 Nothing here is ready for real use. No licence has been chosen yet, so all rights are reserved for now.
 
 Work is tracked in the issues of this repository.

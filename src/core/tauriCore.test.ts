@@ -121,6 +121,7 @@ describe("the JSON shared with the Rust core", () => {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
       messageAdded: (next) => expect(next.chats[1].messages[0].delivery).toBe("waiting"),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
+      reachChanged: (next) => expect(next.chats.map((c) => c.reach)).toEqual(["radio", "unreachable"]),
       invitationReceived: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1", "inv-2"]),
       invitationRemoved: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1"]),
       accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [] }),

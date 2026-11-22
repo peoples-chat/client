@@ -75,6 +75,19 @@ pub struct Message {
     pub delivery: Option<DeliveryState>,
 }
 
+/// How a chat's messages can travel now (#43).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Reach {
+    /// At least one of the chat's relays is connected.
+    #[default]
+    Internet,
+    /// No relay is reachable, but the contact's radio has been heard (#44).
+    Radio,
+    /// Neither path is available. Messages wait.
+    Unreachable,
+}
+
 /// A direct chat with one contact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +96,8 @@ pub struct Chat {
     pub contact: Contact,
     /// Oldest first.
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub reach: Reach,
 }
 
 /// An invitation to a direct chat from someone who is not a contact yet.
@@ -140,6 +155,11 @@ pub enum CoreEvent {
         chat_id: String,
         message_id: String,
         delivery: DeliveryState,
+    },
+    /// How a chat's messages can travel changed: its relays went away or came back.
+    ReachChanged {
+        chat_id: String,
+        reach: Reach,
     },
 }
 

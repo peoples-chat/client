@@ -10,12 +10,14 @@ pub mod interface;
 mod invite;
 mod messaging;
 pub mod radio;
+mod reach;
 
 pub use app::Core;
 pub use messaging::{
     DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
-    MessagingOptions, NewAccount, TextMessage, TextMessages,
+    MessagingOptions, NewAccount, RelayLink, RelayLinks, TextMessage, TextMessages,
 };
+pub use reach::DOWN_AFTER;
 
 /// Version of the core, shown by the shell to prove that the core is linked in.
 pub fn version() -> &'static str {

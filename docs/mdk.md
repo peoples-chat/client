@@ -26,6 +26,8 @@ lower `marmot-session` crate.
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
 | `follow_messages` | `subscribe_timeline_messages` |
+| `follow_relays` | `subscribe_relay_liveness` |
+| `connectivity_restored` | `notify_connectivity_restored` |
 | `close` | `shutdown_and_close` |
 
 Invite links (`core/src/invite.rs`) use `nprofile_for_account_id`, `account_id_hex_from_ref` and `is_nostr_secret`, and
@@ -208,7 +210,8 @@ Text in a direct chat (#20). The interface's side is in [core-interface.md](core
 - Unreachable relays are tried again every 5 seconds. When it is unclear whether a relay took a message, MDK backs
   off from 30 seconds to an hour.
 - MDK resends the same signed bytes, so a message never doubles, and its queue survives a restart.
-- `notify_connectivity_restored` cuts the backoff short. The core doesn't call it yet; #43 watches relay reachability.
+- `notify_connectivity_restored` cuts the backoff short. The core calls it when a relay comes back after an outage
+  ([Relay reachability](#relay-reachability)).
 
 **Delivery.** MDK's timeline record has no delivery field. The core reads it as MDK's chat list does:
 
@@ -230,6 +233,47 @@ given, MDK orders by MLS epoch, then by time and id. Its times are whole seconds
 
 **Messages before accepting.** MDK stores and shows messages that arrive in a chat whose invitation is still pending,
 so the core adds them to the invitation.
+
+## Relay reachability
+
+Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
+
+**What MDK reports.** `subscribe_relay_liveness` gives the account's connection to each of its relays: connected,
+connecting, offline or not tried yet.
+
+- It covers the relays the account was set up with and the ones its relay lists name.
+- MDK sees a connection close at once, and tries it again every 5 seconds. It pins nostr-sdk's retry interval, which
+  would otherwise grow to a minute.
+- A connection that goes silent without closing, as when a phone drops off Wi-Fi without the system closing its
+  sockets, is noticed only when nostr-sdk's ping goes unanswered: after 55 to 110 seconds.
+
+**What the core makes of it** (`core/src/reach.rs`):
+
+- A relay counts as gone once its connection has stayed closed for 10 seconds (`DOWN_AFTER`), and as back as soon as
+  it connects. Connecting counts as closed. A drop that MDK's next attempt mends doesn't show.
+- A chat is `internet` while any of its relays is up, and `unreachable` when none is. `radio` comes with #44.
+- A chat goes by the relays its group record names (`nostr_routing.relays`), where they are among the account's.
+  Otherwise it goes by all of the account's relays, since MDK reports only those. That is the case for a chat that
+  someone else's app set up on relays of its own.
+- When a relay comes back after it counted as gone, the core calls `notify_connectivity_restored`. Waiting messages
+  then go out at once rather than at their next retry.
+- The phone's online flag plays no part: a phone can be online while no relay answers, behind a captive portal for
+  example.
+
+**Timing.** Blocking the relays makes a chat `unreachable` 10 seconds after MDK sees the connections close. Unblocking
+makes it `internet` again with MDK's next attempt, within 5 seconds.
+
+**After an outage.** The sender's waiting messages go out within a second of the relays coming back. The other phone
+sometimes shows them much later. In the tests it got them after 1 to 20 seconds in most runs, but in some not within 70
+seconds, and in one after 7.6 minutes.
+
+- On reconnecting, MDK asks the relay again for the chat's events. Events in that reply that it hasn't seen are held
+  until its history recovery proves that nothing older is missing (the replay fence, see [Tests](#tests)).
+- That proof needs the relay's NIP-11 limits. MDK caches a failed fetch of them as unknown for 5 minutes
+  (`UNKNOWN_FRESH_FOR` in `marmot-app/src/relay_caps.rs`), and a fetch tried during the outage fails. With the test
+  relay still answering NIP-11 requests while blocked, the message arrived within 5 seconds every time.
+- Whether it shows depends on timing: on whether the sender publishes before the other phone has asked again.
+- MDK has no public call that clears the cache. What to do about it is #78.
 
 ## Tests
 
@@ -266,8 +310,26 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - a message sent before the invitation is accepted comes with it;
 - the error messages.
 
+`core/tests/reachability.rs` blocks and unblocks the two phones' relay (#43):
+
+- a one-second drop changes nothing;
+- blocked, the chat becomes `unreachable` on both phones 10 to 15 seconds later, and a message written then waits;
+- unblocked, the chat is back within 10 seconds, and the waiting message goes out. The test doesn't wait for it to
+  arrive, which can take minutes ([After an outage](#relay-reachability));
+- an app that starts without its relay marks its chats `unreachable` after 10 seconds.
+
+The tracker itself has unit tests in `core/src/reach.rs`.
+
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.
+
+Their relay (`core/tests/support/relay.rs`) describes itself the way public relays do. A relay from
+`nostr_relay_builder` serves no NIP-11 information document. Without one, MDK can't tell whether it has seen a group's
+whole history, and holds back the group's messages stored before the member joined, for about 15 minutes. So the
+tests reach the relay through a front door that answers NIP-11 requests with the filter limit the relay enforces, as
+MDK's own tests do. The door can be shut: it then cuts every connection and refuses new ones.
+`core/examples/local_relay.rs` runs the same relay on the Mac for apps on phones, and `block` and `unblock` shut and
+open its door.
 
 ## Phones
 
