@@ -11,6 +11,8 @@ publish.workspace = true
 marmot-app = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
 marmot-account = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
 cgka-traits = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
+# The radio transport interface (src/radio) is a trait object, so its async methods are boxed.
+async-trait = "0.1"
 # Chat ids are MLS group ids in hex.
 hex = "0.4"
 log = "0.4"
@@ -22,6 +24,15 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 
+# MeshCore's companion protocol (#60; MIT). On desktops it reaches radios over USB serial, which
+# brings in the serialport crate (MPL-2.0). Phones build it without a link of its own: they will
+# reach radios over Bluetooth (#23). Notes: docs/radio.md.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+meshcore-rs = { version = "=0.2.0", default-features = false, features = ["serial"] }
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+meshcore-rs = { version = "=0.2.0", default-features = false }
+
 [dev-dependencies]
 # Replaces the OS keychain in tests.
 keyring-core = "1"
@@ -32,3 +43,7 @@ nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc0
 serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+
+# Lists serial ports in the radio example. meshcore-rs uses the same crate.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
+tokio-serial = { version = "5.5", default-features = false }
