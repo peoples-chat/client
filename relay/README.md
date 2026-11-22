@@ -4,6 +4,9 @@ The relay the project runs, as one of the app's three default relays (#90). Its 
 in #90: it takes only what Marmot messaging needs, keeps no network addresses, and runs on one small Hetzner server.
 This folder holds what the spec's deployment steps write by hand, as files, and a script that installs them.
 
+It runs at `wss://relay.peoples.chat` since 22 November 2026, on a Hetzner server in Helsinki: 1 vCPU, 1 GB of memory,
+Ubuntu 26.04. It isn't one of the app's defaults yet ([Making it a default](#making-it-a-default)).
+
 | File | Installed as | What it does |
 | --- | --- | --- |
 | `strfry.conf` | `/etc/strfry.conf` | strfry: 2 MiB events, NIP-42, the write policy, the operator in NIP-11 |
@@ -11,12 +14,12 @@ This folder holds what the spec's deployment steps write by hand, as files, and 
 | `strfry.service` | `/etc/systemd/system/strfry.service` | Runs strfry as its own user, with a read-only system |
 | `Caddyfile` | `/etc/caddy/Caddyfile` | TLS, and keeps `/metrics` private. Writes no access log |
 | `strfry-retention` | `/etc/cron.daily/strfry-retention` | Deletes group messages and gift wraps after 90 days |
-| `setup.sh` | | Installs all of it on a fresh Ubuntu 24.04 server |
+| `setup.sh` | | Installs all of it on a fresh Ubuntu server: 24.04 and 26.04 are tested |
 
 ## Setting it up
 
-1. **Create the server** (the spec's step 1): Hetzner Cloud, Helsinki, Ubuntu 24.04, CX23 or CAX11 (Arm), with
-   backups and a firewall that lets in TCP 22, 80 and 443.
+1. **Create the server** (the spec's step 1): Hetzner Cloud in Helsinki, with backups and a firewall that lets in
+   TCP 22, 80 and 443. 1 GB of memory is enough to run the relay.
 2. **Point the host name at it:** `A` and `AAAA` records. Wait until `dig +short <host>` answers, because Caddy needs
    them for the certificate.
 3. **Install:**
@@ -26,8 +29,9 @@ This folder holds what the spec's deployment steps write by hand, as files, and 
    ssh root@<host> 'sh /root/relay/setup.sh <host>'
    ```
 
-   It builds strfry 1.1.3 from source, which takes several minutes and about 2.5 GB of memory. Running it again
-   updates the configuration and restarts strfry.
+   It builds strfry 1.1.3 from source, which needs about 2.5 GB of memory. A server with less gets a 3 GB swap
+   file, which stays. On the project's server the build took about 30 minutes. Running the script again updates the
+   configuration and restarts strfry.
 4. **Check it** from this repository, against the relay alone:
 
    ```sh
@@ -50,9 +54,9 @@ It works on any relay. Check 2 passes only on one that restricts what it takes.
 
 ## What testing changed
 
-The files were tested on 22 November 2026: `setup.sh` ran in an Ubuntu 24.04 container with systemd, on Arm. All five
-checks passed through Caddy against the installed service, on plain HTTP since the test had no certificate. Over HTTPS,
-Caddy served the relay's NIP-11 page and answered 404 for `/metrics`. These parts differ from the spec:
+The files were tested on 22 November 2026, first in an Ubuntu 24.04 container with systemd, on Arm, then on the
+project's server. There, all five checks passed against `wss://relay.peoples.chat`. Caddy got a Let's Encrypt
+certificate by itself and answers 404 for `/metrics`. These parts differ from the spec:
 
 - **Kind 3 is accepted.** MDK publishes a follow list (kind 3) with the profile when it sets an account up. Without
   it the app can't publish the account ("Could not publish the account").
@@ -63,7 +67,8 @@ Caddy served the relay's NIP-11 page and answered 404 for `/metrics`. These part
   - With master and those settings, invitations didn't arrive within a minute, although strfry logged that MDK
     authenticated. strfry asks for NIP-42 only as it closes a request with `auth-required`, and nothing was served
     after that, not even to a client of our own that authenticated as the recipient. Why is not settled.
-- **The build needs `-j2`:** with `-j4` in 3.7 GB of memory the compiler was killed.
+- **The build runs one job per CPU,** with a swap file on a small server. With `-j4` in 3.7 GB of memory the compiler
+  was killed.
 - **Caddy from Ubuntu's archive is 2.6.2.** It takes the Caddyfile and gets certificates by itself; newer releases
   come from Caddy's own package repository.
 - **`info` has no terms or privacy links yet,** and `contact` and `pubkey` are empty until the open questions below

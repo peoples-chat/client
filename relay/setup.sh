@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sets up the peoples.chat relay on a fresh Ubuntu 24.04 server (#90): the system, strfry, its
+# Sets up the peoples.chat relay on a fresh Ubuntu server (#90): the system, strfry, its
 # write policy, Caddy for TLS, and the retention job. Run it as root from this folder on the
 # server, with the relay's host name, whose DNS records already point at the server:
 #
@@ -25,7 +25,18 @@ mkdir -p /etc/systemd/journald.conf.d
 printf '[Journal]\nMaxRetentionSec=7day\n' > /etc/systemd/journald.conf.d/retention.conf
 systemctl restart systemd-journald
 
-# strfry, built from source. The build needs about 2.5 GB of memory, hence -j2.
+# Building strfry needs about 2.5 GB of memory. A smaller server gets a swap file, which stays
+# as a margin for the relay.
+MEMORY_MB=$(awk '/MemTotal/ { print int($2 / 1024) }' /proc/meminfo)
+if [ "$MEMORY_MB" -lt 3000 ] && ! swapon --show | grep -q .; then
+  fallocate -l 3G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# strfry, built from source, one job per CPU.
 if [ ! -d /opt/strfry-src ]; then
   git clone https://github.com/hoytech/strfry /opt/strfry-src
 fi
@@ -34,7 +45,7 @@ git fetch --tags
 git checkout "$STRFRY_VERSION"
 git submodule update --init
 make setup-golpe
-make -j2
+make -j"$(nproc)"
 install -m 755 strfry /usr/local/bin/strfry
 cd "$HERE"
 
