@@ -14,7 +14,11 @@ export function OpenedLinks() {
   latest.current = { navigation, hasAccount: account !== null };
 
   useEffect(() => {
+    // An effect that has ended opens nothing. Without this, development builds open the link that
+    // started the app twice, since React's StrictMode runs the effect twice.
+    let active = true;
     function open(link: string) {
+      if (!active) return;
       const { navigation, hasAccount } = latest.current;
       const screen = hasAccount ? { name: "newChat" as const, link } : { name: "invitedStart" as const, link };
       if (navigation.current.name === screen.name) navigation.replace(screen);
@@ -22,7 +26,6 @@ export function OpenedLinks() {
     }
 
     let stop: (() => void) | null = null;
-    let active = true;
     followOpenedLinks(open).then(
       (unlisten) => {
         if (active) stop = unlisten;
