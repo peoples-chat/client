@@ -10,6 +10,9 @@ Nothing in the app uses the radio yet. Pairing comes with #24, and radio message
 `core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
 including the rules for epochs and nonces.
 
+**The format.** [radio-format-v0.md](radio-format-v0.md) describes a chat message in one packet (#38), with test
+vectors from `scripts/radio_vectors.py`.
+
 ## The interface
 
 `Radio` in `core/src/radio/mod.rs`:

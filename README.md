@@ -19,7 +19,7 @@ Work is tracked in the issues of this repository.
 | `src-tauri/icons/source/` | The logo as app icon sources. `pnpm tauri icon src-tauri/icons/source/manifest.json` regenerates every icon, including those in the generated projects. |
 | `src/` | Web interface (React, TypeScript, Vite). It holds no protocol logic. |
 | `src/core/` | The interface's side of the boundary to the core: commands, events, the bridge to the real core and a mock core with demo data. |
-| `docs/` | The interface between core and web view ([docs/core-interface.md](docs/core-interface.md)), MDK in the core ([docs/mdk.md](docs/mdk.md)), radio transports ([docs/radio.md](docs/radio.md)) and findings from spikes (`docs/spikes/`). |
+| `docs/` | The interface between core and web view ([docs/core-interface.md](docs/core-interface.md)), MDK in the core ([docs/mdk.md](docs/mdk.md)), radio transports ([docs/radio.md](docs/radio.md)), the radio message format ([docs/radio-format-v0.md](docs/radio-format-v0.md)) and findings from spikes (`docs/spikes/`). |
 | `.github/workflows/ci.yml` | CI: format, clippy and tests for the core, type check, tests and build check for the app. |
 
 Keep the interface thin: it shows state and sends commands, and the core does the rest.
