@@ -4,7 +4,7 @@ An everyday encrypted messenger that keeps working over LoRa radio when the inte
 identity and one contact list for both.
 
 **Status:** proof of concept. By default the interface runs on a mock core with demo data. The real core can create
-and delete an account so far.
+and delete an account and add contacts so far.
 Nothing here is ready for real use. No licence has been chosen yet, so all rights are reserved for now.
 
 Work is tracked in the issues of this repository.
@@ -75,8 +75,8 @@ together.
 quickest way to work on screens. Anything the app cannot do yet is disabled.
 
 The app uses the mock core too, unless you start it with `VITE_CORE=rust`, for example
-`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account so far, and it publishes new accounts
-to public relays. Relays, keys and the rest are in
+`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account and add contacts so far, and it
+publishes new accounts to public relays. Messages come next (#20). Relays, keys and the rest are in
 [docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
 
 The app's product name is `peopleschat`, without the dot, because `pnpm tauri ios build` cannot find the built app

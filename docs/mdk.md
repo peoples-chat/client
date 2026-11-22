@@ -18,7 +18,15 @@ lower `marmot-session` crate.
 | `accounts()` | `AccountManager::managed_accounts`, `display_name_for_account_id` |
 | `delete_account` | `sign_out_and_wipe` |
 | `wait_until_published` | polls `account_setup_readiness` until `NetworkReady` |
+| `start_direct_chat` | `Directory::fetch_account_relay_list_status_for_account_id` (relay hints), `start_direct_conversation` |
+| `accept_direct_chat` | `accept_group_invite` |
+| `follow_direct_chats` | `subscribe_chats` |
+| `known_name`, `contact_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
+| `chat_started_at` | `chat_list_row` |
 | `close` | `shutdown_and_close` |
+
+Invite links (`core/src/invite.rs`) use `nprofile_for_account_id`, `account_id_hex_from_ref` and `is_nostr_secret`, and
+read relay hints with the `nostr` crate that MDK pins.
 
 `Core` (`core/src/app.rs`) builds the interface's commands and events on it; see
 [core-interface.md](core-interface.md).
@@ -119,6 +127,58 @@ White Noise's discovery relays are `purplepag.es`, `relay.vertexlab.io`, `nos.lo
 `--secret-store file` keeps `wn` out of the keychain. `--relay` is a hidden option. Without it, `wn` asks no
 discovery relay unless its daemon is running.
 
+## Contacts and invitations
+
+Two people become contacts through a direct chat (#19). The interface's side is in
+[core-interface.md](core-interface.md#contacts-and-invitations).
+
+**The invite link** is `nostr:nprofile1…` (NIP-21): the public key and up to three of our relays as hints. The QR
+code encodes the same string. On the Profile screen it is a version 9 QR code, 53 modules across.
+
+What White Noise does, read from its current iOS and Android apps:
+
+- **Its own links** are `marmot://profile/<npub>`. They carry no relay hints, and the Marmot spec defines no link
+  format.
+- **Its scanners** on both phones also read `nprofile1…` and `nostr:nprofile1…`, so they read our QR code. They drop
+  the hints.
+- **Pasting** an `nprofile` into its Android app's New chat field is refused; scanning works.
+- **`marmot://profile/nprofile1…`** is refused by its Android app, so we don't use that form.
+- **Neither app registers `nostr:`** as a link scheme; both register `marmot:` and `whitenoise:`.
+
+We read White Noise's links in turn. Checking with White Noise itself is #22.
+
+**Starting a chat.** `start_direct_conversation` does the work:
+
+- It looks up the other person's relay lists and KeyPackage on our relays, then on the relays their list names.
+  Relay lists that the invite link's hints lead to are fetched first and stored, and the lookup uses them too. The
+  lookup gives up after 50 seconds.
+- It creates an unnamed group of the two accounts, both admins, on our relays.
+- It sends the MLS Welcome as a gift wrap (kind 1059) to the person's inbox relays (kind 10050), in the background
+  after it returns.
+- It returns the existing direct chat with that person instead, if there is one, including an invitation not yet
+  accepted. Two people who start chats with each other at the same moment can still end up with two.
+
+**Receiving.**
+
+- MDK's running runtime follows the account's inbox relays, and it also picks up Welcomes that arrived while the app
+  was closed.
+- A Welcome becomes a group with `pending_confirmation` set and the inviter in `welcomer_account_id_hex`. The core
+  shows that as an invitation.
+- `subscribe_chats` delivers it without polling: a snapshot, then each changed group.
+
+**Accepting** (`accept_group_invite`) only clears that flag on this device; the inviter is told nothing.
+
+**Names.** MDK fetches no profile for the other person by itself. The core fetches it once, with a timeout, and MDK
+keeps it, so it is there after a restart. Without one, the name is `default_profile_pseudonym`, the same pseudonym
+White Noise shows.
+
+**Not done yet:**
+
+- **Declining or blocking an invitation.** `decline_group_invite` leaves the group, which can't be undone.
+- **Groups.** The core ignores groups that aren't direct chats, for example a named group a White Noise user creates.
+- **Late names.** A name learned after a chat appears reaches the interface only after a restart.
+- **Opening a tapped link.** The app doesn't register a link scheme, so a link has to be pasted into New chat.
+
 ## Tests
 
 `core/tests/relay_round_trip.rs` creates an account against a relay running inside the test
@@ -135,6 +195,15 @@ account's relay lists and fetches its KeyPackage, which is what it needs to invi
   - the key appears in no command result, event or snapshot;
   - no file in the data folder holds it;
   - deleting the account removes it.
+
+`core/tests/contacts.rs` runs two `Core`s, as two phones, against one relay (#19):
+
+- one adds the other from their invite link, and the chat opens with the other's name;
+- the other receives the invitation with the inviter's name, accepts it, and gets the same chat;
+- adding again returns that chat, and both keep it, with names, across a restart;
+- the commands' error messages.
+
+The link parsing has unit tests in `core/src/invite.rs`, including White Noise's link shapes.
 
 ## Phones
 
