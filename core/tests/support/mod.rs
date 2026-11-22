@@ -4,6 +4,8 @@
 // Each test file uses its own part of this.
 #![allow(dead_code)]
 
+mod relay;
+
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,10 +14,10 @@ use peoples_chat_core::{Core, MessagingOptions};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
-/// How long a test waits for the relay and the other core. Locally things take well under a
-/// second, but when a relay's answer is unclear, MDK sends again after 30 seconds and then
-/// longer, and a slow CI runner once took more than a minute.
-pub const WAIT: Duration = Duration::from_secs(180);
+pub use relay::TestRelay;
+
+/// How long a test waits for the relay and the other core. Each step takes well under a second.
+pub const WAIT: Duration = Duration::from_secs(60);
 
 /// Lets one test with cores run at a time. Several MDK runtimes in one process slow each other
 /// down: three such tests took 31 s together and 11 s one after another. The app runs one.

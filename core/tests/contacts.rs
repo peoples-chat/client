@@ -4,16 +4,15 @@
 
 mod support;
 
-use nostr_relay_builder::MockRelay;
 use nostr_sdk::prelude::{Keys, ToBech32};
 use peoples_chat_core::interface::CoreEvent;
-use support::{Phone, WAIT, next_event, next_invitation, now_ms};
+use support::{Phone, TestRelay, WAIT, next_event, next_invitation, now_ms};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_people_become_contacts_from_an_invite_link() {
     let _turn = support::take_turn().await;
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
+    let relay = TestRelay::start().await;
+    let url = relay.url();
     let ada_phone = Phone::new("ada", &url);
     let bea_phone = Phone::new("bea", &url);
 
@@ -107,8 +106,8 @@ async fn two_people_become_contacts_from_an_invite_link() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn adding_a_contact_says_what_is_wrong() {
     let _turn = support::take_turn().await;
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
+    let relay = TestRelay::start().await;
+    let url = relay.url();
     let phone = Phone::new("contact-errors", &url);
     let core = phone.start().await;
 
