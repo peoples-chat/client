@@ -33,9 +33,12 @@ pub fn run() {
             .build(),
     );
 
-    // Scanning QR codes with the camera. The plugin exists for iOS and Android only.
+    // Scanning QR codes with the camera, and the system share sheet. Both plugins exist for iOS
+    // and Android only.
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    let builder = builder
+        .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(tauri_plugin_share_sheet::init());
 
     builder
         .setup(|app| {
