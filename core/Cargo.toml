@@ -22,4 +22,4 @@ nostr-relay-builder = "0.44"
 # Reads the published events back. The same fork and revision MDK pins.
 nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589" }
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }

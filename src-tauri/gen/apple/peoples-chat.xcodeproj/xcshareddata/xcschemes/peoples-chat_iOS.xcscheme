@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "F690F6723236CCA0106B243E"
-               BuildableName = "peoples.chat.app"
+               BuildableName = "peopleschat.app"
                BlueprintName = "peoples-chat_iOS"
                ReferencedContainer = "container:peoples-chat.xcodeproj">
             </BuildableReference>
@@ -32,7 +32,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F690F6723236CCA0106B243E"
-            BuildableName = "peoples.chat.app"
+            BuildableName = "peopleschat.app"
             BlueprintName = "peoples-chat_iOS"
             ReferencedContainer = "container:peoples-chat.xcodeproj">
          </BuildableReference>
@@ -67,7 +67,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F690F6723236CCA0106B243E"
-            BuildableName = "peoples.chat.app"
+            BuildableName = "peopleschat.app"
             BlueprintName = "peoples-chat_iOS"
             ReferencedContainer = "container:peoples-chat.xcodeproj">
          </BuildableReference>
@@ -96,7 +96,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F690F6723236CCA0106B243E"
-            BuildableName = "peoples.chat.app"
+            BuildableName = "peopleschat.app"
             BlueprintName = "peoples-chat_iOS"
             ReferencedContainer = "container:peoples-chat.xcodeproj">
          </BuildableReference>

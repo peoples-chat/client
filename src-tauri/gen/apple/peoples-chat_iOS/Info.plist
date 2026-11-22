@@ -42,5 +42,7 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>peoples.chat uses the camera to scan the QR code of the person you want to chat with.</string>
+	<key>CFBundleDisplayName</key>
+	<string>peoples.chat</string>
 </dict>
 </plist>

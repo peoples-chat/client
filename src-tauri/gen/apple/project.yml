@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: peoples.chat
+      PRODUCT_NAME: peopleschat
       PRODUCT_BUNDLE_IDENTIFIER: chat.peoples.client
 targetTemplates:
   app:

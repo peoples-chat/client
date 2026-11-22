@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The name under the app icon. The product name is "peopleschat", without the dot, because
+	     `tauri ios build` cannot find the built app when the product name contains a dot. -->
+	<key>CFBundleDisplayName</key>
+	<string>peoples.chat</string>
 	<key>NSCameraUsageDescription</key>
 	<string>peoples.chat uses the camera to scan the QR code of the person you want to chat with.</string>
 </dict>

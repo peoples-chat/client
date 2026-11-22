@@ -6,3 +6,7 @@ ODIN = { value = ".tools/odin/odin", relative = true }
 # Unoptimized OpenMLS, inside MDK, can overflow the default 2 MiB thread stack. MDK runs its
 # tests and debug binaries with 4 MiB; so do we.
 RUST_MIN_STACK = "4194304"
+
+# Android API level that MDK's Markdown parser builds for (it defaults to 26). Keep it equal to
+# minSdk in src-tauri/gen/android/app/build.gradle.kts, so no part of the app needs a newer Android.
+ANDROID_API = "24"
