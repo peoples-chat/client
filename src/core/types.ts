@@ -78,7 +78,8 @@ export interface Snapshot {
 
 /**
  * Changes pushed by the core. `messageAdded` covers both received messages and the user's own
- * sent messages, so the interface has one path for adding a message to a chat.
+ * sent messages, so the interface has one path for adding a message to a chat. Its `chatId` can
+ * also be an invitation's id: messages that arrive before the user accepts.
  */
 export type CoreEvent =
   | { type: "accountCreated"; account: Account }
@@ -111,6 +112,7 @@ export interface Core {
   addContact(inviteLink: string): Promise<Chat>;
   /** Accepts an invitation. The chat it opens has the invitation's id. */
   acceptInvitation(invitationId: string): Promise<Chat>;
+  /** Sends text. The message is `waiting` until a relay has acknowledged it, then `sent`. */
   sendMessage(chatId: string, text: string): Promise<Message>;
 }
 

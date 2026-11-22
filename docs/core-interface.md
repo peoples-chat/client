@@ -48,10 +48,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
 | `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
-| `sendMessage(chatId, text)` | | `Message` | `messageAdded`, then `deliveryChanged` | #20 |
+| `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
-
-Until a command is done, the interface's bridge refuses it with "… is not available yet."
 
 ## Events
 
@@ -62,8 +60,8 @@ Until a command is done, the interface's bridge refuses it with "… is not avai
 | `chatAdded` | `chat` | A direct chat starts: the user added a contact or accepted an invitation | Done (#19) |
 | `invitationReceived` | `invitation` | Someone who is not a contact invites the user | Done (#19) |
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
-| `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one | #20 |
-| `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | #20 |
+| `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
+| `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -78,7 +76,8 @@ Until a command is done, the interface's bridge refuses it with "… is not avai
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 
-- A message's `id` is stable; the core drops duplicates by it after an outage.
+- A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
+  an outage.
 - `delivery` is set on outgoing messages only:
   - `waiting`: not sent yet, for example because there is no path.
   - `sent`: a relay acknowledged it.
@@ -131,6 +130,30 @@ mistake.
 - group chats: the core shows direct chats only;
 - opening an invite link tapped in another app. The link has to be pasted into New chat.
 
+## Messages
+
+**Sending** (`sendMessage`):
+
+- The core stores the message before the command returns, and `messageAdded` follows at once.
+- The message is `waiting` until a relay acknowledges it; `deliveryChanged` then makes it `sent`.
+- While no relay can be reached, the core keeps the message and tries again, also after the app restarts.
+- Sending the same text twice within a second makes two messages; the second goes out a second later.
+- It refuses empty text ("Write a message first.") and an unknown chat ("This chat no longer exists.").
+
+**Receiving.** Messages arrive while the app runs, and ones sent while it was closed arrive when it starts. A message
+that comes before the user accepts an invitation is added to the invitation: `messageAdded` with the invitation's id.
+
+**History.**
+
+- The snapshot holds each chat's latest 200 messages, oldest first. Older ones aren't paged in yet.
+- `sentAt` is the sender's clock, in whole seconds. After a restart, messages sent within the same second can come back
+  in another order.
+
+**Not built yet:**
+
+- a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
+- editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
+
 ## Planned: radio and transport
 
 These shapes are sketches. The issues settle them together with their screens.
@@ -143,13 +166,13 @@ These shapes are sketches. The issues settle them together with their screens.
 
 ## Running the app with the real core
 
-The interface uses the mock with demo data until the real core covers the whole flow (#20). So far the real core
-creates and deletes the account, and two apps can become contacts (#19). Sending messages comes with #20.
+The app uses the real core since it covers the whole flow (#20): creating the account, adding contacts and chatting.
 
-**Turning it on**
+**The mock**
 
-- Start any app command with `VITE_CORE=rust`, for example `VITE_CORE=rust pnpm tauri dev`. This works the same for
-  `pnpm tauri ios dev` and `pnpm tauri android dev`.
+- The browser preview (`pnpm dev`) always uses the mock with demo data.
+- To see the demo data in the app, start it with `VITE_CORE=mock`, for example `VITE_CORE=mock pnpm tauri dev`. This
+  works the same for `pnpm tauri ios dev` and `pnpm tauri android dev`.
 - Settings says "demo data" only while the mock is in use.
 
 **Relays**

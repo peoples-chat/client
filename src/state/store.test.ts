@@ -39,6 +39,17 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "deliveryChanged", chatId: "a", messageId: "m2", delivery: "sent" })).toBe(next);
   });
 
+  it("adds a message to the invitation with that id, before it is accepted", () => {
+    const invitation = { id: "i1", from: { publicKey: "k", name: "Karen" }, receivedAt: 5, messages: [] };
+    const state = { ...ready([chat("a")]), invitations: [invitation] };
+    const incoming = message("m1", 6, { direction: "in", delivery: undefined });
+    const once = applyEvent(state, { type: "messageAdded", chatId: "i1", message: incoming });
+
+    expect(once.invitations[0].messages).toEqual([incoming]);
+    expect(once.chats).toBe(state.chats);
+    expect(applyEvent(once, { type: "messageAdded", chatId: "i1", message: incoming })).toBe(once);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);

@@ -3,8 +3,8 @@
 An everyday encrypted messenger that keeps working over LoRa radio when the internet is gone, with one
 identity and one contact list for both.
 
-**Status:** proof of concept. By default the interface runs on a mock core with demo data. The real core can create
-and delete an account and add contacts so far.
+**Status:** proof of concept. The app creates an account, adds contacts by QR code or invite link, and chats over
+Nostr relays. The radio is still to come.
 Nothing here is ready for real use. No licence has been chosen yet, so all rights are reserved for now.
 
 Work is tracked in the issues of this repository.
@@ -74,9 +74,9 @@ together.
 `pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
 quickest way to work on screens. Anything the app cannot do yet is disabled.
 
-The app uses the mock core too, unless you start it with `VITE_CORE=rust`, for example
-`VITE_CORE=rust pnpm tauri dev`. The real core can create and delete an account and add contacts so far, and it
-publishes new accounts to public relays. Messages come next (#20). Relays, keys and the rest are in
+The app uses the real core. It publishes new accounts to public relays, and on a Mac it keeps the account key in your
+login keychain. To see the demo data in the app instead, start it with `VITE_CORE=mock`, for example
+`VITE_CORE=mock pnpm tauri dev`. Relays, keys and the rest are in
 [docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
 
 The app's product name is `peopleschat`, without the dot, because `pnpm tauri ios build` cannot find the built app

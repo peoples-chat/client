@@ -11,9 +11,14 @@ use marmot_app::AppError;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::interface::{Account, Chat, CommandError, Contact, CoreEvent, Invitation, Snapshot};
+use crate::interface::{
+    Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
+    Snapshot, Transport,
+};
 use crate::invite;
-use crate::messaging::{DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount};
+use crate::messaging::{
+    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, TextMessage,
+};
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
@@ -30,14 +35,14 @@ struct Inner {
     events: broadcast::Sender<CoreEvent>,
     /// Commands that create or delete the account run one at a time.
     account_commands: tokio::sync::Mutex<()>,
-    /// Follows the account's direct chats and invitations while there is an account.
-    chat_watcher: Mutex<Option<JoinHandle<()>>>,
+    /// Follow the account's chats, invitations and messages while there is an account.
+    watchers: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Core {
     /// Opens the core's stores and starts messaging. The snapshot then holds the account that is
-    /// already on this device, if any, with the chats whose contacts' names are known; the
-    /// others follow as events. Must run inside a Tokio runtime.
+    /// already on this device, if any, with its chats and their latest messages; chats whose
+    /// contacts' names aren't known yet follow as events. Must run inside a Tokio runtime.
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
@@ -63,11 +68,11 @@ impl Core {
                 }),
                 events,
                 account_commands: tokio::sync::Mutex::new(()),
-                chat_watcher: Mutex::new(None),
+                watchers: Mutex::new(Vec::new()),
             }),
         };
         if let Some(account) = account {
-            core.follow_chats(&account.public_key).await;
+            core.follow(&account.public_key).await;
         }
         Ok(core)
     }
@@ -122,7 +127,7 @@ impl Core {
         self.emit(CoreEvent::AccountCreated {
             account: account.clone(),
         });
-        self.follow_chats(&account.public_key).await;
+        self.follow(&account.public_key).await;
         Ok(account)
     }
 
@@ -134,15 +139,15 @@ impl Core {
             return Err(CommandError::new("There is no account on this device."));
         };
 
-        // Stop first, so that no chat of the deleted account arrives afterwards.
-        self.stop_following_chats();
+        // Stop first, so that nothing of the deleted account arrives afterwards.
+        self.stop_following();
         if let Err(error) = self
             .inner
             .messaging
             .delete_account(&account.public_key)
             .await
         {
-            self.follow_chats(&account.public_key).await;
+            self.follow(&account.public_key).await;
             return Err(failed("delete the account", error));
         }
 
@@ -203,7 +208,7 @@ impl Core {
     }
 
     /// Accepts an invitation to a direct chat (#19). Emits [`CoreEvent::InvitationRemoved`],
-    /// then [`CoreEvent::ChatAdded`] for the same id.
+    /// then [`CoreEvent::ChatAdded`] for the same id, with the messages that came so far.
     pub async fn accept_invitation(&self, invitation_id: &str) -> Result<Chat, CommandError> {
         let account = self.account()?;
         let invitation = self
@@ -231,6 +236,50 @@ impl Core {
             .ok_or_else(|| failed("accept the request", "the chat is missing after accepting"))
     }
 
+    /// Sends `text` in the chat `chat_id` (#20). Emits [`CoreEvent::MessageAdded`], and
+    /// [`CoreEvent::DeliveryChanged`] once a relay has acknowledged the message.
+    ///
+    /// The message is stored before this returns. While no relay can be reached, MDK keeps it
+    /// and tries again, also after a restart; until then it is `waiting`.
+    pub async fn send_message(&self, chat_id: &str, text: &str) -> Result<Message, CommandError> {
+        let account = self.account()?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CommandError::new("Write a message first."));
+        }
+        if self.chat(chat_id).is_none() {
+            return Err(CommandError::new("This chat no longer exists."));
+        }
+
+        let message_id = self
+            .inner
+            .messaging
+            .send_text(&account.public_key, chat_id, text)
+            .await
+            .map_err(|error| failed("send the message", error))?;
+        // MDK has the message now. Its watcher sees it too; whichever is first adds it.
+        let sent = self
+            .inner
+            .messaging
+            .chat_message(&account.public_key, chat_id, &message_id)
+            .unwrap_or_else(|| TextMessage {
+                chat_id: chat_id.to_owned(),
+                id: message_id.clone(),
+                outgoing: true,
+                text: text.to_owned(),
+                sent_at: now_ms() / 1000 * 1000,
+                acknowledged: false,
+            });
+        self.apply_message(&sent);
+        self.chat(chat_id)
+            .and_then(|chat| {
+                chat.messages
+                    .into_iter()
+                    .find(|message| message.id == message_id)
+            })
+            .ok_or_else(|| failed("send the message", "the message is missing after sending"))
+    }
+
     /// Waits until the relays have the account's relay lists, profile and KeyPackage, so that
     /// others can invite it.
     pub async fn wait_until_published(&self, timeout: Duration) -> Result<(), CommandError> {
@@ -249,17 +298,22 @@ impl Core {
 
     /// Stops messaging and closes the stores. The core cannot be used afterwards.
     pub async fn close(&self) -> Result<(), MessagingError> {
-        self.stop_following_chats();
+        self.stop_following();
         self.inner.messaging.close().await
     }
 
-    /// Puts the account's direct chats into the snapshot and keeps them up to date. Chats whose
-    /// contacts' names are known go in now; the rest arrive as events once their names are.
-    async fn follow_chats(&self, account_hex: &str) {
-        let mut chats = match self.inner.messaging.follow_direct_chats(account_hex).await {
-            Ok(chats) => chats,
-            Err(error) => {
-                log::warn!("could not follow the account's chats: {error}");
+    /// Puts the account's chats and invitations into the snapshot, with their latest messages,
+    /// and keeps them up to date. Chats whose contacts' names are known go in now; the rest
+    /// arrive as events once their names are.
+    async fn follow(&self, account_hex: &str) {
+        // Messages first: a message that arrives while the chats are being read is then either
+        // in a chat's history already or among the messages followed from here.
+        let messages = self.inner.messaging.follow_messages(account_hex).await;
+        let chats = self.inner.messaging.follow_direct_chats(account_hex).await;
+        let (mut messages, mut chats) = match (messages, chats) {
+            (Ok(messages), Ok(chats)) => (messages, chats),
+            (Err(error), _) | (_, Err(error)) => {
+                log::warn!("could not follow the account's chats and messages: {error}");
                 return;
             }
         };
@@ -274,9 +328,9 @@ impl Core {
             }
         }
 
-        // The watcher holds the core weakly, so dropping the core ends it.
+        // The watchers hold the core weakly, so dropping the core ends them.
         let core = Arc::downgrade(&self.inner);
-        let watcher = tokio::spawn(async move {
+        let chat_watcher = tokio::spawn(async move {
             for chat in unnamed {
                 let Some(core) = upgrade(&core) else { return };
                 core.follow_chat(chat).await;
@@ -286,13 +340,22 @@ impl Core {
                 core.follow_chat(chat).await;
             }
         });
-        if let Some(previous) = self.chat_watcher().replace(watcher) {
-            previous.abort();
+        let core = Arc::downgrade(&self.inner);
+        let message_watcher = tokio::spawn(async move {
+            while let Some(message) = messages.next().await {
+                let Some(core) = upgrade(&core) else { return };
+                core.apply_message(&message);
+            }
+        });
+        let previous =
+            std::mem::replace(&mut *self.watchers(), vec![chat_watcher, message_watcher]);
+        for watcher in previous {
+            watcher.abort();
         }
     }
 
-    fn stop_following_chats(&self) {
-        if let Some(watcher) = self.chat_watcher().take() {
+    fn stop_following(&self) {
+        for watcher in self.watchers().drain(..) {
             watcher.abort();
         }
     }
@@ -324,10 +387,21 @@ impl Core {
         }
     }
 
-    /// Records `chat` in the snapshot and emits what changed. The commands and the watcher both
+    /// Records `chat` in the snapshot and emits what changed. The commands and the watchers all
     /// come through here, under the state lock, so each change is emitted once.
+    ///
+    /// A chat or invitation that is new to the snapshot gets its history here, under the same
+    /// lock: a message stored earlier is in it, and one stored later reaches
+    /// [`Self::apply_message`] after the chat is in the snapshot.
     fn apply(&self, chat: &DirectChat, contact_name: String, started_at: u64) {
         let mut state = self.state();
+        let Some(account_hex) = state
+            .account
+            .as_ref()
+            .map(|account| account.public_key.clone())
+        else {
+            return;
+        };
         let is_chat = state.chats.iter().any(|known| known.id == chat.id);
         let invitation = state
             .invitations
@@ -354,7 +428,7 @@ impl Core {
                     id: chat.id.clone(),
                     from: contact(),
                     received_at: started_at,
-                    messages: Vec::new(),
+                    messages: self.history(&account_hex, &chat.id),
                 };
                 state.invitations.push(invitation.clone());
                 events.push(CoreEvent::InvitationReceived { invitation });
@@ -373,13 +447,70 @@ impl Core {
             let added = Chat {
                 id: chat.id.clone(),
                 contact,
-                messages: Vec::new(),
+                messages: self.history(&account_hex, &chat.id),
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
         }
         for event in events {
             self.emit(event);
+        }
+    }
+
+    /// Records a message that was added or changed, and emits what changed: a new message, or
+    /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
+    /// doesn't have yet is in that chat's history when it arrives.
+    fn apply_message(&self, message: &TextMessage) {
+        let view = message_view(message);
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let messages = if let Some(chat) = state.chats.iter_mut().find(|c| c.id == message.chat_id)
+        {
+            &mut chat.messages
+        } else if let Some(invitation) = state
+            .invitations
+            .iter_mut()
+            .find(|invitation| invitation.id == message.chat_id)
+        {
+            // Messages that come before the user accepts the invitation.
+            &mut invitation.messages
+        } else {
+            return;
+        };
+
+        let event = match messages.iter_mut().find(|known| known.id == view.id) {
+            None => {
+                messages.push(view.clone());
+                CoreEvent::MessageAdded {
+                    chat_id: message.chat_id.clone(),
+                    message: view,
+                }
+            }
+            // Delivery only moves forward.
+            Some(known)
+                if known.delivery == Some(DeliveryState::Waiting)
+                    && view.delivery == Some(DeliveryState::Sent) =>
+            {
+                known.delivery = view.delivery;
+                CoreEvent::DeliveryChanged {
+                    chat_id: message.chat_id.clone(),
+                    message_id: view.id,
+                    delivery: DeliveryState::Sent,
+                }
+            }
+            Some(_) => return,
+        };
+        self.emit(event);
+    }
+
+    /// The latest messages of a chat or invitation.
+    fn history(&self, account_hex: &str, chat_id: &str) -> Vec<Message> {
+        match self.inner.messaging.chat_messages(account_hex, chat_id) {
+            Ok(messages) => messages.iter().map(message_view).collect(),
+            Err(error) => {
+                log::warn!("could not read a chat's messages: {error}");
+                Vec::new()
+            }
         }
     }
 
@@ -432,9 +563,9 @@ impl Core {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn chat_watcher(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+    fn watchers(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
         self.inner
-            .chat_watcher
+            .watchers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -462,6 +593,26 @@ fn account_view(
         invite_link,
         public_key: public_key_hex,
     })
+}
+
+/// A message as an interface sees it. Internet only, until the radio (#40).
+fn message_view(message: &TextMessage) -> Message {
+    Message {
+        id: message.id.clone(),
+        direction: if message.outgoing {
+            Direction::Out
+        } else {
+            Direction::In
+        },
+        text: message.text.clone(),
+        sent_at: message.sent_at,
+        transport: Transport::Internet,
+        delivery: message.outgoing.then_some(if message.acknowledged {
+            DeliveryState::Sent
+        } else {
+            DeliveryState::Waiting
+        }),
+    }
 }
 
 fn now_ms() -> u64 {

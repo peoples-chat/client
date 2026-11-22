@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { CoreError, type Account, type Chat, type Core, type CoreEvent, type CoreListener, type Snapshot } from "./types";
+import {
+  CoreError,
+  type Account,
+  type Chat,
+  type Core,
+  type CoreEvent,
+  type CoreListener,
+  type Message,
+  type Snapshot,
+} from "./types";
 
 /** The Tauri event that carries the core's events (`src-tauri/src/bridge.rs`). */
 export const CORE_EVENT = "core-event";
@@ -49,14 +58,8 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     deleteAccount: () => call<void>("delete_account"),
     addContact: (inviteLink) => call<Chat>("add_contact", { inviteLink }),
     acceptInvitation: (invitationId) => call<Chat>("accept_invitation", { invitationId }),
-
-    // The real core learns this with #20.
-    sendMessage: () => notYet("Sending messages"),
+    sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
   };
-}
-
-function notYet(what: string): Promise<never> {
-  return Promise.reject(new CoreError(`${what} is not available yet.`));
 }
 
 /** The core's errors carry a message to show as it is. Anything else is unexpected. */

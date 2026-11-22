@@ -2,65 +2,22 @@
 //! receives an invitation and accepts it, and both keep the chat across a restart. Two cores
 //! with their own folders and keys share a relay, as two phones would.
 
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod support;
 
-use nostr_relay_builder::MockRelay;
 use nostr_sdk::prelude::{Keys, ToBech32};
-use peoples_chat_core::interface::{CoreEvent, Invitation};
-use peoples_chat_core::{Core, MessagingOptions};
-use tokio::sync::broadcast;
-
-/// How long a test waits for the relay and the other core.
-const WAIT: Duration = Duration::from_secs(60);
-
-/// Account keys go to an in-memory keychain, never to the machine's own.
-fn use_mock_keychain() {
-    if keyring_core::get_default_store().is_none() {
-        keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
-    }
-}
-
-fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> MessagingOptions {
-    MessagingOptions {
-        data_dir: data_dir.to_path_buf(),
-        relays: vec![relay.to_owned()],
-        keychain_service: keychain_service.to_owned(),
-        allow_loopback_relays: true,
-    }
-}
-
-async fn next_event(events: &mut broadcast::Receiver<CoreEvent>) -> CoreEvent {
-    tokio::time::timeout(WAIT, events.recv())
-        .await
-        .expect("no event in time")
-        .expect("the core stopped sending events")
-}
-
-async fn next_invitation(events: &mut broadcast::Receiver<CoreEvent>) -> Invitation {
-    match next_event(events).await {
-        CoreEvent::InvitationReceived { invitation } => invitation,
-        other => panic!("expected an invitation, got {other:?}"),
-    }
-}
-
-fn now_ms() -> u64 {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    since.as_millis().try_into().unwrap()
-}
+use peoples_chat_core::interface::CoreEvent;
+use support::{Phone, TestRelay, WAIT, next_event, next_invitation, now_ms};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_people_become_contacts_from_an_invite_link() {
-    use_mock_keychain();
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
-    let ada_data = tempfile::tempdir().unwrap();
-    let bea_data = tempfile::tempdir().unwrap();
-    let ada_options = || options(ada_data.path(), &url, "chat.peoples.client.test-ada");
-    let bea_options = || options(bea_data.path(), &url, "chat.peoples.client.test-bea");
+    let _turn = support::take_turn().await;
+    let relay = TestRelay::start().await;
+    let url = relay.url();
+    let ada_phone = Phone::new("ada", &url);
+    let bea_phone = Phone::new("bea", &url);
 
-    let ada = Core::start(ada_options()).await.unwrap();
-    let bea = Core::start(bea_options()).await.unwrap();
+    let ada = ada_phone.start().await;
+    let bea = bea_phone.start().await;
     let ada_account = ada.create_account("Ada Lund").await.unwrap();
     let bea_account = bea.create_account("Bea Holm").await.unwrap();
     assert!(
@@ -136,8 +93,8 @@ async fn two_people_become_contacts_from_an_invite_link() {
     // Both keep the chat, with the contact's name, across a restart.
     ada.close().await.unwrap();
     bea.close().await.unwrap();
-    let ada = Core::start(ada_options()).await.unwrap();
-    let bea = Core::start(bea_options()).await.unwrap();
+    let ada = ada_phone.start().await;
+    let bea = bea_phone.start().await;
     assert_eq!(ada.snapshot().chats, vec![chat]);
     let snapshot = bea.snapshot();
     assert_eq!(snapshot.chats, vec![accepted]);
@@ -148,17 +105,11 @@ async fn two_people_become_contacts_from_an_invite_link() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn adding_a_contact_says_what_is_wrong() {
-    use_mock_keychain();
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
-    let data = tempfile::tempdir().unwrap();
-    let core = Core::start(options(
-        data.path(),
-        &url,
-        "chat.peoples.client.test-contact-errors",
-    ))
-    .await
-    .unwrap();
+    let _turn = support::take_turn().await;
+    let relay = TestRelay::start().await;
+    let url = relay.url();
+    let phone = Phone::new("contact-errors", &url);
+    let core = phone.start().await;
 
     // Someone who never published an account.
     let stranger = Keys::generate().public_key().to_bech32().unwrap();

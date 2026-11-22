@@ -3,21 +3,25 @@
 //! This is the link to MDK (#59): open the runtime, create, list and delete accounts, and wait
 //! until an account's relay lists, profile and KeyPackage are on the relays. Direct chats (#19):
 //! start one with another account, follow the account's chats and invitations, and accept an
-//! invitation. [`crate::Core`] builds the interface's commands and events on it (#16).
+//! invitation. Text (#20): send it, read a chat's history and follow new messages and their
+//! delivery. [`crate::Core`] builds the interface's commands and events on it (#16).
 //!
 //! Account keys stay inside MDK (#17). It keeps them in the platform's key store and signs with
 //! them itself, and an external signer can take their place. Nothing here reads them. Details:
 //! `docs/mdk.md`, "The account key".
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupRecord, MarmotApp,
-    MarmotAppConfig, MarmotAppRuntime, RuntimeChatsSubscription, SelfMembership,
-    UserProfileMetadata,
+    MarmotAppConfig, MarmotAppRuntime, RuntimeChatsSubscription, RuntimeTimelineMessageUpdate,
+    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
+    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, UserProfileMetadata,
 };
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
@@ -27,6 +31,14 @@ const PROFILE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long [`Messaging::accept_direct_chat`] retries while the account is busy, as `wn` does.
 const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
 const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
+/// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
+const HISTORY_LIMIT: usize = 200;
+/// MDK's kind for chat messages (NIP-C7).
+const CHAT_KIND: u64 = 9;
+/// The mark MDK puts on a message of ours that no relay would take.
+const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
+/// Makes each send's client token unique within this process.
+static SENDS: AtomicU64 = AtomicU64::new(0);
 
 /// Relays for new accounts unless the app is built with others (#18). New accounts publish their
 /// relay lists, profile and KeyPackage here.
@@ -105,6 +117,93 @@ impl DirectChats {
             let record = self.subscription.recv().await?;
             if let Some(chat) = direct_chat(&self.account_hex, &record) {
                 return Some(chat);
+            }
+        }
+    }
+}
+
+/// A text message in a direct chat, as MDK holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextMessage {
+    /// The id of the chat it belongs to.
+    pub chat_id: String,
+    /// MDK's id for the message: the id of its signed inner event. Both phones know the message by
+    /// it, from sending through every restart.
+    pub id: String,
+    /// The account sent it, rather than received it.
+    pub outgoing: bool,
+    pub text: String,
+    /// When the sender sent it, by the sender's clock, in milliseconds since the Unix epoch. MDK
+    /// keeps whole seconds.
+    pub sent_at: u64,
+    /// Outgoing only: a relay has acknowledged it.
+    pub acknowledged: bool,
+}
+
+/// The text message in `record`, unless it is something else: a system row, media, a sticker,
+/// a deleted message, or one withdrawn when the chat's state was settled.
+fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
+    let outgoing = match record.direction.as_str() {
+        "sent" => true,
+        "received" => false,
+        _ => return None,
+    };
+    let sticker = record
+        .tags
+        .iter()
+        .any(|tag| tag.first().is_some_and(|name| name == "sticker"));
+    // A message no relay would take stays: MDK keeps it, and it shows as not sent yet.
+    let withdrawn = record
+        .invalidation_status
+        .as_deref()
+        .is_some_and(|status| status != LOCAL_PUBLISH_FAILED);
+    if record.kind != CHAT_KIND
+        || record.deleted
+        || record.media.is_some()
+        || record.agent_text_stream.is_some()
+        || sticker
+        || withdrawn
+    {
+        return None;
+    }
+    Some(TextMessage {
+        chat_id: record.group_id_hex.clone(),
+        id: record.message_id_hex.clone(),
+        outgoing,
+        text: record.plaintext.clone(),
+        sent_at: record.timeline_at.saturating_mul(1000),
+        acknowledged: outgoing
+            && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+    })
+}
+
+/// The account's text messages in every chat as they are added or change, for example when a
+/// relay acknowledges one of ours.
+pub struct TextMessages {
+    subscription: RuntimeTimelineMessagesSubscription,
+    ready: VecDeque<TextMessage>,
+}
+
+impl TextMessages {
+    /// The next message that was added or changed. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<TextMessage> {
+        loop {
+            if let Some(message) = self.ready.pop_front() {
+                return Some(message);
+            }
+            match self.subscription.recv().await? {
+                // MDK fell behind and sends its latest messages again.
+                RuntimeTimelineMessageUpdate::Page { page } => {
+                    self.ready
+                        .extend(page.messages.iter().filter_map(text_message));
+                }
+                RuntimeTimelineMessageUpdate::Projection(projection) => {
+                    for change in &projection.update.timeline_changes {
+                        if let TimelineMessageChange::Upsert { message, .. } = change {
+                            self.ready.extend(text_message(message));
+                        }
+                    }
+                }
             }
         }
     }
@@ -299,9 +398,7 @@ impl Messaging {
         account_hex: &str,
         chat_id: &str,
     ) -> Result<(), MessagingError> {
-        let bytes =
-            hex::decode(chat_id).map_err(|_| MessagingError::InvalidChatId(chat_id.to_owned()))?;
-        let group_id = GroupId::new(bytes);
+        let group_id = group_id(chat_id)?;
         let deadline = Instant::now() + ACCEPT_RETRY_FOR;
         loop {
             match self
@@ -375,6 +472,85 @@ impl Messaging {
         marmot_app::default_profile_pseudonym(account_hex)
     }
 
+    /// Sends `text` in the chat `chat_id` and returns the message's id.
+    ///
+    /// MDK stores the message before this returns, and publishes it in the background. While no
+    /// relay can be reached it keeps the message and tries again; [`Self::follow_messages`] tells
+    /// when a relay has acknowledged it.
+    pub async fn send_text(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        text: &str,
+    ) -> Result<String, MessagingError> {
+        let group_id = group_id(chat_id)?;
+        let mut collided = false;
+        loop {
+            match self
+                .runtime
+                .submit_text(account_hex, &group_id, text.to_owned(), client_token())
+                .await
+            {
+                Ok(accepted) => return Ok(accepted.message_id_hex),
+                // A message's id covers its text and the second it was sent, so the same text
+                // twice within a second would be one message. Send it in the next second.
+                Err(AppError::InvalidAppMessagePayload(reason))
+                    if !collided && reason.starts_with("message identity collision") =>
+                {
+                    collided = true;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// The latest messages of the chat `chat_id`, up to 200, oldest first.
+    pub fn chat_messages(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<TextMessage>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(text_message).collect())
+    }
+
+    /// The message `message_id` in the chat `chat_id`, if MDK has it as a text message.
+    pub fn chat_message(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        message_id: &str,
+    ) -> Option<TextMessage> {
+        let record = self
+            .runtime
+            .timeline_message(account_hex, chat_id, message_id)
+            .ok()??;
+        text_message(&record)
+    }
+
+    /// Follows the account's text messages in all its chats, from now on.
+    pub async fn follow_messages(&self, account_hex: &str) -> Result<TextMessages, MessagingError> {
+        let subscription = self
+            .runtime
+            .subscribe_timeline_messages(account_hex, TimelineMessageQuery::default())
+            .await?;
+        Ok(TextMessages {
+            subscription,
+            ready: VecDeque::new(),
+        })
+    }
+
     /// When this device first saw the direct chat `chat_id`, in milliseconds since the Unix
     /// epoch.
     pub fn chat_started_at(&self, account_hex: &str, chat_id: &str) -> Option<u64> {
@@ -393,6 +569,22 @@ impl Messaging {
 
 fn endpoints(relays: &[String]) -> Vec<TransportEndpoint> {
     relays.iter().cloned().map(TransportEndpoint).collect()
+}
+
+/// The MLS group id a chat id names.
+fn group_id(chat_id: &str) -> Result<GroupId, MessagingError> {
+    hex::decode(chat_id)
+        .map(GroupId::new)
+        .map_err(|_| MessagingError::InvalidChatId(chat_id.to_owned()))
+}
+
+/// A token unique to one send, which MDK uses to recognise a retried submission.
+fn client_token() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{now:x}-{:x}", SENDS.fetch_add(1, Ordering::Relaxed))
 }
 
 /// The name a profile shows: its display name, else its name.

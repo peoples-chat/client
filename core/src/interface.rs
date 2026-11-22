@@ -62,7 +62,8 @@ pub enum Direction {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
-    /// Stable identifier. The core drops duplicates by it after an outage.
+    /// Stable identifier: MDK's id for the message, the same on both phones and across restarts
+    /// (#20). The core drops duplicates by it after an outage.
     pub id: String,
     pub direction: Direction,
     pub text: String,
@@ -129,7 +130,8 @@ pub enum CoreEvent {
     InvitationRemoved {
         invitation_id: String,
     },
-    /// A received message, or one of the user's own sent messages.
+    /// A received message, or one of the user's own sent messages. `chat_id` can also be an
+    /// invitation's id: messages that arrive before the user accepts it.
     MessageAdded {
         chat_id: String,
         message: Message,
