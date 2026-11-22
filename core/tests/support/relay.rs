@@ -8,12 +8,18 @@
 //! everything else through.
 //!
 //! The same pattern as `crates/marmot-app/tests/support/limited_relay.rs` in MDK (MIT).
+//!
+//! The front door can also be shut (#43): it then cuts every connection and refuses new ones, as
+//! when the network is gone, while the relay keeps what it has.
+//!
+//! `examples/local_relay.rs` runs the same relay on the Mac for the apps on phones.
 
 use std::time::Duration;
 
 use nostr_relay_builder::{LocalRelay, RelayBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 /// The most events the relay returns for one filter, and says it does.
@@ -26,6 +32,7 @@ pub struct TestRelay {
     _relay: LocalRelay,
     door: JoinHandle<()>,
     url: String,
+    blocked: watch::Sender<bool>,
 }
 
 impl Drop for TestRelay {
@@ -35,21 +42,29 @@ impl Drop for TestRelay {
 }
 
 impl TestRelay {
+    /// A relay with its front door at a free port on the loopback interface.
     pub async fn start() -> Self {
-        let relay = LocalRelay::new(RelayBuilder::default().max_filter_limit(MAX_LIMIT));
+        Self::start_with(RelayBuilder::default(), "127.0.0.1:0").await
+    }
+
+    /// A relay built from `builder`, with its front door at `address`.
+    pub async fn start_with(builder: RelayBuilder, address: &str) -> Self {
+        let relay = LocalRelay::new(builder.max_filter_limit(MAX_LIMIT));
         relay.run().await.unwrap();
         let inside = relay.url().await.to_string();
         let inside = inside
             .trim_start_matches("ws://")
             .trim_end_matches('/')
             .to_owned();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind(address).await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let door = tokio::spawn(front_door(listener, inside));
+        let (blocked, shut) = watch::channel(false);
+        let door = tokio::spawn(front_door(listener, inside, shut));
         Self {
             _relay: relay,
             door,
             url,
+            blocked,
         }
     }
 
@@ -57,10 +72,21 @@ impl TestRelay {
     pub fn url(&self) -> String {
         self.url.clone()
     }
+
+    /// Cuts every connection to the relay and refuses new ones, as when the network is gone.
+    pub fn block(&self) {
+        self.blocked.send_replace(true);
+    }
+
+    /// Lets connections through again.
+    pub fn unblock(&self) {
+        self.blocked.send_replace(false);
+    }
 }
 
-/// Answers NIP-11 requests itself, and passes every other connection to the relay.
-async fn front_door(listener: TcpListener, inside: String) {
+/// Answers NIP-11 requests itself, and passes every other connection to the relay, unless it is
+/// shut.
+async fn front_door(listener: TcpListener, inside: String, shut: watch::Receiver<bool>) {
     let information =
         format!(r#"{{"supported_nips":[],"limitation":{{"max_limit":{MAX_LIMIT}}}}}"#);
     let mut connections = JoinSet::new();
@@ -68,14 +94,23 @@ async fn front_door(listener: TcpListener, inside: String) {
         tokio::select! {
             accepted = listener.accept() => {
                 let Ok((client, _)) = accepted else { continue };
-                connections.spawn(serve(client, inside.clone(), information.clone()));
+                // Shut: the connection closes at once.
+                if *shut.borrow() {
+                    continue;
+                }
+                connections.spawn(serve(client, inside.clone(), information.clone(), shut.clone()));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
     }
 }
 
-async fn serve(mut client: TcpStream, inside: String, information: String) {
+async fn serve(
+    mut client: TcpStream,
+    inside: String,
+    information: String,
+    mut shut: watch::Receiver<bool>,
+) {
     let mut header = Vec::new();
     let read_header = async {
         while !header.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -105,6 +140,10 @@ async fn serve(mut client: TcpStream, inside: String, information: String) {
     } else if let Ok(mut relay) = TcpStream::connect(&inside).await
         && relay.write_all(&header).await.is_ok()
     {
-        let _ = tokio::io::copy_bidirectional(&mut client, &mut relay).await;
+        // Shutting the door closes the connection.
+        tokio::select! {
+            _ = tokio::io::copy_bidirectional(&mut client, &mut relay) => {}
+            _ = shut.wait_for(|shut| *shut) => {}
+        }
     }
 }

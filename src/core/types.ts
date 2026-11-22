@@ -7,8 +7,8 @@
 // real core through the app shell, and `mockCore.ts` implements the same interface with demo
 // data.
 //
-// Not here yet: `pairRadio` and the transport and radio state events. They arrive with the
-// radio pairing work (#24) and the transport work (#48).
+// Not here yet: `pairRadio` and the radio state events. They arrive with the radio pairing work
+// (#24) and the transport work (#48).
 
 /** Public key of an account, formatted by the core. Opaque to the interface. */
 export type PublicKey = string;
@@ -51,12 +51,21 @@ export interface Message {
   delivery?: DeliveryState;
 }
 
+/**
+ * How a chat's messages can travel now (#43).
+ * - `internet`: at least one of the chat's relays is connected.
+ * - `radio`: no relay is reachable, but the contact's radio has been heard (#44).
+ * - `unreachable`: neither. Messages wait.
+ */
+export type Reach = "internet" | "radio" | "unreachable";
+
 /** A direct chat with one contact. */
 export interface Chat {
   id: string;
   contact: Contact;
   /** Oldest first. */
   messages: Message[];
+  reach: Reach;
 }
 
 /** An invitation to a direct chat from someone who is not a contact yet. */
@@ -88,7 +97,8 @@ export type CoreEvent =
   | { type: "invitationReceived"; invitation: Invitation }
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
-  | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState };
+  | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
+  | { type: "reachChanged"; chatId: string; reach: Reach };
 
 export type CoreListener = (event: CoreEvent) => void;
 

@@ -16,6 +16,7 @@ const chat = (id: string, messages: Message[] = []): Chat => ({
   id,
   contact: { publicKey: `key-${id}`, name: `Contact ${id}` },
   messages,
+  reach: "internet",
 });
 
 const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [] });
@@ -50,10 +51,20 @@ describe("applyEvent", () => {
     expect(applyEvent(once, { type: "messageAdded", chatId: "i1", message: incoming })).toBe(once);
   });
 
+  it("changes how a chat's messages can travel", () => {
+    const state = ready([chat("a"), chat("b")]);
+    const next = applyEvent(state, { type: "reachChanged", chatId: "b", reach: "unreachable" });
+
+    expect(next.chats.map((c) => c.reach)).toEqual(["internet", "unreachable"]);
+    expect(next.chats[0]).toBe(state.chats[0]);
+    expect(applyEvent(next, { type: "reachChanged", chatId: "b", reach: "unreachable" })).toBe(next);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);
     expect(applyEvent(state, { type: "deliveryChanged", chatId: "a", messageId: "x", delivery: "sent" })).toBe(state);
+    expect(applyEvent(state, { type: "reachChanged", chatId: "x", reach: "unreachable" })).toBe(state);
     expect(applyEvent(state, { type: "invitationRemoved", invitationId: "x" })).toBe(state);
   });
 

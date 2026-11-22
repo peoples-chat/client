@@ -173,6 +173,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         id: randomHex(8),
         contact: { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` },
         messages: [],
+        reach: "internet",
       };
       state.demoContactsAdded += 1;
       state.chats.push(chat);
@@ -186,7 +187,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const invitation = state.invitations.find((i) => i.id === invitationId);
       if (!invitation) throw new CoreError("This request is no longer available.");
 
-      const chat: Chat = { id: randomHex(8), contact: invitation.from, messages: invitation.messages };
+      const chat: Chat = { id: randomHex(8), contact: invitation.from, messages: invitation.messages, reach: "internet" };
       state.invitations = state.invitations.filter((i) => i.id !== invitationId);
       state.chats.push(chat);
       emit({ type: "invitationRemoved", invitationId }, { type: "chatAdded", chat });
@@ -240,6 +241,7 @@ function demoChat(now: number): Chat {
         delivery: "sent",
       },
     ],
+    reach: "internet",
   };
 }
 

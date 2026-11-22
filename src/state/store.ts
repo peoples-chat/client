@@ -64,6 +64,11 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
           messages: chat.messages.map((m) => (m.id === event.messageId ? { ...m, delivery: event.delivery } : m)),
         };
       });
+
+    case "reachChanged":
+      return updateChat(state, event.chatId, (chat) =>
+        chat.reach === event.reach ? chat : { ...chat, reach: event.reach },
+      );
   }
 }
 

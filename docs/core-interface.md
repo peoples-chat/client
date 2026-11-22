@@ -62,6 +62,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
+| `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -72,7 +73,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Snapshot` | `account` (or `null`), `chats`, `invitations` |
 | `Account` | `name`, `publicKey` (hex), `inviteLink` |
 | `Contact` | `publicKey`, `name` |
-| `Chat` | `id`, `contact`, `messages` (oldest first) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 
@@ -82,6 +83,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
   - `waiting`: not sent yet, for example because there is no path.
   - `sent`: a relay acknowledged it.
   - `confirmed`: the other radio confirmed it. Radio only.
+- `reach` says how the chat's messages can travel now; see [Reach](#reach).
 - `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
 - An invitation's `id` is the id of the chat that accepting it opens.
 
@@ -154,6 +156,30 @@ that comes before the user accepts an invitation is added to the invitation: `me
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
 - editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
 
+## Reach
+
+Each chat says how its messages can travel now (#43):
+
+- `internet`: at least one of the chat's relays is connected.
+- `radio`: no relay is, but the contact's radio has been heard. Comes with #44.
+- `unreachable`: neither. Messages wait, and go out when a relay is back.
+
+**When it changes** (`reachChanged`):
+
+- A chat becomes `unreachable` once its relay connections have stayed closed for 10 seconds.
+- It is back to `internet` as soon as one of them connects again. The core tries every 5 seconds.
+- A drop shorter than that doesn't show, so a flapping connection doesn't make the chat flicker.
+- When the app starts without a connection, its chats start as `internet` and become `unreachable` 10 seconds later.
+- The core goes by the relays, not by the phone's online flag. [mdk.md](mdk.md#relay-reachability) has the details,
+  including connections that go silent without closing.
+
+**When the relays are back**, the messages that waited go out within a second. The other phone sometimes shows them
+much later, more than a minute in some test runs (#78; [mdk.md](mdk.md#relay-reachability) explains why).
+
+**Trying it without the internet.** To take the relays away while the phone keeps its network and Bluetooth, use the
+relay on the Mac (below) and type `block` in its window; `unblock` brings it back. With public relays, turning off
+Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, which the radio needs.
+
 ## Planned: radio and transport
 
 These shapes are sketches. The issues settle them together with their screens.
@@ -161,7 +187,7 @@ These shapes are sketches. The issues settle them together with their screens.
 - **`pairRadio` (#24).** Pairing takes several steps: find radios nearby, choose one, confirm a PIN. It may become a
   few commands, with events for radios found and for the pairing's progress.
 - **`transportChanged` (#48).** For example `{ "transport": "internet" | "radio", "state": "available" |
-  "unavailable" }`.
+  "unavailable" }`. Each chat's `reach` (#43) may already be enough.
 - **`radioChanged` (#24, #48).** For example not paired, connecting, connected or disconnected, with the radio's name.
 
 ## Running the app with the real core
@@ -181,10 +207,11 @@ The app uses the real core since it covers the whole flow (#20): creating the ac
   up on them.
 - To use other relays, set `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) when you build. The name starts with `TAURI`
   because the Tauri CLI passes only such variables on to the iOS and Android builds.
-- To see what gets published, use the relay on the Mac:
-  1. Run it with `cargo run -p peoples-chat-core --example local_relay`.
+- To see what gets published, or to take the relay away, use the relay on the Mac:
+  1. Run it with `cargo run -p peoples-chat-core --example local_relay`. It prints what the apps publish.
   2. Build the app with `TAURI_PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777`. Only debug builds accept it.
   3. On Android, also run `adb reverse tcp:7777 tcp:7777`.
+  4. Type `block` and Enter to cut the apps off, and `unblock` to let them back in ([Reach](#reach)).
 - MDK needs a relay to set up an account. The relay doesn't need to be reachable: publishing waits until it is.
 
 **Keys and data**

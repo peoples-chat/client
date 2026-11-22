@@ -32,7 +32,7 @@ fn the_shared_json_matches_the_core_types() {
     }
     assert_eq!(
         kinds.len(),
-        7,
+        8,
         "the fixture needs one example of every event"
     );
 
@@ -53,6 +53,7 @@ fn kind(event: &CoreEvent) -> &'static str {
         CoreEvent::InvitationRemoved { .. } => "invitationRemoved",
         CoreEvent::MessageAdded { .. } => "messageAdded",
         CoreEvent::DeliveryChanged { .. } => "deliveryChanged",
+        CoreEvent::ReachChanged { .. } => "reachChanged",
     }
 }
 

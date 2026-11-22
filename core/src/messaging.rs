@@ -4,7 +4,8 @@
 //! until an account's relay lists, profile and KeyPackage are on the relays. Direct chats (#19):
 //! start one with another account, follow the account's chats and invitations, and accept an
 //! invitation. Text (#20): send it, read a chat's history and follow new messages and their
-//! delivery. [`crate::Core`] builds the interface's commands and events on it (#16).
+//! delivery. Relays (#43): follow whether the account's connections to its relays are open.
+//! [`crate::Core`] builds the interface's commands and events on it (#16).
 //!
 //! Account keys stay inside MDK (#17). It keeps them in the platform's key store and signs with
 //! them itself, and an external signer can take their place. Nothing here reads them. Details:
@@ -19,10 +20,12 @@ use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupRecord, MarmotApp,
-    MarmotAppConfig, MarmotAppRuntime, RuntimeChatsSubscription, RuntimeTimelineMessageUpdate,
+    MarmotAppConfig, MarmotAppRuntime, RelayLiveness, RelayLivenessStatus,
+    RuntimeChatsSubscription, RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
     RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
     TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, UserProfileMetadata,
 };
+use nostr::types::RelayUrl;
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
 const READINESS_POLL: Duration = Duration::from_millis(50);
@@ -93,6 +96,9 @@ pub struct DirectChat {
     pub invitation: bool,
     /// The account is still in the chat: the chat is not archived, left or removed.
     pub active: bool,
+    /// The relays the chat's messages go through, as [`canonical_relay`] spells them. Empty when
+    /// the core made this value itself rather than reading it from MDK.
+    pub relays: Vec<String>,
 }
 
 /// The account's direct chats as they were when following began, then each one that changes.
@@ -221,7 +227,75 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
         peer_hex: peer_hex.clone(),
         invitation: record.pending_confirmation,
         active: !record.archived && matches!(record.self_membership, SelfMembership::Member),
+        relays: record
+            .nostr_routing
+            .relays
+            .iter()
+            .map(|relay| canonical_relay(relay))
+            .collect(),
     })
+}
+
+/// One of the account's relays, and whether the account's connection to it is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayLink {
+    /// As [`canonical_relay`] spells it.
+    pub url: String,
+    pub connected: bool,
+}
+
+fn relay_links(rows: &[RelayLiveness]) -> Vec<RelayLink> {
+    rows.iter()
+        .map(|row| RelayLink {
+            url: canonical_relay(&row.url),
+            // Connecting and not yet tried count as not connected: what matters is whether
+            // messages can go out now.
+            connected: row.status == RelayLivenessStatus::Connected,
+        })
+        .collect()
+}
+
+/// The account's relays and their connections as they were when following began, then each
+/// change. MDK reports a connection as it opens and closes, and tries a closed one again every
+/// 5 seconds. A connection that stops answering without closing counts as closed once MDK's
+/// keep-alive ping goes unanswered.
+pub struct RelayLinks {
+    subscription: RuntimeRelayLivenessSubscription,
+}
+
+impl RelayLinks {
+    /// The relays when following began.
+    pub fn current(&self) -> Vec<RelayLink> {
+        relay_links(&self.subscription.snapshot)
+    }
+
+    /// All the relays again, after one of them changed. `None` once messaging has stopped.
+    pub async fn next(&self) -> Option<Vec<RelayLink>> {
+        match self.subscription.recv().await {
+            Ok(rows) => rows.map(|rows| relay_links(&rows)),
+            Err(error) => {
+                log::warn!("stopped following the relays: {error}");
+                None
+            }
+        }
+    }
+}
+
+/// One spelling per relay, so that a chat's relays and the account's can be compared: the
+/// parsed URL without a bare trailing slash, as MDK spells them. Text that doesn't parse stays as
+/// it is, trimmed.
+pub fn canonical_relay(relay: &str) -> String {
+    let relay = relay.trim();
+    let mut spelled =
+        RelayUrl::parse(relay).map_or_else(|_| relay.to_owned(), |url| url.to_string());
+    let authority = spelled.find("://").map_or(0, |index| index + 3);
+    if spelled[authority..]
+        .find('/')
+        .is_some_and(|slash| authority + slash + 1 == spelled.len())
+    {
+        spelled.pop();
+    }
+    spelled
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -551,6 +625,21 @@ impl Messaging {
         })
     }
 
+    /// Follows the account's connections to its relays: the relays its relay lists name and the
+    /// ones it was set up with. Relays that only a chat names aren't among them.
+    pub async fn follow_relays(&self, account_hex: &str) -> Result<RelayLinks, MessagingError> {
+        let subscription = self.runtime.subscribe_relay_liveness(account_hex).await?;
+        Ok(RelayLinks { subscription })
+    }
+
+    /// Tells MDK that relays are back after an outage, so that messages waiting to go out are
+    /// sent now rather than at their next retry.
+    pub async fn connectivity_restored(&self) {
+        if let Err(error) = self.runtime.notify_connectivity_restored().await {
+            log::info!("could not hurry the messages waiting to go out: {error}");
+        }
+    }
+
     /// When this device first saw the direct chat `chat_id`, in milliseconds since the Unix
     /// epoch.
     pub fn chat_started_at(&self, account_hex: &str, chat_id: &str) -> Option<u64> {
@@ -595,4 +684,24 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
         .map(|name| name.trim())
         .find(|name| !name.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_relay;
+
+    #[test]
+    fn relays_are_spelled_one_way() {
+        for (given, spelled) in [
+            ("wss://relay.damus.io", "wss://relay.damus.io"),
+            ("wss://relay.damus.io/", "wss://relay.damus.io"),
+            ("  wss://nos.lol ", "wss://nos.lol"),
+            ("WSS://Nos.Lol", "wss://nos.lol"),
+            ("ws://127.0.0.1:7777/", "ws://127.0.0.1:7777"),
+            ("wss://relay.example/nostr/", "wss://relay.example/nostr/"),
+            ("not a relay", "not a relay"),
+        ] {
+            assert_eq!(canonical_relay(given), spelled, "{given}");
+        }
+    }
 }
