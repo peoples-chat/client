@@ -107,6 +107,15 @@ describe("applyEvent", () => {
     expect(without.chats[0].contact.photo).toBeUndefined();
   });
 
+  it("removes a message, once", () => {
+    const state = ready([chat("a", [message("m1", 1), message("m2", 2)])]);
+    const event: CoreEvent = { type: "messageRemoved", chatId: "a", messageId: "m1" };
+    const next = applyEvent(state, event);
+    expect(next.chats[0].messages.map((m) => m.id)).toEqual(["m2"]);
+    expect(applyEvent(next, event)).toBe(next);
+    expect(applyEvent(state, { type: "messageRemoved", chatId: "x", messageId: "m1" })).toBe(state);
+  });
+
   it("takes the mesh of a contact's radio", () => {
     const state = ready([chat("b")]);
     const withRadio = { publicKey: "key-b", name: "Contact b", meshes: ["meshCore" as const] };

@@ -64,6 +64,7 @@ pub fn run() {
             bridge::accept_invitation,
             bridge::send_message,
             bridge::set_force_radio,
+            bridge::cancel_message,
             bridge::export_account_key
         ])
         .run(tauri::generate_context!())

@@ -68,6 +68,7 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     createInvite: (name) => call<SentInvite>("create_invite", { name }),
     previewInvite: (inviteLink) => call<Contact>("preview_invite", { inviteLink }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
+    cancelMessage: (chatId, messageId) => call<void>("cancel_message", { chatId, messageId }),
     setForceRadio: (forced) => call<RadioStatus>("set_force_radio", { forced }),
     // Without a password the core exports the plain key.
     exportAccountKey: (copy) =>

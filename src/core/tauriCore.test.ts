@@ -76,6 +76,7 @@ describe("Tauri core", () => {
       accept_invitation: chat,
       send_message: message,
       set_force_radio: { forced: true },
+      cancel_message: null,
       export_account_key: "ncryptsec1fixture",
     };
     const { ipc, calls } = fakeIpc((command) => answers[command]);
@@ -89,6 +90,7 @@ describe("Tauri core", () => {
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
     expect(await core.setForceRadio(true)).toEqual({ forced: true });
+    await core.cancelMessage("chat-1", "queued-1");
     expect(await core.exportAccountKey({ kind: "protected", password: "a long password" })).toBe("ncryptsec1fixture");
     await core.exportAccountKey({ kind: "plain" });
     await core.deleteAccount();
@@ -101,6 +103,7 @@ describe("Tauri core", () => {
       'accept_invitation {"invitationId":"inv-1"}',
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
       'set_force_radio {"forced":true}',
+      'cancel_message {"chatId":"chat-1","messageId":"queued-1"}',
       'export_account_key {"password":"a long password"}',
       'export_account_key {"password":null}',
       "delete_account",
@@ -144,7 +147,11 @@ describe("the JSON shared with the Rust core", () => {
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
-      messageAdded: (next) => expect(next.chats[1].messages[0].delivery).toBe("waiting"),
+      messageAdded: (next) => {
+        const messages = next.chats[1].messages;
+        expect(messages[messages.length - 1].delivery).toBe("waiting");
+      },
+      messageRemoved: (next) => expect(next.chats[1].messages.map((m) => m.cancellable)).toEqual([undefined]),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
       reachChanged: (next) =>
         expect(next.chats.map((c) => [c.reach, c.radioIssue])).toEqual([

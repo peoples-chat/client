@@ -70,6 +70,11 @@ export interface Message {
   transport: Transport;
   /** Set on outgoing messages only. */
   delivery?: DeliveryState;
+  /**
+   * The message waits for a path, and can still be cancelled (#46). Its id is provisional: once
+   * it goes, `messageRemoved` takes it away and `messageAdded` brings it with the core's id.
+   */
+  cancellable?: boolean;
 }
 
 /**
@@ -196,6 +201,8 @@ export type CoreEvent =
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
+  /** A message is gone: cancelled while it waited, or gone out under the core's id (#46). */
+  | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
   /** The account's relays changed, or their connections did. Carries all of them. */
   | { type: "relaysChanged"; relays: Relay[] }
@@ -254,6 +261,8 @@ export interface Core {
    * forced, the radio carries it too, and it is `confirmed` once the other radio confirms it (#40).
    */
   sendMessage(chatId: string, text: string): Promise<Message>;
+  /** Cancels a message that waits for a path (#46). One on its way can't be cancelled. */
+  cancelMessage(chatId: string, messageId: string): Promise<void>;
   /** Sends every message by radio, or stops doing so: a switch for testing (#40). */
   setForceRadio(forced: boolean): Promise<RadioStatus>;
   /**

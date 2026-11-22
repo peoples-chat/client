@@ -103,9 +103,9 @@ describe("mock core", () => {
     vi.advanceTimersByTime(1500);
     expect(events[2]).toMatchObject({ type: "messageAdded", message: { direction: "in", transport: "radio" } });
 
-    // Radio carries 96 bytes at most; ☔ takes three.
-    await expect(core.sendMessage(chat.id, "☔".repeat(33))).rejects.toThrow("too long for radio");
-    await core.sendMessage(chat.id, "☔".repeat(32));
+    // Radio carries 96 bytes at most; ☔ takes three. Longer text waits for the internet (#46).
+    expect(await core.sendMessage(chat.id, "☔".repeat(33))).toMatchObject({ transport: "internet", cancellable: true });
+    expect((await core.sendMessage(chat.id, "☔".repeat(32))).transport).toBe("radio");
   });
 
   it("sends everything by radio with the switch on, as short text the other radio confirms", async () => {
@@ -126,6 +126,28 @@ describe("mock core", () => {
 
     await core.setForceRadio(false);
     expect((await core.sendMessage(chat.id, "x".repeat(97))).transport).toBe("internet");
+  });
+
+  it("keeps a message that has no path waiting, and lets the user cancel it", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const radioChat = (await core.load()).chats.find((c) => c.reach === "radio")!;
+    events.length = 0;
+
+    // Too long for the radio that reaches the chat: it waits for the internet.
+    const long = await core.sendMessage(radioChat.id, "x".repeat(97));
+    expect(long).toMatchObject({ transport: "internet", delivery: "waiting", cancellable: true });
+    vi.advanceTimersByTime(5000);
+    expect(events).toEqual([{ type: "messageAdded", chatId: radioChat.id, message: long }]);
+
+    await core.cancelMessage(radioChat.id, long.id);
+    expect(events[1]).toEqual({ type: "messageRemoved", chatId: radioChat.id, messageId: long.id });
+    expect((await core.load()).chats.find((c) => c.id === radioChat.id)!.messages.some((m) => m.id === long.id)).toBe(
+      false,
+    );
+    await expect(core.cancelMessage(radioChat.id, long.id)).rejects.toThrow("no longer exists");
+    const sent = await core.sendMessage(radioChat.id, "Short");
+    await expect(core.cancelMessage(radioChat.id, sent.id)).rejects.toThrow("on its way already");
   });
 
   it("exports a demo copy of the key, protected by a long enough password or plain", async () => {

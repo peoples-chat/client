@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import type { DeliveryState, Message } from "../core/types";
+import { radioBytes } from "../core/radio";
+import { RADIO_TEXT_LIMIT, type DeliveryState, type Message } from "../core/types";
 import { formatDay, formatTime, sameDay } from "./format";
 import { Icon } from "./Icon";
 import styles from "./MessageList.module.css";
@@ -8,10 +9,14 @@ interface MessageListProps {
   messages: Message[];
   /** Shown when there are no messages yet: a line of text, or a whole introduction. */
   empty?: ReactNode;
+  /** Cancels a message that waits for a path (#46). Without it, there is nothing to cancel. */
+  onCancel?: (messageId: string) => void;
+  /** The chat's messages go by radio, so a waiting one too long for radio says why it waits. */
+  byRadio?: boolean;
 }
 
 /** The messages of a chat, oldest at the top, with a separator for each day. */
-export function MessageList({ messages, empty }: MessageListProps) {
+export function MessageList({ messages, empty, onCancel, byRadio = false }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -50,6 +55,12 @@ export function MessageList({ messages, empty }: MessageListProps) {
             <div className={styles.day}>{formatDay(message.sentAt, now)}</div>
           )}
           <MessageBubble message={message} />
+          {message.cancellable && onCancel && (
+            <WaitingNote
+              tooLongForRadio={byRadio && radioBytes(message.text) > RADIO_TEXT_LIMIT}
+              onCancel={() => onCancel(message.id)}
+            />
+          )}
         </Fragment>
       ))}
     </div>
@@ -73,6 +84,18 @@ function MessageBubble({ message }: { message: Message }) {
         <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
         {outgoing && message.delivery && <Delivery state={message.delivery} />}
       </div>
+    </div>
+  );
+}
+
+/** Under a message that waits for a path: why, if it is too long for radio, and Cancel. */
+function WaitingNote({ tooLongForRadio, onCancel }: { tooLongForRadio: boolean; onCancel: () => void }) {
+  return (
+    <div className={styles.waiting}>
+      {tooLongForRadio && <span>Too long for radio. It waits for the internet.</span>}
+      <button type="button" className={styles.cancel} onClick={onCancel}>
+        Cancel
+      </button>
     </div>
   );
 }

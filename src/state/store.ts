@@ -85,6 +85,16 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
           : { ...chat, messages: [...chat.messages, event.message] },
       );
 
+    case "messageRemoved": {
+      const without = (messages: Message[]) => messages.filter((m) => m.id !== event.messageId);
+      if (state.chats.some((c) => c.id === event.chatId)) {
+        return updateChat(state, event.chatId, (chat) =>
+          chat.messages.some((m) => m.id === event.messageId) ? { ...chat, messages: without(chat.messages) } : chat,
+        );
+      }
+      return state;
+    }
+
     case "deliveryChanged":
       return updateChat(state, event.chatId, (chat) => {
         const message = chat.messages.find((m) => m.id === event.messageId);

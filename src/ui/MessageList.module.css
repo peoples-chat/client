@@ -89,3 +89,25 @@
   align-items: center;
   gap: 4px;
 }
+
+/* Under a message that waits for a path (#46): why, and Cancel. */
+.waiting {
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -2px 2px 2px;
+  font-size: 13px;
+  color: var(--color-muted);
+  text-align: right;
+}
+
+.cancel {
+  min-height: 32px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-weight: 600;
+}
