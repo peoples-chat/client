@@ -174,7 +174,7 @@ Each chat says how its messages can travel now (#43):
   including connections that go silent without closing.
 
 **When the relays are back**, the messages that waited go out within a second. The other phone sometimes shows them
-much later, more than a minute in some test runs (#78; [mdk.md](mdk.md#relay-reachability) explains why).
+much later, up to several minutes in the tests (#78; [mdk.md](mdk.md#relay-reachability) explains why).
 
 **Trying it without the internet.** To take the relays away while the phone keeps its network and Bluetooth, use the
 relay on the Mac (below) and type `block` in its window; `unblock` brings it back. With public relays, turning off

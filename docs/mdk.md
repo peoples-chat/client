@@ -265,7 +265,7 @@ makes it `internet` again with MDK's next attempt, within 5 seconds.
 
 **After an outage.** The sender's waiting messages go out within a second of the relays coming back. The other phone
 sometimes shows them much later. In the tests it got them after 1 to 20 seconds in most runs, but in some not within 70
-seconds.
+seconds, and in one after 7.6 minutes.
 
 - On reconnecting, MDK asks the relay again for the chat's events. Events in that reply that it hasn't seen are held
   until its history recovery proves that nothing older is missing (the replay fence, see [Tests](#tests)).
