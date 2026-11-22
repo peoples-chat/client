@@ -50,6 +50,18 @@
           }
         ]
       }
+    ],
+    "relays": [
+      {
+        "url": "wss://relay.peoples.chat",
+        "operator": "peoplesChat",
+        "status": "connected"
+      },
+      {
+        "url": "wss://relay.example",
+        "operator": "independent",
+        "status": "connecting"
+      }
     ]
   },
   "events": [
@@ -87,6 +99,21 @@
       "type": "reachChanged",
       "chatId": "chat-2",
       "reach": "unreachable"
+    },
+    {
+      "type": "relaysChanged",
+      "relays": [
+        {
+          "url": "wss://relay.peoples.chat",
+          "operator": "peoplesChat",
+          "status": "connected"
+        },
+        {
+          "url": "wss://relay.example",
+          "operator": "independent",
+          "status": "unreachable"
+        }
+      ]
     },
     {
       "type": "invitationReceived",

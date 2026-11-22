@@ -74,6 +74,30 @@ export interface Chat {
   reach: Reach;
 }
 
+/**
+ * Who runs a relay (#88).
+ * - `peoplesChat`: the project.
+ * - `independent`: anyone else.
+ */
+export type RelayOperator = "peoplesChat" | "independent";
+
+/**
+ * Whether the account's connection to a relay is open.
+ * - `connected`: it is.
+ * - `connecting`: not connected, but not for long enough to count as gone: opening, or a short
+ *   drop.
+ * - `unreachable`: closed for long enough to count as gone (#43).
+ */
+export type RelayStatus = "connected" | "connecting" | "unreachable";
+
+/** One of the relays the account's messages travel through (#88). */
+export interface Relay {
+  /** The relay's address, such as `wss://nos.lol`. */
+  url: string;
+  operator: RelayOperator;
+  status: RelayStatus;
+}
+
 /** An invitation to a direct chat from someone who is not a contact yet. */
 export interface Invitation {
   /** The id of the chat that accepting the invitation opens. */
@@ -89,6 +113,8 @@ export interface Snapshot {
   account: Account | null;
   chats: Chat[];
   invitations: Invitation[];
+  /** The account's relays: the project's first, then the others, each by address. Empty without an account. */
+  relays: Relay[];
 }
 
 /**
@@ -104,7 +130,9 @@ export type CoreEvent =
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
-  | { type: "reachChanged"; chatId: string; reach: Reach };
+  | { type: "reachChanged"; chatId: string; reach: Reach }
+  /** The account's relays changed, or their connections did. Carries all of them. */
+  | { type: "relaysChanged"; relays: Relay[] };
 
 export type CoreListener = (event: CoreEvent) => void;
 

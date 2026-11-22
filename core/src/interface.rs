@@ -100,6 +100,37 @@ pub struct Chat {
     pub reach: Reach,
 }
 
+/// One of the relays the account's messages travel through (#88).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Relay {
+    /// The relay's address, such as `wss://nos.lol`.
+    pub url: String,
+    pub operator: RelayOperator,
+    pub status: RelayStatus,
+}
+
+/// Who runs a relay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelayOperator {
+    /// The project runs it.
+    PeoplesChat,
+    /// Anyone else.
+    Independent,
+}
+
+/// Whether the account's connection to a relay is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelayStatus {
+    Connected,
+    /// Not connected, but not long enough to count as gone: opening, or a short drop.
+    Connecting,
+    /// Closed for long enough to count as gone (#43).
+    Unreachable,
+}
+
 /// An invitation to a direct chat from someone who is not a contact yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +152,10 @@ pub struct Snapshot {
     pub account: Option<Account>,
     pub chats: Vec<Chat>,
     pub invitations: Vec<Invitation>,
+    /// The account's relays: the project's first, then the others, each by address. Empty
+    /// without an account.
+    #[serde(default)]
+    pub relays: Vec<Relay>,
 }
 
 /// A change in the core. Applying an event twice, or one that a snapshot already contains,
@@ -160,6 +195,10 @@ pub enum CoreEvent {
     ReachChanged {
         chat_id: String,
         reach: Reach,
+    },
+    /// The account's relays changed, or their connections did. Carries all of them.
+    RelaysChanged {
+        relays: Vec<Relay>,
     },
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Chat, Core, CoreEvent, CoreListener, Message, Snapshot } from "../core/types";
+import type { Chat, Core, CoreEvent, CoreListener, Message, Relay, Snapshot } from "../core/types";
 import { applyEvent, chatListItems, createStore, fromSnapshot, initialState } from "./store";
 
 const message = (id: string, sentAt: number, extra: Partial<Message> = {}): Message => ({
@@ -19,7 +19,9 @@ const chat = (id: string, messages: Message[] = []): Chat => ({
   reach: "internet",
 });
 
-const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [] });
+const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [], relays: [] });
+
+const relay = (url: string, status: Relay["status"]): Relay => ({ url, operator: "independent", status });
 
 describe("applyEvent", () => {
   it("adds a message once, even when the event arrives twice", () => {
@@ -60,6 +62,15 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "reachChanged", chatId: "b", reach: "unreachable" })).toBe(next);
   });
 
+  it("replaces the relays, and changes nothing when they are the same", () => {
+    const state = { ...ready(), relays: [relay("wss://a.example", "connected"), relay("wss://b.example", "connected")] };
+    const relays = [relay("wss://a.example", "connected"), relay("wss://b.example", "unreachable")];
+    const next = applyEvent(state, { type: "relaysChanged", relays });
+
+    expect(next.relays).toEqual(relays);
+    expect(applyEvent(next, { type: "relaysChanged", relays: structuredClone(relays) })).toBe(next);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);
@@ -68,17 +79,19 @@ describe("applyEvent", () => {
     expect(applyEvent(state, { type: "invitationRemoved", invitationId: "x" })).toBe(state);
   });
 
-  it("clears the account, chats and requests when the account is deleted", () => {
+  it("clears the account, chats, requests and relays when the account is deleted", () => {
     const state = {
       ...ready([chat("a")]),
       account: { name: "Emil", publicKey: "k", inviteLink: "peopleschat:x" },
       invitations: [{ id: "i1", from: { publicKey: "k2", name: "Karen" }, receivedAt: 5, messages: [] }],
+      relays: [relay("wss://a.example", "connected")],
     };
     expect(applyEvent(state, { type: "accountDeleted" })).toEqual({
       ...state,
       account: null,
       chats: [],
       invitations: [],
+      relays: [],
     });
   });
 
@@ -124,7 +137,7 @@ describe("createStore", () => {
   }
 
   it("applies events that arrive while the snapshot loads", async () => {
-    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [] });
+    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [], relays: [] });
     const store = createStore(core);
     let notified = 0;
     store.subscribe(() => notified++);

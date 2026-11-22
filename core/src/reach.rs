@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::interface::Reach;
+use crate::interface::{Reach, RelayStatus};
 use crate::messaging::RelayLink;
 
 /// How long a relay's connection must stay closed before the relay counts as gone.
@@ -36,6 +36,16 @@ struct Link {
 impl Link {
     fn up(&self, now: Instant) -> bool {
         self.connected || now < self.since + DOWN_AFTER
+    }
+
+    fn status(&self, now: Instant) -> RelayStatus {
+        if self.connected {
+            RelayStatus::Connected
+        } else if self.up(now) {
+            RelayStatus::Connecting
+        } else {
+            RelayStatus::Unreachable
+        }
     }
 }
 
@@ -102,6 +112,17 @@ impl Reachability {
         } else {
             Reach::Unreachable
         }
+    }
+
+    /// The account's relays and their connections at `now`, by address (#88).
+    pub fn relays(&self, now: Instant) -> Vec<(String, RelayStatus)> {
+        let mut relays: Vec<(String, RelayStatus)> = self
+            .relays
+            .iter()
+            .map(|(url, link)| (url.clone(), link.status(now)))
+            .collect();
+        relays.sort_by(|a, b| a.0.cmp(&b.0));
+        relays
     }
 
     /// The soonest moment after `now` at which a closed connection makes its relay count as gone.
@@ -215,6 +236,35 @@ mod tests {
         // Unknown relays and unknown chats go by all of the account's relays.
         assert_eq!(relays.reach("elsewhere", later), Reach::Internet);
         assert_eq!(relays.reach("unknown", later), Reach::Internet);
+    }
+
+    #[test]
+    fn each_relay_says_whether_it_is_connected_opening_or_gone() {
+        let start = Instant::now();
+        let mut relays = Reachability::new(
+            &links(&[("wss://b", true), ("wss://a", false), ("wss://c", true)]),
+            start,
+        );
+        relays.update(
+            &links(&[("wss://b", true), ("wss://a", false), ("wss://c", false)]),
+            start + 5 * SECOND,
+        );
+        assert_eq!(
+            relays.relays(start + 9 * SECOND),
+            vec![
+                ("wss://a".to_owned(), RelayStatus::Connecting),
+                ("wss://b".to_owned(), RelayStatus::Connected),
+                ("wss://c".to_owned(), RelayStatus::Connecting),
+            ]
+        );
+        assert_eq!(
+            relays.relays(start + DOWN_AFTER)[0],
+            ("wss://a".to_owned(), RelayStatus::Unreachable)
+        );
+        assert_eq!(
+            relays.relays(start + 5 * SECOND + DOWN_AFTER)[2],
+            ("wss://c".to_owned(), RelayStatus::Unreachable)
+        );
     }
 
     #[test]

@@ -16,12 +16,12 @@ use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Snapshot, Transport,
+    Relay, RelayOperator, RelayStatus, Snapshot, Transport,
 };
 use crate::invite;
 use crate::messaging::{
-    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, RelayLink, RelayLinks,
-    TextMessage,
+    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink,
+    RelayLinks, TextMessage, canonical_relay,
 };
 use crate::radio::RadioKeys;
 use crate::reach::Reachability;
@@ -435,6 +435,8 @@ impl Core {
                 None => unnamed.push(chat),
             }
         }
+        // The relays go into the snapshot now; their watcher keeps them current.
+        self.refresh_reach(Instant::now());
 
         // The watchers hold the core weakly, so dropping the core ends them.
         let core = Arc::downgrade(&self.inner);
@@ -635,11 +637,17 @@ impl Core {
         self.refresh_reach(now)
     }
 
-    /// Sets each chat's reach as it is at `now`, and emits [`CoreEvent::ReachChanged`] for those
-    /// that changed. Returns when a closed connection next makes its relay count as gone.
+    /// Sets each chat's reach and each relay's status as they are at `now`, and emits
+    /// [`CoreEvent::ReachChanged`] and [`CoreEvent::RelaysChanged`] for what changed. Returns
+    /// when a closed connection next makes its relay count as gone.
     fn refresh_reach(&self, now: Instant) -> Option<Instant> {
         let mut state = self.state();
         let reachability = self.reach();
+        let relays = relay_views(reachability.relays(now), PROJECT_RELAYS);
+        if state.account.is_some() && state.relays != relays {
+            state.relays = relays.clone();
+            self.emit(CoreEvent::RelaysChanged { relays });
+        }
         for chat in &mut state.chats {
             let reach = reachability.reach(&chat.id, now);
             if chat.reach != reach {
@@ -764,6 +772,25 @@ async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
     }
 }
 
+/// The relays as an interface shows them, with who runs each: the `project`'s first, then the
+/// others. The sort keeps each group in the order it came, which is by address.
+fn relay_views(relays: Vec<(String, RelayStatus)>, project: &[&str]) -> Vec<Relay> {
+    let mut relays: Vec<Relay> = relays
+        .into_iter()
+        .map(|(url, status)| Relay {
+            operator: if project.iter().any(|relay| canonical_relay(relay) == url) {
+                RelayOperator::PeoplesChat
+            } else {
+                RelayOperator::Independent
+            },
+            url,
+            status,
+        })
+        .collect();
+    relays.sort_by_key(|relay| relay.operator != RelayOperator::PeoplesChat);
+    relays
+}
+
 /// The account as an interface sees it. The invite link carries the relays new accounts
 /// publish to as hints (#19).
 fn account_view(
@@ -809,4 +836,47 @@ fn now_ms() -> u64 {
 fn failed(action: &str, error: impl std::fmt::Display) -> CommandError {
     log::warn!("could not {action}: {error}");
     CommandError::new(format!("Could not {action}. Try again."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_projects_relays_come_first_and_say_who_runs_them() {
+        let relays = vec![
+            ("wss://a.example".to_owned(), RelayStatus::Connected),
+            (
+                "wss://relay.peoples.chat".to_owned(),
+                RelayStatus::Unreachable,
+            ),
+            ("wss://z.example".to_owned(), RelayStatus::Connecting),
+        ];
+        // However the project's list spells an address.
+        let views = relay_views(relays, &["wss://Relay.Peoples.Chat/"]);
+        let shown: Vec<_> = views
+            .iter()
+            .map(|relay| (relay.url.as_str(), relay.operator, relay.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "wss://relay.peoples.chat",
+                    RelayOperator::PeoplesChat,
+                    RelayStatus::Unreachable
+                ),
+                (
+                    "wss://a.example",
+                    RelayOperator::Independent,
+                    RelayStatus::Connected
+                ),
+                (
+                    "wss://z.example",
+                    RelayOperator::Independent,
+                    RelayStatus::Connecting
+                ),
+            ]
+        );
+    }
 }

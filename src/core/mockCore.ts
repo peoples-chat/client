@@ -10,6 +10,7 @@ import {
   type CoreListener,
   type Invitation,
   type Message,
+  type Relay,
 } from "./types";
 
 // A stand-in for the Rust core with demo data: in the browser preview, and in the app when it is
@@ -118,6 +119,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         account: state.account,
         chats: state.chats,
         invitations: state.invitations,
+        relays: state.account ? demoRelays() : [],
       });
     },
 
@@ -146,6 +148,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       state.invitations.push(invitation);
       emit(
         { type: "accountCreated", account },
+        { type: "relaysChanged", relays: demoRelays() },
         { type: "chatAdded", chat },
         { type: "chatAdded", chat: radioChat },
         { type: "invitationReceived", invitation },
@@ -242,6 +245,18 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       return `ncryptsec1demo${randomBech32(148)}`;
     },
   };
+}
+
+/**
+ * The demo's relays, as in the design: one run by the project, and one of the others not
+ * reachable. The real core lists the account's relays as they are (#88).
+ */
+function demoRelays(): Relay[] {
+  return [
+    { url: "wss://relay.peoples.chat", operator: "peoplesChat", status: "connected" },
+    { url: "wss://relay.aarhus.example", operator: "independent", status: "connected" },
+    { url: "wss://relay.nordmesh.example", operator: "independent", status: "unreachable" },
+  ];
 }
 
 function demoChat(now: number): Chat {
