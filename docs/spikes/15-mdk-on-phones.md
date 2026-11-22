@@ -149,7 +149,7 @@ The spike command is gone (#17). The app's own account commands now do the same 
    ```
 
 2. Start the app with the local relay:
-   `PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777 pnpm tauri ios dev`, or the same with `android dev`. On
+   `TAURI_PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777 pnpm tauri ios dev`, or the same with `android dev`. On
    Android, also run `adb reverse tcp:7777 tcp:7777`. Details: [Running the app with the real
    core](../core-interface.md#running-the-app-with-the-real-core).
 3. Create an account. The relay prints each event it stores:
