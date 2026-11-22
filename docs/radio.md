@@ -4,7 +4,8 @@ The core talks to a paired LoRa radio through a radio transport (#60). Each mesh
 different meshes can't talk to each other, and a radio runs one mesh at a time. MeshCore comes first, through
 [meshcore-rs](https://github.com/andrewdavidmackenzie/meshcore-rs). Meshtastic follows after the MVP.
 
-The core sends and receives chat text through a radio it is handed (#40), while the switch that forces radio is on.
+The core sends and receives chat text through a radio it is handed (#40). It sends by radio when no relay is reachable
+and the contact's radio has been heard (#44, #45), or while the switch that forces radio is on.
 Pairing a real radio comes with #24, and the path for the packets with #36; until then the tests use mock radios.
 [radio-format-v0.md](radio-format-v0.md#in-the-core) describes how the core sends and receives.
 

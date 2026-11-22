@@ -53,7 +53,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
 | `createInvite(name)` | `create_invite` | `SentInvite` | `inviteChanged` | Done (#95) |
 | `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
-| `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40) |
+| `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40, #45) |
 | `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
@@ -326,8 +326,8 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
 - **In radio mode, the field** takes short text only. A counter shows UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in
   `src/core/types.ts`), and Send stays off past it.
 
-The core marks a chat `radio` when the contact's radio has been heard (#44); sending there by itself is #45. Until
-then, the switch below sends by radio, and the mock's demo has a chat reached by radio.
+The core marks a chat `radio` when the contact's radio has been heard (#44), and sends there by radio by itself (#45).
+The mock's demo has a chat reached by radio.
 
 ## Radio
 
@@ -338,7 +338,18 @@ The snapshot's `radio` says which radio the core uses, and `radioChanged` carrie
 - `forced`: the switch that sends every message by radio, for testing until the core chooses the transport (#45). It
   stays across restarts. `setForceRadio(forced)` turns it on or off.
 
-**Sending with the switch on.** `sendMessage` checks first, and says why it can't send:
+**Choosing the path** (#45). `sendMessage` follows the spec's three rules:
+
+1. the internet while one of the chat's relays is reachable;
+2. otherwise radio, when the contact's radio has been heard on the mesh and preset of the user's radio (the chat's
+   `reach` is `radio`);
+3. otherwise the message waits, and goes out when a relay is back.
+
+The switch sends by radio before any rule, for testing. `core/src/transport.rs` holds the rules, with a table of every
+combination in its tests.
+
+**Sending by radio.** `sendMessage` checks first. With the switch on, it says why it can't send; chosen by the rules,
+a message the radio can't take waits for the internet instead:
 
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
@@ -347,8 +358,9 @@ The snapshot's `radio` says which radio the core uses, and `radioChanged` carrie
 - "Could not send by radio: the chat's keys aren't ready. Try again."
 
 Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and
-that copy is the permanent record (#47). With the relays up, the message goes both ways at once; the other phone keeps
-one copy. If the radio fails after the checks, the message waits for the internet.
+that copy is the permanent record (#47). With the switch on and the relays up, the message goes both ways at once; the
+other phone keeps one copy. So does a message whose radio send is still going when the relays come back: it stays
+`radio`, the way it went first. If the radio fails after the checks, the message waits for the internet.
 
 **What arrives.** The message is `radio`, and `confirmed` once the other radio confirms it. On the other phone it
 arrives as `radio` too, and its relay copy later changes nothing. Messages that came by radio stay across a restart,

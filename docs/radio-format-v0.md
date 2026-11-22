@@ -193,7 +193,8 @@ restart, a replayed packet is caught by its message id, because received radio m
 refusal returns nothing to show and nothing to send.
 
 **On the radio** (#40, `core/src/app/radio.rs`). The core uses a radio once it is handed one (pairing is #24; the tests
-hand it mock radios). With the switch that forces radio on, `send_message` sends like this:
+hand it mock radios). When `send_message` chooses radio (#45), or the switch that forces radio is on, it sends like
+this:
 
 1. MDK takes the message and keeps it until a relay can be reached. MDK's id is the id above.
 2. The core rebuilds that id from the account key, the time and the text. If it differs, as for a text with mentions,

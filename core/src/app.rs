@@ -28,6 +28,7 @@ use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
 use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
+use crate::transport::{Route, route};
 
 mod radio;
 
@@ -650,21 +651,35 @@ impl Core {
     /// The message is stored before this returns. While no relay can be reached, MDK keeps it
     /// and tries again, also after a restart; until then it is `waiting`.
     ///
-    /// With the switch that forces radio on, the radio carries it too (#40), and it is
-    /// `confirmed` once the other radio confirms it.
+    /// Without a reachable relay, but with the contact's radio heard on the same preset, or with
+    /// the switch that forces radio on, the radio carries it too (#40, #45). It is then `radio`,
+    /// and `confirmed` once the other radio confirms it.
     pub async fn send_message(&self, chat_id: &str, text: &str) -> Result<Message, CommandError> {
         let account = self.account()?;
         let text = text.trim();
         if text.is_empty() {
             return Err(CommandError::new("Write a message first."));
         }
-        if self.chat(chat_id).is_none() {
+        let Some(chat) = self.chat(chat_id) else {
             return Err(CommandError::new("This chat no longer exists."));
+        };
+        let forced = self.inner.radio_store.forced();
+        let relays_up = self.reach().reach(chat_id, Instant::now()) == Reach::Internet;
+        let radio = self.contact_radio_reach(&chat.contact.public_key);
+        match route(forced, relays_up, radio) {
+            Route::Radio => self.send_by_radio(&account, chat_id, text, forced).await,
+            // Waiting, MDK keeps the message and sends it once a relay is back.
+            Route::Internet | Route::Wait => self.send_by_internet(&account, chat_id, text).await,
         }
-        if self.inner.radio_store.forced() {
-            return self.send_by_radio(&account, chat_id, text).await;
-        }
+    }
 
+    /// Hands `text` to MDK, which publishes it to the relays now or once one can be reached.
+    async fn send_by_internet(
+        &self,
+        account: &Account,
+        chat_id: &str,
+        text: &str,
+    ) -> Result<Message, CommandError> {
         let message_id = self
             .inner
             .messaging
