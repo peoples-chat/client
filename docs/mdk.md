@@ -94,7 +94,7 @@ ours reads, holds or passes the key.
 
 **Defaults.** New accounts use three public, general-purpose relays: `wss://relay.damus.io`, `wss://nos.lol` and
 `wss://relay.primal.net` (`DEFAULT_RELAYS` in `core/src/messaging.rs`). Who runs the project's own relays is decided
-later (#11). Building with `PEOPLES_CHAT_RELAYS` (comma-separated) replaces them; see
+later (#11). Building with `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) replaces them; see
 [core-interface.md](core-interface.md#running-the-app-with-the-real-core).
 
 **How other clients find an account.**
@@ -148,7 +148,13 @@ What White Noise does, read from its current iOS and Android apps:
 - **`marmot://profile/nprofile1…`** is refused by its Android app, so we don't use that form.
 - **Neither app registers `nostr:`** as a link scheme; both register `marmot:` and `whitenoise:`.
 
-We read White Noise's links in turn. Checking with White Noise itself is #22.
+We read White Noise's links in turn.
+
+The check with White Noise itself (#22, [record](tests/22-white-noise.md)) passed with one gap:
+
+- Starting a chat with White Noise works, and so does text both ways.
+- White Noise 2026.11.17 can't start a chat with our accounts. It looks for relay lists only on its own two relays,
+  where our accounts don't publish them. Whether they should is #76.
 
 **Starting a chat.** `start_direct_conversation` does the work:
 

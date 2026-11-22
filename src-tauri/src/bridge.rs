@@ -17,8 +17,11 @@ const KEYCHAIN_SERVICE: &str = "chat.peoples.client";
 /// Relays for new accounts, comma-separated, taken from the environment when the app is built.
 /// Without it the app uses the core's public [`DEFAULT_RELAYS`]. To use the relay that
 /// `core/examples/local_relay.rs` runs on the Mac, build with
-/// `PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777`; only debug builds accept loopback relays.
-const RELAYS: Option<&str> = option_env!("PEOPLES_CHAT_RELAYS");
+/// `TAURI_PEOPLES_CHAT_RELAYS=ws://127.0.0.1:7777`; only debug builds accept loopback relays.
+///
+/// The name starts with `TAURI` because the Tauri CLI passes only such variables (and `CARGO_`,
+/// `RUST_` and `WRY` ones) on to the iOS and Android builds that Xcode and Gradle run.
+const RELAYS: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_RELAYS");
 
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
@@ -67,7 +70,7 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
     })
 }
 
-/// `PEOPLES_CHAT_RELAYS` when it names at least one relay, otherwise the core's defaults.
+/// `TAURI_PEOPLES_CHAT_RELAYS` when it names at least one relay, otherwise the core's defaults.
 fn relays() -> Vec<String> {
     let chosen: Vec<String> = RELAYS
         .unwrap_or_default()
