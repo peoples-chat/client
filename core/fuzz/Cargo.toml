@@ -1,0 +1,33 @@
+# Fuzz targets for the core (#39), for cargo fuzz, which needs a nightly toolchain:
+#
+#   cd core && cargo +nightly fuzz run radio_packet --sanitizer none fuzz/corpus/radio_packet fuzz/seeds/radio_packet
+#
+# Not part of the app's workspace. The core's code is safe Rust, so what the fuzzer looks for is
+# panics; `--sanitizer none` also keeps sanitizers away from MDK's C and Odin code.
+
+[package]
+name = "peoples-chat-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+peoples-chat-core = { path = ".." }
+
+[[bin]]
+name = "radio_packet"
+path = "fuzz_targets/radio_packet.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+
+# As in the app's workspace (../../Cargo.toml). Its SQLCipher patch doesn't apply here: this crate
+# resolves its own versions.
+[patch.crates-io]
+hax-lib-macros = { git = "https://github.com/cryspen/hax.git", rev = "8f9cb576e58f6cc7e9ed249a7d4439b0f7ed0da7" }

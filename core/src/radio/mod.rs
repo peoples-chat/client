@@ -10,6 +10,7 @@
 //! has its own constructors; everything after that goes through [`Radio`]. Public keys are hex
 //! strings, as elsewhere in the core. Details: `docs/radio.md`.
 
+pub mod format;
 mod keys;
 mod meshcore;
 mod mock;

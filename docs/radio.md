@@ -11,7 +11,8 @@ Nothing in the app uses the radio yet. Pairing comes with #24, and radio message
 including the rules for epochs and nonces.
 
 **The format.** [radio-format-v0.md](radio-format-v0.md) describes a chat message in one packet (#38), with test
-vectors from `scripts/radio_vectors.py`.
+vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements it (#39), and `core/fuzz` fuzzes its
+decoder.
 
 ## The interface
 
