@@ -89,7 +89,7 @@ async fn an_account_is_created_kept_across_a_restart_and_deleted() {
     assert_eq!(account.name, "Emil Dahl");
     assert_eq!(account.public_key.len(), 64);
     assert!(
-        account.invite_link.starts_with("nostr:npub1"),
+        account.invite_link.starts_with("nostr:nprofile1"),
         "{}",
         account.invite_link
     );

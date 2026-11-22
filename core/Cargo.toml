@@ -11,11 +11,16 @@ publish.workspace = true
 marmot-app = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
 marmot-account = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
 cgka-traits = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" }
+# Chat ids are MLS group ids in hex.
+hex = "0.4"
 log = "0.4"
+# Reads the relay hints in invite links (NIP-19 nprofile). The same fork and revision MDK pins,
+# so it adds nothing to the build.
+nostr = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589", default-features = false, features = ["std"] }
 # The interface's types travel as JSON (src/interface.rs).
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 # Replaces the OS keychain in tests.

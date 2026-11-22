@@ -1,8 +1,9 @@
 //! Internet messaging: Marmot over Nostr relays, through MDK's multi-account app runtime.
 //!
 //! This is the link to MDK (#59): open the runtime, create, list and delete accounts, and wait
-//! until an account's relay lists, profile and KeyPackage are on the relays. [`crate::Core`]
-//! builds the interface's commands and events on it (#16).
+//! until an account's relay lists, profile and KeyPackage are on the relays. Direct chats (#19):
+//! start one with another account, follow the account's chats and invitations, and accept an
+//! invitation. [`crate::Core`] builds the interface's commands and events on it (#16).
 //!
 //! Account keys stay inside MDK (#17). It keeps them in the platform's key store and signs with
 //! them itself, and an external signer can take their place. Nothing here reads them. Details:
@@ -11,15 +12,21 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use cgka_traits::TransportEndpoint;
+use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
 use marmot_app::{
-    AccountSetupReadiness, AccountSetupRequest, AppError, MarmotApp, MarmotAppConfig,
-    MarmotAppRuntime, UserProfileMetadata,
+    AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupRecord, MarmotApp,
+    MarmotAppConfig, MarmotAppRuntime, RuntimeChatsSubscription, SelfMembership,
+    UserProfileMetadata,
 };
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
 const READINESS_POLL: Duration = Duration::from_millis(50);
+/// How long [`Messaging::contact_name`] waits for a profile from the relays.
+const PROFILE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long [`Messaging::accept_direct_chat`] retries while the account is busy, as `wn` does.
+const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
+const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 
 /// Relays for new accounts unless the app is built with others (#18). New accounts publish their
 /// relay lists, profile and KeyPackage here.
@@ -63,6 +70,61 @@ pub struct ExistingAccount {
     pub name: Option<String>,
 }
 
+/// A direct chat as MDK holds it: an unnamed group of exactly two accounts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectChat {
+    /// The MLS group id, in hex. It stays the same for the chat's life.
+    pub id: String,
+    /// The other person's public key, in hex.
+    pub peer_hex: String,
+    /// The other person invited the account, and it has not accepted yet.
+    pub invitation: bool,
+    /// The account is still in the chat: the chat is not archived, left or removed.
+    pub active: bool,
+}
+
+/// The account's direct chats as they were when following began, then each one that changes.
+pub struct DirectChats {
+    account_hex: String,
+    subscription: RuntimeChatsSubscription,
+}
+
+impl DirectChats {
+    /// The direct chats when following began, invitations included.
+    pub fn current(&self) -> Vec<DirectChat> {
+        self.subscription
+            .snapshot
+            .iter()
+            .filter_map(|record| direct_chat(&self.account_hex, record))
+            .collect()
+    }
+
+    /// The next direct chat that was added or changed. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<DirectChat> {
+        loop {
+            let record = self.subscription.recv().await?;
+            if let Some(chat) = direct_chat(&self.account_hex, &record) {
+                return Some(chat);
+            }
+        }
+    }
+}
+
+/// The direct chat in `record`, unless it is a group or the account's own device group.
+fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat> {
+    let members = record.direct_member_ids_hex.as_ref()?;
+    if members.len() != 2 || !members.iter().any(|member| member == account_hex) {
+        return None;
+    }
+    let peer_hex = members.iter().find(|member| *member != account_hex)?;
+    Some(DirectChat {
+        id: record.group_id_hex.clone(),
+        peer_hex: peer_hex.clone(),
+        invitation: record.pending_confirmation,
+        active: !record.archived && matches!(record.self_membership, SelfMembership::Member),
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MessagingError {
     #[error(transparent)]
@@ -71,10 +133,28 @@ pub enum MessagingError {
     PublicationTimeout(Duration),
     #[error("setting up the account stopped and needs recovery")]
     RecoveryRequired,
+    #[error("{0:?} is not a chat id")]
+    InvalidChatId(String),
+}
+
+impl MessagingError {
+    /// The other person's relay lists or KeyPackage could not be found, so they can't be invited.
+    pub fn is_contact_unreachable(&self) -> bool {
+        matches!(
+            self,
+            Self::Mdk(
+                AppError::MissingKeyPackage { .. }
+                    | AppError::MissingMemberInboxRoute(_)
+                    | AppError::MissingRelayLists(_)
+                    | AppError::DirectoryLookupIncomplete(_)
+            )
+        )
+    }
 }
 
 /// The messaging side of the core: MDK's runtime over the stores in one data folder.
 pub struct Messaging {
+    app: MarmotApp,
     runtime: MarmotAppRuntime,
     relays: Vec<String>,
 }
@@ -96,9 +176,15 @@ impl Messaging {
         let runtime = app.runtime();
         runtime.start().await?;
         Ok(Self {
+            app,
             runtime,
             relays: options.relays,
         })
+    }
+
+    /// The relays new accounts publish to. Invite links name them as hints.
+    pub fn relays(&self) -> &[String] {
+        &self.relays
     }
 
     /// Creates an account with a new key and `name` as its profile name.
@@ -106,8 +192,7 @@ impl Messaging {
     /// Returns once the account exists on this device. Publishing its relay lists, profile and
     /// KeyPackage continues in the background; [`Self::wait_until_published`] waits for it.
     pub async fn create_account(&self, name: &str) -> Result<NewAccount, MessagingError> {
-        let relays: Vec<TransportEndpoint> =
-            self.relays.iter().cloned().map(TransportEndpoint).collect();
+        let relays = endpoints(&self.relays);
         let request = AccountSetupRequest {
             default_relays: relays.clone(),
             bootstrap_relays: relays,
@@ -176,10 +261,146 @@ impl Messaging {
         }
     }
 
+    /// Starts a direct chat between the account and `peer_hex`, or finds the one they already
+    /// have. Returns the chat's id.
+    ///
+    /// MDK looks up the other person's relay lists and KeyPackage, on our relays and on the
+    /// relays their list names, and then sends them an encrypted invitation in the background.
+    /// `relay_hints`, from their invite link, are searched first.
+    pub async fn start_direct_chat(
+        &self,
+        account_hex: &str,
+        peer_hex: &str,
+        relay_hints: &[String],
+    ) -> Result<String, MessagingError> {
+        if !relay_hints.is_empty() {
+            // MDK keeps the relay lists it finds here, and the lookup below uses them too. If the
+            // hints lead nowhere, that lookup still searches our relays.
+            if let Err(error) = self
+                .app
+                .directory()
+                .fetch_account_relay_list_status_for_account_id(peer_hex, endpoints(relay_hints))
+                .await
+            {
+                log::info!("the invite link's relay hints gave no relay lists: {error}");
+            }
+        }
+        let group_id = self
+            .runtime
+            .start_direct_conversation(account_hex, peer_hex)
+            .await?;
+        Ok(group_id.to_string())
+    }
+
+    /// Accepts the invitation to the direct chat `chat_id`. Nothing goes back to the person who
+    /// sent it: they are in the chat already.
+    pub async fn accept_direct_chat(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<(), MessagingError> {
+        let bytes =
+            hex::decode(chat_id).map_err(|_| MessagingError::InvalidChatId(chat_id.to_owned()))?;
+        let group_id = GroupId::new(bytes);
+        let deadline = Instant::now() + ACCEPT_RETRY_FOR;
+        loop {
+            match self
+                .runtime
+                .accept_group_invite(account_hex, &group_id)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                // The account is still catching up after a start, or has not stored the
+                // invitation yet.
+                Err(AppError::AccountWorkerBusy | AppError::UnknownGroup(_))
+                    if Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(ACCEPT_RETRY_POLL).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Follows the account's direct chats, invitations included.
+    pub async fn follow_direct_chats(
+        &self,
+        account_hex: &str,
+    ) -> Result<DirectChats, MessagingError> {
+        let subscription = self.runtime.subscribe_chats(account_hex, false).await?;
+        Ok(DirectChats {
+            account_hex: account_hex.to_owned(),
+            subscription,
+        })
+    }
+
+    /// The name another account goes by, if this device has seen its profile.
+    pub fn known_name(&self, account_hex: &str) -> Option<String> {
+        self.runtime
+            .display_name_for_account_id(account_hex)
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+    }
+
+    /// The name another account goes by. Fetches its profile from `relay_hints` and our relays
+    /// when this device hasn't seen it; MDK keeps what it finds. Without a profile, the name is
+    /// the pseudonym MDK derives from the key, which White Noise shows too.
+    pub async fn contact_name(&self, account_hex: &str, relay_hints: &[String]) -> String {
+        if let Some(name) = self.known_name(account_hex) {
+            return name;
+        }
+        let relays: Vec<String> = relay_hints
+            .iter()
+            .chain(&self.relays)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let fetched = tokio::time::timeout(
+            PROFILE_TIMEOUT,
+            self.runtime
+                .fetch_current_user_profile_for_account_id(account_hex, endpoints(&relays)),
+        )
+        .await;
+        match fetched {
+            Ok(Ok(Some(profile))) => {
+                if let Some(name) = profile_name(&profile) {
+                    return name;
+                }
+            }
+            Ok(Ok(None)) => log::info!("the contact has no profile on the relays"),
+            Ok(Err(error)) => log::info!("could not fetch the contact's profile: {error}"),
+            Err(_) => log::info!("fetching the contact's profile timed out"),
+        }
+        marmot_app::default_profile_pseudonym(account_hex)
+    }
+
+    /// When this device first saw the direct chat `chat_id`, in milliseconds since the Unix
+    /// epoch.
+    pub fn chat_started_at(&self, account_hex: &str, chat_id: &str) -> Option<u64> {
+        let row = self.runtime.chat_list_row(account_hex, chat_id).ok()??;
+        // MDK stores this in seconds.
+        Some(row.conversation_created_at.saturating_mul(1000)).filter(|time| *time > 0)
+    }
+
     /// Stops the runtime and closes every database. Call it before the process may be
     /// suspended; afterwards this value cannot be used.
     pub async fn close(&self) -> Result<(), MessagingError> {
         self.runtime.shutdown_and_close().await?;
         Ok(())
     }
+}
+
+fn endpoints(relays: &[String]) -> Vec<TransportEndpoint> {
+    relays.iter().cloned().map(TransportEndpoint).collect()
+}
+
+/// The name a profile shows: its display name, else its name.
+fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
+    [&profile.display_name, &profile.name]
+        .into_iter()
+        .flatten()
+        .map(|name| name.trim())
+        .find(|name| !name.is_empty())
+        .map(str::to_owned)
 }
