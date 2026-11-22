@@ -45,7 +45,7 @@ mod tests {
     use Route::{Internet, Radio, Wait};
 
     /// Every combination: forced, relays up, the contact's radio, and the route.
-    const TABLE: [(bool, bool, Result<(), RadioIssue>, Route); 24] = [
+    const TABLE: [(bool, bool, Result<(), RadioIssue>, Route); 28] = [
         // Rule 1: the internet while a relay is reachable, also when radio is.
         (false, true, Ok(()), Internet),
         (false, true, Err(NoRadio), Internet),
@@ -53,6 +53,7 @@ mod tests {
         (false, true, Err(OtherMesh), Internet),
         (false, true, Err(OtherPreset), Internet),
         (false, true, Err(NotHeard), Internet),
+        (false, true, Err(AirtimeUsed), Internet),
         // Rule 2: radio when no relay is, and the contact's radio was heard on the same preset.
         (false, false, Ok(()), Radio),
         // Rule 3: otherwise the message waits.
@@ -61,6 +62,8 @@ mod tests {
         (false, false, Err(OtherMesh), Wait),
         (false, false, Err(OtherPreset), Wait),
         (false, false, Err(NotHeard), Wait),
+        // Including when the radio has used this hour's airtime (#51).
+        (false, false, Err(AirtimeUsed), Wait),
         // The switch sends by radio, whatever holds; the radio then says why it can't.
         (true, true, Ok(()), Radio),
         (true, true, Err(NoRadio), Radio),
@@ -68,12 +71,14 @@ mod tests {
         (true, true, Err(OtherMesh), Radio),
         (true, true, Err(OtherPreset), Radio),
         (true, true, Err(NotHeard), Radio),
+        (true, true, Err(AirtimeUsed), Radio),
         (true, false, Ok(()), Radio),
         (true, false, Err(NoRadio), Radio),
         (true, false, Err(NoContactRadio), Radio),
         (true, false, Err(OtherMesh), Radio),
         (true, false, Err(OtherPreset), Radio),
         (true, false, Err(NotHeard), Radio),
+        (true, false, Err(AirtimeUsed), Radio),
     ];
 
     #[test]

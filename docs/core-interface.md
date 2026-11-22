@@ -291,7 +291,9 @@ Each chat says how its messages can travel now (#43):
   - `noRadio`: the user has no radio, or its link is down;
   - `noContactRadio`: the contact hasn't shared a radio;
   - `otherMesh` or `otherPreset`: the contact's radio runs another mesh, or another region or preset;
-  - `notHeard`: the contact's radio hasn't been heard lately.
+  - `notHeard`: the contact's radio hasn't been heard lately;
+  - `airtimeUsed`: the user's radio has used the airtime the app allows it for this hour (#51; see
+    [radio.md](radio.md)).
 
 **Hearing a radio** (#44). The app sends nothing to find out who can be reached. A contact's radio counts as heard for
 an hour (`HEARD_WINDOW` in `core/src/reach.rs`, provisional until hardware day) after:

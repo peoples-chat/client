@@ -23,6 +23,7 @@ pub use messaging::{
     Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RadioAddressItem,
     RelayLink, RelayLinks, TextMessage,
 };
+pub use radio_store::Transmission;
 pub use reach::DOWN_AFTER;
 
 /// Version of the core, shown by the shell to prove that the core is linked in.

@@ -180,6 +180,8 @@ function radioIssueText(issue: RadioIssue, first: string): string {
       return `${first}'s radio uses another preset.`;
     case "notHeard":
       return `${first}'s radio hasn't been heard lately.`;
+    case "airtimeUsed":
+      return "Your radio has used its airtime for this hour.";
   }
 }
 

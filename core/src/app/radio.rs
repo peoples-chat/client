@@ -26,9 +26,10 @@ use crate::interface::{
     Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioIssue, RadioStatus,
 };
 use crate::messaging::{RadioAddressItem, TextMessage};
+use crate::radio::airtime;
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
 use crate::radio::{Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, ReceivedText, Refusal};
-use crate::radio_store::RadioMessage;
+use crate::radio_store::{RadioMessage, Transmission};
 use crate::reach::{Heard, radio_reach};
 
 /// How often the core takes each chat's current radio keys while it has a radio. Keys can't be
@@ -55,6 +56,9 @@ pub(super) struct RadioReady {
     contact_radio: RadioAddress,
     epoch: u64,
     key: crate::radio::RadioKey,
+    /// The packet's size and time on air (#51).
+    bytes: usize,
+    airtime: Duration,
 }
 
 /// The radio parts of the core's state.
@@ -68,6 +72,8 @@ pub(super) struct RadioParts {
     pub(super) sending: std::sync::Mutex<HashSet<String>>,
     /// When each radio was last heard (#44). Taken after `state` and `reach`.
     pub(super) heard: std::sync::Mutex<Heard>,
+    /// The airtime the app may use in an hour, when a test sets it (#51).
+    pub(super) airtime_cap: std::sync::Mutex<Option<Duration>>,
 }
 
 impl Core {
@@ -318,16 +324,8 @@ impl Core {
         text: &str,
         ready: RadioReady,
     ) -> Result<Message, CommandError> {
-        let RadioReady {
-            radio,
-            contact_radio,
-            epoch,
-            key,
-        } = ready;
         self.radio_sending().insert(chat_id.to_owned());
-        let sent = self
-            .radio_send(account, chat_id, text, radio, &contact_radio, epoch, &key)
-            .await;
+        let sent = self.radio_send(account, chat_id, text, ready).await;
         self.radio_sending().remove(chat_id);
         let message = sent?;
         self.apply_message(&message);
@@ -381,38 +379,103 @@ impl Core {
                 "Could not send by radio: the chat's keys aren't ready. Try again.",
             ));
         };
+        // Within the hour's airtime (#51).
+        let Some(settings) = self.attached().as_ref().map(|a| a.info.settings) else {
+            return Err(CommandError::new("Pair a radio first."));
+        };
+        let packet = format::OVERHEAD_BYTES + text.len();
+        let bytes = airtime::meshcore_text_bytes((4 * packet).div_ceil(3));
+        let airtime = airtime::time_on_air(&settings, bytes);
+        let (used, _) = self.inner.radio_store.airtime_used(now_ms());
+        if Duration::from_millis(used) + airtime > self.airtime_cap() {
+            return Err(CommandError::new(
+                "Your radio has used its airtime for this hour.",
+            ));
+        }
         Ok(RadioReady {
             radio,
             contact_radio,
             epoch,
             key,
+            bytes,
+            airtime,
         })
+    }
+
+    /// Sets the airtime the app may use in an hour, in place of
+    /// [`airtime::HOURLY_AIRTIME`]: for tests (#51).
+    pub fn set_radio_hourly_airtime(&self, cap: Duration) {
+        *self
+            .inner
+            .radio
+            .airtime_cap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(cap);
+        self.reach_changed();
+    }
+
+    fn airtime_cap(&self) -> Duration {
+        self.inner
+            .radio
+            .airtime_cap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or(airtime::HOURLY_AIRTIME)
+    }
+
+    /// Whether the radio has airtime left this hour for the shortest message, and if not, when
+    /// some comes free, in milliseconds since the Unix epoch (#51).
+    pub(super) fn airtime_left(&self) -> (bool, Option<u64>) {
+        let Some(settings) = self.attached().as_ref().map(|a| a.info.settings) else {
+            return (true, None);
+        };
+        let shortest = airtime::time_on_air(
+            &settings,
+            airtime::meshcore_text_bytes((4 * (format::OVERHEAD_BYTES + 1)).div_ceil(3)),
+        );
+        let (used, frees_at) = self.inner.radio_store.airtime_used(now_ms());
+        if Duration::from_millis(used) + shortest <= self.airtime_cap() {
+            (true, None)
+        } else {
+            (false, frees_at)
+        }
+    }
+
+    /// Every transmission the app caused in the last two days, oldest first (#52).
+    pub fn radio_transmissions(&self) -> Vec<Transmission> {
+        self.inner.radio_store.transmissions_since(0)
     }
 
     /// Whether the radio of the contact `contact` can be reached now, or why not (#44).
     pub(super) fn contact_radio_reach(&self, contact: &str) -> Result<(), RadioIssue> {
         let own = self.own_radio_record();
         let contact = self.inner.radio_store.contact_radio(contact);
+        let (airtime_left, _) = self.airtime_left();
         radio_reach(
             own.as_ref(),
             contact.as_ref(),
             &self.heard(),
+            airtime_left,
             tokio::time::Instant::now(),
         )
     }
 
     /// Hands `text` to MDK, then to the radio. Returns the message as MDK keeps it.
-    #[allow(clippy::too_many_arguments)]
     async fn radio_send(
         &self,
         account: &Account,
         chat_id: &str,
         text: &str,
-        radio: Arc<dyn Radio>,
-        contact_radio: &RadioAddress,
-        epoch: u64,
-        key: &crate::radio::RadioKey,
+        ready: RadioReady,
     ) -> Result<TextMessage, CommandError> {
+        let RadioReady {
+            radio,
+            contact_radio,
+            epoch,
+            key,
+            bytes,
+            airtime,
+        } = ready;
         let message_id = self
             .inner
             .messaging
@@ -443,12 +506,27 @@ impl Core {
                 return Ok(message);
             }
         };
-        let packet = format::seal_text(key, epoch, counter, sent_at, text);
+        let packet = format::seal_text(&key, epoch, counter, sent_at, text);
         match radio
             .send_text(&contact_radio.key, &format::to_text_message(&packet))
             .await
         {
             Ok(sent) => {
+                // Logged with its airtime: the hourly cap counts it, and the log shows that only
+                // what the user sent went out (#51, #52).
+                let now = now_ms();
+                let logged = self.inner.radio_store.log_transmission(
+                    Transmission {
+                        at: now,
+                        bytes,
+                        airtime_ms: airtime.as_millis().try_into().unwrap_or(u64::MAX),
+                        reason: "message".to_owned(),
+                    },
+                    now,
+                );
+                if let Err(error) = logged {
+                    log::warn!("could not log a radio transmission: {error}");
+                }
                 let kept = self.inner.radio_store.add_message(RadioMessage {
                     chat_id: chat_id.to_owned(),
                     id: message_id,

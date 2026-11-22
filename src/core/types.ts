@@ -103,8 +103,9 @@ export interface Chat {
  * - `otherMesh`: the contact's radio runs another mesh.
  * - `otherPreset`: the contact's radio uses another region or preset.
  * - `notHeard`: the contact's radio hasn't been heard lately.
+ * - `airtimeUsed`: the user's radio has used the airtime the app allows it for this hour (#51).
  */
-export type RadioIssue = "noRadio" | "noContactRadio" | "otherMesh" | "otherPreset" | "notHeard";
+export type RadioIssue = "noRadio" | "noContactRadio" | "otherMesh" | "otherPreset" | "notHeard" | "airtimeUsed";
 
 /**
  * Who runs a relay (#88).

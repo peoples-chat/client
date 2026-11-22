@@ -39,6 +39,28 @@ vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements i
 decoder. `RadioInbox` decides which incoming packets to accept: authentic, new to the replay window, and not known
 already (#42).
 
+**Airtime** (#51, `core/src/radio/airtime.rs`). The core counts the time each packet occupies the channel and keeps
+what the user sends within an hourly budget:
+
+- **Time on air** follows Semtech's LoRa formula for an explicit header and a CRC, with a 16-symbol preamble to err
+  on the long side. A MeshCore text message on air is 6 bytes plus the encrypted timestamp, flags and text in 16-byte
+  blocks. Hardware day checks both against measurements (#36).
+- **In the EU/UK narrow preset** (SF8, 62.5 kHz, 4/8), the longest message the app sends (160 characters of base64)
+  takes about 1.6 seconds, and a short one about 0.6 seconds.
+- **The cap** is 36 seconds an hour (`HOURLY_AIRTIME`): a tenth of the 10% duty cycle that the EU allows in 869.4 to
+  869.65 MHz at 500 mW e.r.p. ([CEPT ERC Recommendation 70-03](https://docdb.cept.org/download/2369), Annex 1; check
+  the current edition's footnotes, which also allow listen-before-talk with adaptive frequency agility instead). The
+  rest is left for the radio's own traffic, its acknowledgements and the shared mesh. That is about 22 of the longest
+  messages an hour, or over 40 short ones.
+- **The core enforces it.** A message that doesn't fit in what is left of the hour waits (#46). Once even the shortest
+  wouldn't fit, the chat is `unreachable` with `radioIssue: airtimeUsed`, and its notice says "Your radio has used its
+  airtime for this hour." When airtime comes free, the waiting messages go.
+
+**The transmission log** (#52). Every packet the app makes the radio send is logged in `radio.json` for two days, with
+its time, size, airtime and reason (`message`: one the user sent, or one that waited). `Core::radio_transmissions`
+returns it. The cap counts it, and the tests compare it with what the user sent. The firmware's own adverts and
+acknowledgements aren't the app's, and aren't in it.
+
 ## The interface
 
 `Radio` in `core/src/radio/mod.rs`:
