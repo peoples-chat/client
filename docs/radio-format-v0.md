@@ -170,6 +170,29 @@ with the same keys as epoch 7, to test the hint and the counter's low bits.
 | 70000 | 4464 | 70000, the highest itself: a replay |
 | 70000 | 4000 | 69536, below the window: dropped |
 
+## In the core
+
+`core/src/radio/format.rs` implements the format as pure functions (#39):
+
+- `seal_text`, `open_text`, `Header::parse`, `full_counter`;
+- `to_text_message` and `from_text_message`, the base64 carrier;
+- `message_id`, the id rebuild.
+
+Its unit tests check it against the vectors above, against changed and reflected packets, and against 20,000 random
+inputs in CI. Keeping counters, kept epochs and the replay window is up to the receiving side (#40, #42).
+
+**Fuzzing.** `core/fuzz` holds a cargo-fuzz target. It feeds arbitrary input to the decoder, as raw packets and as text
+messages, and checks two things: nothing panics, and a packet that opens seals back to the same bytes. It needs cargo-fuzz and a
+nightly toolchain:
+
+```sh
+cargo install cargo-fuzz
+cd core && cargo +nightly fuzz run radio_packet --sanitizer none fuzz/corpus/radio_packet fuzz/seeds/radio_packet
+```
+
+The seeds are the vectors above, so mutations start from packets that open. `--sanitizer none`: the core is safe Rust,
+so the fuzzer looks for panics, and a sanitizer would only slow it down and reach into MDK's C and Odin code.
+
 ## Not in v0
 
 - groups: only chats with two members;

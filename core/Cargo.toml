@@ -15,8 +15,11 @@ cgka-traits = { git = "https://github.com/marmot-protocol/mdk", tag = "v0.18.0" 
 async-trait = "0.1"
 # Chat ids are MLS group ids in hex.
 hex = "0.4"
-# Radio keys from the chat's MLS exporter secret (#37). MDK's dependencies already bring in these
+# Radio keys from the chat's MLS exporter secret (#37), and the radio message format (#39):
+# ChaCha20-Poly1305 packets that travel as base64. MDK's dependencies already bring in these
 # versions.
+base64 = "0.22"
+chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 zeroize = "1"
