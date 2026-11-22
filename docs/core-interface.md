@@ -113,7 +113,7 @@ The interface uses the mock with demo data until the real core covers the whole 
 - To see what gets published:
   1. Run the relay on the Mac with `cargo run -p peoples-chat-core --example local_relay`.
   2. On Android, also run `adb reverse tcp:7777 tcp:7777`.
-- Release builds have no relays until #17 chooses defaults, so creating an account says so.
+- Release builds have no relays until #18 sets defaults, so creating an account says so.
 
 **Keys and data**
 

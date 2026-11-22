@@ -75,7 +75,7 @@ fn relays() -> Vec<String> {
             .map(str::to_owned)
             .collect(),
         None if cfg!(debug_assertions) => vec![DEV_RELAY.to_owned()],
-        // Release builds get default relays with #17. Until then, creating an account says so.
+        // Release builds get default relays with #18. Until then, creating an account says so.
         None => Vec::new(),
     }
 }
