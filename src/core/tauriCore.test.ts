@@ -64,13 +64,22 @@ describe("Tauri core", () => {
   });
 
   it("sends commands with their arguments", async () => {
-    const account = { name: "Emil Dahl", publicKey: "ab", inviteLink: "nostr:npub1" };
-    const { ipc, calls } = fakeIpc((command) => (command === "create_account" ? account : undefined));
+    const account = { name: "Emil Dahl", publicKey: "ab", inviteLink: "nostr:nprofile1" };
+    const chat = shared.snapshot.chats[0];
+    const answers: Record<string, unknown> = { create_account: account, add_contact: chat, accept_invitation: chat };
+    const { ipc, calls } = fakeIpc((command) => answers[command]);
     const core = createTauriCore(ipc);
 
     expect(await core.createAccount("Emil Dahl")).toEqual(account);
+    expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
+    expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     await core.deleteAccount();
-    expect(calls.slice(1)).toEqual(['create_account {"name":"Emil Dahl"}', "delete_account"]);
+    expect(calls.slice(1)).toEqual([
+      'create_account {"name":"Emil Dahl"}',
+      'add_contact {"inviteLink":"nostr:nprofile1abc"}',
+      'accept_invitation {"invitationId":"inv-1"}',
+      "delete_account",
+    ]);
   });
 
   it("shows the core's error messages as they are", async () => {
@@ -96,8 +105,6 @@ describe("Tauri core", () => {
     const { ipc, calls } = fakeIpc();
     const core = createTauriCore(ipc);
 
-    await expect(core.addContact("nostr:npub1")).rejects.toThrow("Adding contacts is not available yet.");
-    await expect(core.acceptInvitation("inv-1")).rejects.toThrow("Accepting invitations is not available yet.");
     await expect(core.sendMessage("chat-1", "Hi")).rejects.toThrow("Sending messages is not available yet.");
     expect(calls).toEqual([`listen ${CORE_EVENT}`]);
   });

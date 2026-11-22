@@ -2,7 +2,7 @@
 //! launches, passes every core event to the web view as the Tauri event `core-event`, and turns
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
-use peoples_chat_core::interface::{Account, CommandError, CoreEvent, Snapshot};
+use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Snapshot};
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::OnceCell;
@@ -133,4 +133,25 @@ pub async fn delete_account<R: Runtime>(
     slot: State<'_, CoreSlot>,
 ) -> Result<(), CommandError> {
     slot.get(&app).await?.delete_account().await
+}
+
+#[tauri::command]
+pub async fn add_contact<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    invite_link: String,
+) -> Result<Chat, CommandError> {
+    slot.get(&app).await?.add_contact(&invite_link).await
+}
+
+#[tauri::command]
+pub async fn accept_invitation<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    invitation_id: String,
+) -> Result<Chat, CommandError> {
+    slot.get(&app)
+        .await?
+        .accept_invitation(&invitation_id)
+        .await
 }

@@ -47,7 +47,9 @@ pub fn run() {
             core_version,
             bridge::core_snapshot,
             bridge::create_account,
-            bridge::delete_account
+            bridge::delete_account,
+            bridge::add_contact,
+            bridge::accept_invitation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
