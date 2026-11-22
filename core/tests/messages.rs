@@ -3,10 +3,9 @@
 
 mod support;
 
-use nostr_relay_builder::MockRelay;
 use peoples_chat_core::Core;
 use peoples_chat_core::interface::{CoreEvent, DeliveryState, Direction, Message};
-use support::{Phone, make_contacts, next_event, next_invitation, until};
+use support::{Phone, TestRelay, make_contacts, next_event, next_invitation, until};
 use tokio::sync::broadcast;
 
 /// The next `messageAdded` event, which must be for `chat_id`.
@@ -46,8 +45,8 @@ fn sorted(mut messages: Vec<Message>) -> Vec<Message> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn contacts_exchange_text_and_keep_it_across_a_restart() {
     let _turn = support::take_turn().await;
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
+    let relay = TestRelay::start().await;
+    let url = relay.url();
     let ada_phone = Phone::new("exchange-ada", &url);
     let bea_phone = Phone::new("exchange-bea", &url);
     let ada = ada_phone.start().await;
@@ -118,8 +117,8 @@ async fn contacts_exchange_text_and_keep_it_across_a_restart() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn messages_sent_before_the_invitation_is_accepted_come_with_it() {
     let _turn = support::take_turn().await;
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
+    let relay = TestRelay::start().await;
+    let url = relay.url();
     let ada_phone = Phone::new("early-ada", &url);
     let bea_phone = Phone::new("early-bea", &url);
     let ada = ada_phone.start().await;
@@ -153,11 +152,51 @@ async fn messages_sent_before_the_invitation_is_accepted_come_with_it() {
     bea.close().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_arrived_while_the_app_was_closed_comes_when_it_starts() {
+    let _turn = support::take_turn().await;
+    let relay = TestRelay::start().await;
+    let url = relay.url();
+    let ada_phone = Phone::new("closed-ada", &url);
+    let bea_phone = Phone::new("closed-bea", &url);
+    let ada = ada_phone.start().await;
+    let bea = bea_phone.start().await;
+    ada.create_account("Ada Lund").await.unwrap();
+    let bea_account = bea.create_account("Bea Holm").await.unwrap();
+    ada.wait_until_published(support::WAIT).await.unwrap();
+    bea.wait_until_published(support::WAIT).await.unwrap();
+
+    // Bea's app is closed while Ada adds her and writes.
+    bea.close().await.unwrap();
+    let chat = ada.add_contact(&bea_account.invite_link).await.unwrap();
+    let early = ada.send_message(&chat.id, "Are you there?").await.unwrap();
+    until("the relay's acknowledgement", || {
+        let chat = ada.snapshot().chats.into_iter().next()?;
+        chat.messages
+            .iter()
+            .any(|m| m.id == early.id && m.delivery == Some(DeliveryState::Sent))
+            .then_some(())
+    })
+    .await;
+
+    // When it starts, the invitation arrives with the message.
+    let bea = bea_phone.start().await;
+    let messages = until("the message on the invitation", || {
+        let invitation = bea.snapshot().invitations.into_iter().next()?;
+        (!invitation.messages.is_empty()).then_some(invitation.messages)
+    })
+    .await;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, early.id);
+    ada.close().await.unwrap();
+    bea.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sending_says_what_is_wrong() {
     let _turn = support::take_turn().await;
-    let relay = MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
+    let relay = TestRelay::start().await;
+    let url = relay.url();
     let phone = Phone::new("send-errors", &url);
     let core = phone.start().await;
 
