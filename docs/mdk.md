@@ -340,6 +340,12 @@ seconds, and in one after 7.6 minutes.
   relay still answering NIP-11 requests while blocked, the message arrived within 5 seconds every time.
 - Whether it shows depends on timing: on whether the sender publishes before the other phone has asked again.
 - MDK has no public call that clears the cache. What to do about it is #78.
+- **Since #46,** a message written during an outage waits in the core and goes only once a relay is connected again,
+  so the other phone has usually asked again by then. `core/tests/after_outage.rs` (ignored; it can take minutes)
+  measured 5.1 seconds from the relay's return to the other phone showing the message, in 4 of 4 runs with the relay
+  fully blocked. Before #46, with MDK holding the message, the same runs took 25 seconds. MDK's full-history repair
+  (`repair_full_history`) on the receiving phone made no difference. Still exposed: messages MDK took in the 10
+  seconds before the outage counted, and the relay copies of radio messages, which the other phone shows already.
 - Tests about something else can keep this out: the test relay's `block_messages` goes on answering NIP-11 requests
   while it blocks everything else (`core/tests/republish.rs`).
 

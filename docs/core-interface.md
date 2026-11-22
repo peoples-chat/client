@@ -311,8 +311,9 @@ Heard times live in memory, so after a restart a contact counts as reachable by 
 - The core goes by the relays, not by the phone's online flag. [mdk.md](mdk.md#relay-reachability) has the details,
   including connections that go silent without closing.
 
-**When the relays are back**, the messages that waited go out within a second. The other phone sometimes shows them
-much later, up to several minutes in the tests (#78; [mdk.md](mdk.md#relay-reachability) explains why).
+**When the relays are back**, the messages that waited go out as soon as a relay is connected (#46). The other phone
+showed them about 5 seconds after the relay's return in the tests. Messages MDK took just before an outage was noticed
+can take much longer, up to several minutes in earlier tests (#78; [mdk.md](mdk.md#relay-reachability) explains why).
 
 **Trying it without the internet.** To take the relays away while the phone keeps its network and Bluetooth, use the
 relay on the Mac (below) and type `block` in its window; `unblock` brings it back. With public relays, turning off
