@@ -9,6 +9,7 @@ mod app;
 pub mod interface;
 mod invite;
 mod messaging;
+pub mod radio;
 
 pub use app::Core;
 pub use messaging::{
