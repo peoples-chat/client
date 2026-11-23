@@ -67,6 +67,7 @@ describe("Tauri core", () => {
     const account = { name: "Emil Dahl", about: "", publicKey: "ab", inviteLink: "nostr:nprofile1", shareLink: "https://peoples.chat/i#nprofile1" };
     const chat = shared.snapshot.chats[0];
     const message = chat.messages[1];
+    const port = { path: "/dev/cu.usbmodem1101", description: "T1000-E" };
     const answers: Record<string, unknown> = {
       create_account: account,
       update_profile: account,
@@ -77,6 +78,9 @@ describe("Tauri core", () => {
       send_message: message,
       set_force_radio: { forced: true },
       cancel_message: null,
+      radio_ports: [port],
+      pair_radio: shared.snapshot.radio,
+      forget_radio: { forced: false, canPair: true },
       export_account_key: "ncryptsec1fixture",
     };
     const { ipc, calls } = fakeIpc((command) => answers[command]);
@@ -91,6 +95,9 @@ describe("Tauri core", () => {
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
     expect(await core.setForceRadio(true)).toEqual({ forced: true });
     await core.cancelMessage("chat-1", "queued-1");
+    expect(await core.radioPorts()).toEqual([port]);
+    expect(await core.pairRadio(port.path)).toEqual(shared.snapshot.radio);
+    expect(await core.forgetRadio()).toEqual({ forced: false, canPair: true });
     expect(await core.exportAccountKey({ kind: "protected", password: "a long password" })).toBe("ncryptsec1fixture");
     await core.exportAccountKey({ kind: "plain" });
     await core.deleteAccount();
@@ -104,6 +111,9 @@ describe("Tauri core", () => {
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
       'set_force_radio {"forced":true}',
       'cancel_message {"chatId":"chat-1","messageId":"queued-1"}',
+      "radio_ports",
+      'pair_radio {"port":"/dev/cu.usbmodem1101"}',
+      "forget_radio",
       'export_account_key {"password":"a long password"}',
       'export_account_key {"password":null}',
       "delete_account",
@@ -140,11 +150,21 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);
     expect(state.relays.map((r) => r.operator)).toEqual(["peoplesChat", "independent"]);
-    expect([state.radio.paired?.name, state.radio.paired?.connected, state.radio.forced]).toEqual([
+    const paired = state.radio.paired;
+    expect([paired?.name, paired?.connection, paired?.port, state.radio.forced, state.radio.canPair]).toEqual([
       "Emil's radio",
-      true,
+      "connected",
+      "/dev/cu.usbmodem1101",
       false,
+      true,
     ]);
+    expect(paired?.preset).toEqual({
+      frequencyKhz: 869618,
+      bandwidthHz: 62500,
+      spreadingFactor: 8,
+      codingRate: 8,
+      expected: true,
+    });
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),

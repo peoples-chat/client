@@ -10,6 +10,7 @@ import { InvitedStart } from "./screens/InvitedStart";
 import { InviteOne } from "./screens/InviteOne";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
+import { PairRadio } from "./screens/PairRadio";
 import { Privacy } from "./screens/Privacy";
 import { Profile } from "./screens/Profile";
 import { RadioNotice } from "./screens/RadioNotice";
@@ -66,6 +67,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <ExportKey />;
     case "radioSettings":
       return <RadioSettings />;
+    case "pairRadio":
+      return <PairRadio />;
     case "radioNotice":
       return <RadioNotice />;
     case "invite":

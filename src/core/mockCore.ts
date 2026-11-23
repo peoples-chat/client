@@ -13,6 +13,10 @@ import {
   type CoreListener,
   type Invitation,
   type Message,
+  type PairedRadio,
+  type RadioPort,
+  type RadioPreset,
+  type RadioStatus,
   type Relay,
   type SentInvite,
 } from "./types";
@@ -33,6 +37,32 @@ const LINK_PATTERN = /^[a-z][a-z0-9+.-]*:\S+$/i;
 
 const DEMO_CONTACTS = ["Jonas Kjær", "Sofie Lund", "Lars Bak", "Mikkel Østergaard"];
 const DEMO_REPLIES = ["Got it.", "Sounds good.", "Thanks, see you then.", "Noted. Talk later."];
+
+/** MeshCore's EU/UK (Narrow) preset, which the app expects (#24). */
+const EU_NARROW: RadioPreset = {
+  frequencyKhz: 869_618,
+  bandwidthHz: 62_500,
+  spreadingFactor: 8,
+  codingRate: 8,
+  expected: true,
+};
+
+/**
+ * The demo's USB ports (#24): a radio on the preset the app expects, one on another preset, and a
+ * device that isn't a radio.
+ */
+const DEMO_PORTS: Array<RadioPort & { radio?: { name: string; preset: RadioPreset } }> = [
+  { path: "/dev/cu.usbmodem1101", description: "MeshCore radio", radio: { name: "Your radio", preset: EU_NARROW } },
+  {
+    path: "/dev/cu.usbmodem2101",
+    description: "MeshCore radio",
+    radio: {
+      name: "Spare radio",
+      preset: { frequencyKhz: 869_525, bandwidthHz: 250_000, spreadingFactor: 11, codingRate: 5, expected: false },
+    },
+  },
+  { path: "/dev/cu.usbserial-0001", description: "USB serial adapter" },
+];
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -56,6 +86,8 @@ interface MockState {
   invites: SentInvite[];
   /** Every message goes by radio: the switch for testing (#40). */
   forceRadio: boolean;
+  /** The radio paired on one of the demo's ports (#24). */
+  pairedRadio: PairedRadio | null;
   /** Invite links already used, and the chat each one opened. */
   links: Record<string, string>;
   demoContactsAdded: number;
@@ -105,6 +137,21 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     return chat;
   }
 
+  // The demo can pair a radio on its USB ports, as a computer can (#24).
+  function radioStatus(): RadioStatus {
+    return {
+      ...(state.pairedRadio ? { paired: state.pairedRadio } : {}),
+      forced: state.forceRadio,
+      canPair: true,
+    };
+  }
+
+  function radioChanged(): RadioStatus {
+    const radio = radioStatus();
+    emit({ type: "radioChanged", radio });
+    return structuredClone(radio);
+  }
+
   // The demo contact answers once the user stops sending for a moment.
   function scheduleReply(chatId: string) {
     const pending = replyTimers.get(chatId);
@@ -138,7 +185,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         invitations: state.invitations,
         relays: state.account ? demoRelays() : [],
         invites: state.invites,
-        radio: { forced: state.forceRadio },
+        radio: radioStatus(),
       });
     },
 
@@ -215,6 +262,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       replyTimers.clear();
       Object.assign(state, emptyState());
       emit({ type: "accountDeleted" });
+      // As the core does: the paired radio went with the account, and pairing stays possible.
+      radioChanged();
     },
 
     async addContact(inviteLink) {
@@ -338,9 +387,37 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     // The demo's radio reaches every contact, so the switch is all it takes.
     async setForceRadio(forced) {
       state.forceRadio = forced;
-      const radio = { forced };
-      emit({ type: "radioChanged", radio });
-      return structuredClone(radio);
+      return radioChanged();
+    },
+
+    async radioPorts() {
+      return DEMO_PORTS.map(({ path, description }) => ({ path, description }));
+    },
+
+    // As the core says it, for a port that went and for a device that isn't a radio.
+    async pairRadio(path) {
+      const port = DEMO_PORTS.find((p) => p.path === path);
+      if (!port) throw new CoreError("That port is gone. Plug the radio in and look again.");
+      if (!port.radio) {
+        throw new CoreError(
+          `The device on ${path} didn't answer. Is it a MeshCore radio with companion firmware for USB?`,
+        );
+      }
+      if (state.pairedRadio?.port === path) return radioStatus();
+      state.pairedRadio = {
+        name: port.radio.name,
+        publicKey: randomHex(32),
+        connection: "connected",
+        port: path,
+        preset: port.radio.preset,
+      };
+      return radioChanged();
+    },
+
+    async forgetRadio() {
+      if (!state.pairedRadio) return radioStatus();
+      state.pairedRadio = null;
+      return radioChanged();
     },
 
     // The demo has no real key: these look like the real core's copies, and open nowhere.
@@ -451,6 +528,7 @@ function emptyState(): MockState {
     invitations: [],
     invites: [],
     forceRadio: false,
+    pairedRadio: null,
     links: {},
     demoContactsAdded: 0,
     repliesSent: 0,

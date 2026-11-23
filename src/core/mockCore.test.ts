@@ -35,7 +35,7 @@ describe("mock core", () => {
       invitations: [],
       relays: [],
       invites: [],
-      radio: { forced: false },
+      radio: { forced: false, canPair: true },
     });
   });
 
@@ -108,15 +108,54 @@ describe("mock core", () => {
     expect((await core.sendMessage(chat.id, "☔".repeat(32))).transport).toBe("radio");
   });
 
+  it("pairs a radio on a demo USB port, warns about another preset, and forgets it (#24)", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+    expect((await core.radioPorts()).map((p) => p.path)).toEqual([
+      "/dev/cu.usbmodem1101",
+      "/dev/cu.usbmodem2101",
+      "/dev/cu.usbserial-0001",
+    ]);
+
+    // As the core says it: a device that isn't a radio, and a port that went.
+    await expect(core.pairRadio("/dev/cu.usbserial-0001")).rejects.toThrow(
+      "The device on /dev/cu.usbserial-0001 didn't answer.",
+    );
+    await expect(core.pairRadio("/dev/cu.gone")).rejects.toThrow("That port is gone.");
+    expect(events).toEqual([]);
+
+    const status = await core.pairRadio("/dev/cu.usbmodem1101");
+    expect(status.paired).toMatchObject({
+      name: "Your radio",
+      connection: "connected",
+      port: "/dev/cu.usbmodem1101",
+      preset: { frequencyKhz: 869_618, expected: true },
+    });
+    expect(events).toEqual([{ type: "radioChanged", radio: status }]);
+    expect((await core.load()).radio).toEqual(status);
+    // Pairing it again changes nothing.
+    expect(await core.pairRadio("/dev/cu.usbmodem1101")).toEqual(status);
+    expect(events).toHaveLength(1);
+
+    // Another radio takes its place, here one on another preset.
+    const spare = await core.pairRadio("/dev/cu.usbmodem2101");
+    expect(spare.paired).toMatchObject({ name: "Spare radio", preset: { frequencyKhz: 869_525, expected: false } });
+
+    const forgotten = await core.forgetRadio();
+    expect(forgotten).toEqual({ forced: false, canPair: true });
+    expect(events[events.length - 1]).toEqual({ type: "radioChanged", radio: forgotten });
+  });
+
   it("sends everything by radio with the switch on, as short text the other radio confirms", async () => {
     const { core, events } = setup();
     await core.createAccount("Emil");
     const chat = (await core.load()).chats.find((c) => c.reach === "internet")!;
     events.length = 0;
 
-    expect(await core.setForceRadio(true)).toEqual({ forced: true });
-    expect(events).toEqual([{ type: "radioChanged", radio: { forced: true } }]);
-    expect((await core.load()).radio).toEqual({ forced: true });
+    expect(await core.setForceRadio(true)).toEqual({ forced: true, canPair: true });
+    expect(events).toEqual([{ type: "radioChanged", radio: { forced: true, canPair: true } }]);
+    expect((await core.load()).radio).toEqual({ forced: true, canPair: true });
 
     const message = await core.sendMessage(chat.id, "By radio");
     expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
@@ -297,19 +336,23 @@ describe("mock core", () => {
     events.length = 0;
 
     await core.deleteAccount();
-    expect(events).toEqual([{ type: "accountDeleted" }]);
+    // As the core does: the paired radio goes with the account, and pairing stays possible (#24).
+    expect(events).toEqual([
+      { type: "accountDeleted" },
+      { type: "radioChanged", radio: { forced: false, canPair: true } },
+    ]);
     expect(await core.load()).toEqual({
       account: null,
       chats: [],
       invitations: [],
       relays: [],
       invites: [],
-      radio: { forced: false },
+      radio: { forced: false, canPair: true },
     });
 
     // The pending acknowledgement and reply belonged to the deleted account.
     vi.advanceTimersByTime(5000);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
 
     await core.createAccount("Karen");
     expect((await core.load()).account?.name).toBe("Karen");

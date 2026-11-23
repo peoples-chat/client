@@ -1,11 +1,76 @@
+/* The paired radio, as in the design's Radio screen: name and connection, then its details. */
 .card {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   margin: 6px 16px 0;
   padding: 16px;
   border-radius: 20px;
   background: var(--color-surface);
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.detail {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14.5px;
+}
+
+.detail > span:first-child {
+  flex: 1;
+  color: var(--color-muted);
+}
+
+.value {
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* A radio on another preset than the app expects (#24). */
+.warning {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-amber-fg);
+}
+
+/* Forget asks once more, as Delete account does. */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 16px 0;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--color-surface);
+}
+
+.confirmTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.confirmText {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--color-muted);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.actions > * {
+  flex: 1;
 }
 
 .radioIcon {
