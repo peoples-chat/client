@@ -44,6 +44,7 @@ pub fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> Messagin
         keychain_service: keychain_service.to_owned(),
         allow_loopback: true,
         media_server: None,
+        profile_copies: Vec::new(),
     }
 }
 
@@ -53,6 +54,7 @@ pub struct Phone {
     keychain_service: String,
     relay: String,
     media_server: Option<String>,
+    profile_copies: Vec<String>,
 }
 
 impl Phone {
@@ -64,12 +66,20 @@ impl Phone {
             keychain_service: format!("chat.peoples.client.test-{name}"),
             relay: relay.to_owned(),
             media_server: None,
+            profile_copies: Vec::new(),
         }
     }
 
     /// The phone uploads profile photos to `media_server`.
     pub fn with_media_server(mut self, media_server: &str) -> Self {
         self.media_server = Some(media_server.to_owned());
+        self
+    }
+
+    /// The phone copies its profile changes to `relay`, as an app on the defaults does to White
+    /// Noise's relays (#113).
+    pub fn with_profile_copies(mut self, relay: &str) -> Self {
+        self.profile_copies = vec![relay.to_owned()];
         self
     }
 
@@ -81,6 +91,7 @@ impl Phone {
     pub async fn start(&self) -> Core {
         Core::start(MessagingOptions {
             media_server: self.media_server.clone(),
+            profile_copies: self.profile_copies.clone(),
             ..options(self.data.path(), &self.relay, &self.keychain_service)
         })
         .await

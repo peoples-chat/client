@@ -81,6 +81,33 @@ pub const DEFAULT_RELAYS: &[&str] = &[
 /// concept's choice on 22 November 2026. The project's own media server comes with #11.
 pub const DEFAULT_MEDIA_SERVER: &str = "https://blossom.primal.net";
 
+/// White Noise's relays (#113). White Noise reads its users' contacts' profiles from these. It
+/// keeps a copy there of what it found when it first looked the person up. So each profile change
+/// is copied here too, or White Noise users keep seeing the old name and photo.
+pub const WHITE_NOISE_RELAYS: &[&str] = &[
+    "wss://relay.us.whitenoise.chat",
+    "wss://relay.eu.whitenoise.chat",
+    "wss://whitenoise.nostrdev.com",
+];
+
+/// The relays that get a copy of each profile change (#113). An app on the public
+/// [`DEFAULT_RELAYS`] gets White Noise's. A build with relays of its own, such as a test relay,
+/// gets none, so that it stays off public relays.
+pub fn profile_copy_relays(relays: &[String]) -> Vec<String> {
+    let on_defaults = relays.len() == DEFAULT_RELAYS.len()
+        && relays
+            .iter()
+            .all(|relay| DEFAULT_RELAYS.contains(&canonical_relay(relay).as_str()));
+    if on_defaults {
+        WHITE_NOISE_RELAYS
+            .iter()
+            .map(|relay| (*relay).to_owned())
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Relays the project runs, which the interface shows as run by peoples.chat (#88). None yet:
 /// who runs the project's relays is decided later (#11).
 pub const PROJECT_RELAYS: &[&str] = &[];
@@ -100,6 +127,10 @@ pub struct MessagingOptions {
     pub allow_loopback: bool,
     /// The media server profile photos go to; `None` for [`DEFAULT_MEDIA_SERVER`] (#94).
     pub media_server: Option<String>,
+    /// Relays that also get a copy of each profile change, usually [`profile_copy_relays`]
+    /// (#113). MDK copies in the background, so a failed copy never fails the change. It copies
+    /// nothing for an account on loopback relays.
+    pub profile_copies: Vec<String>,
 }
 
 /// What another account's profile says about it, as the relays have it now.
@@ -444,6 +475,7 @@ pub struct Messaging {
     relays: Vec<String>,
     media_server: String,
     allow_loopback: bool,
+    profile_copies: Vec<String>,
 }
 
 impl Messaging {
@@ -471,6 +503,7 @@ impl Messaging {
                 .media_server
                 .unwrap_or_else(|| DEFAULT_MEDIA_SERVER.to_owned()),
             allow_loopback: options.allow_loopback,
+            profile_copies: options.profile_copies,
         })
     }
 
@@ -729,6 +762,10 @@ impl Messaging {
     /// stays as it was, including what other apps put there: MDK replaces name, about, picture,
     /// NIP-05 and lightning address with whatever it is given, so they come from the profile as
     /// this device has it.
+    ///
+    /// It goes to the account's relays, and a copy goes to the profile copy relays (#113). The
+    /// change counts once an account relay has it. MDK sends the copies afterwards, in the
+    /// background.
     async fn publish_profile(
         &self,
         account_hex: &str,
@@ -737,7 +774,11 @@ impl Messaging {
         let mut profile = self.cached_profile(account_hex).unwrap_or_default();
         change(&mut profile);
         self.runtime
-            .publish_user_profile_using_account_relays(account_hex, profile)
+            .publish_user_profile_using_account_relays_and_indexers(
+                account_hex,
+                profile,
+                endpoints(&self.profile_copies),
+            )
             .await?;
         Ok(())
     }
@@ -1118,7 +1159,39 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_relay;
+    use super::{DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, profile_copy_relays};
+
+    #[test]
+    fn profiles_are_copied_to_white_noise_only_from_the_default_relays() {
+        let owned = |relays: &[&str]| relays.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        let white_noise = owned(WHITE_NOISE_RELAYS);
+        assert_eq!(profile_copy_relays(&owned(DEFAULT_RELAYS)), white_noise);
+        // In any order, and however they are spelled.
+        assert_eq!(
+            profile_copy_relays(&owned(&[
+                "wss://relay.primal.net/",
+                "WSS://nos.lol",
+                "wss://relay.damus.io"
+            ])),
+            white_noise
+        );
+        // A build with relays of its own copies nothing.
+        for relays in [
+            &["ws://127.0.0.1:7777"][..],
+            &["ws://10.0.2.2:7777"],
+            &["wss://relay.peoples.chat"],
+            &["wss://nos.lol", "wss://relay.primal.net"],
+            &[
+                "wss://relay.damus.io",
+                "wss://nos.lol",
+                "wss://relay.primal.net",
+                "wss://relay.peoples.chat",
+            ],
+            &[],
+        ] {
+            assert!(profile_copy_relays(&owned(relays)).is_empty(), "{relays:?}");
+        }
+    }
 
     #[test]
     fn relays_are_spelled_one_way() {

@@ -88,6 +88,7 @@ fn options(data_dir: &Path, relays: Vec<String>, keychain_service: &str) -> Mess
         keychain_service: keychain_service.to_owned(),
         allow_loopback: true,
         media_server: None,
+        profile_copies: Vec::new(),
     }
 }
 

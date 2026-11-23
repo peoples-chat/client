@@ -42,6 +42,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         keychain_service: "chat.peoples.client.invite-partner".to_owned(),
         allow_loopback: true,
         media_server: None,
+        profile_copies: Vec::new(),
     })
     .await?;
     let mut events = core.subscribe();

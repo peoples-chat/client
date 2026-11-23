@@ -257,13 +257,22 @@ so the core adds them to the invitation.
 
 ## Profiles
 
-**Publishing** (#93). `publish_user_profile_using_account_relays` publishes the account's profile (kind 0).
+**Publishing** (#93). `publish_user_profile_using_account_relays_and_indexers` publishes the account's profile (kind
+0) to the account's relays. It also copies it to the relays it is given (#113).
 
 - MDK merges what it is given with the newest profile it knows. Name, display name, about, picture, NIP-05 and
   lightning address are replaced, even when they are empty. Banner and other fields are kept unless the update sets them.
 - So `update_profile` starts from the profile as this device has it (`directory_entry_for_account_id`), and changes only
   the name, display name and about. A photo or a lightning address set by another app stays.
 - MDK publishes at once or fails at once. With no relay connected it fails within milliseconds; nothing is queued.
+- **Copies on White Noise's relays** (#113). White Noise reads its users' contacts' profiles from its own relays. It
+  keeps a copy there of what it found when it first looked the person up. Without a fresh copy there, White Noise users
+  keep seeing the old name and photo. On 23 November, copying a new profile there by hand fixed that.
+  - So an app on the default relays copies each profile change to `WHITE_NOISE_RELAYS`.
+  - MDK sends the copies in the background once an account relay has the profile, so a failed copy never fails the
+    change.
+  - MDK never copies from an account whose relays include a loopback address. A build with relays of its own copies
+    nothing (`profile_copy_relays`).
 
 **Other people's profiles.** MDK fetches them when asked (`fetch_current_user_profile_for_account_id`), keeps what it
 finds, and has no event for changes. The core fetches its contacts' profiles when it starts following the account and
