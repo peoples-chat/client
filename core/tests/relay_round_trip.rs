@@ -28,6 +28,7 @@ fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> MessagingOpt
         data_dir: data_dir.to_path_buf(),
         relays: vec![relay.to_owned()],
         keychain_service: keychain_service.to_owned(),
+        keys_in_file: false,
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),

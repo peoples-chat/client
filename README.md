@@ -76,8 +76,10 @@ together.
 `pnpm dev` alone serves the interface at http://localhost:1420 for a browser, on the mock core. That is the
 quickest way to work on screens. Anything the app cannot do yet is disabled.
 
-The app uses the real core. It publishes new accounts to public relays, and on a Mac it keeps the account key in your
-login keychain. To see the demo data in the app instead, start it with `VITE_CORE=mock`, for example
+The app uses the real core. It publishes new accounts to public relays. Development builds on a computer keep the
+account key in a file in the app's data folder, so the Mac's keychain doesn't ask for your password at every start;
+build with `TAURI_PEOPLES_CHAT_KEYCHAIN=1` to use the keychain instead. To see the demo data in the app instead, start
+it with `VITE_CORE=mock`, for example
 `VITE_CORE=mock pnpm tauri dev`. Relays, keys and the rest are in
 [docs/core-interface.md](docs/core-interface.md#running-the-app-with-the-real-core).
 

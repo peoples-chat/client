@@ -521,7 +521,9 @@ The app uses the real core since it covers the whole flow (#20): creating the ac
 **Keys and data**
 
 - Keys are stored in the platform's key store under the service `chat.peoples.client`. On a Mac that is your login
-  keychain. Where they live on phones, and how signing works: [mdk.md](mdk.md#the-account-key).
+  keychain. Development builds on a computer keep them in a file in the data folder instead, unless built with
+  `TAURI_PEOPLES_CHAT_KEYCHAIN=1` (#115). Where they live on phones, and how signing works:
+  [mdk.md](mdk.md#the-account-key).
 - To remove a test account, use Settings → Account → Delete account.
 - Data lives in the app's data folder, under `core/`.
 

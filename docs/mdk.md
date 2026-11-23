@@ -13,7 +13,7 @@ lower `marmot-session` crate.
 
 | Core | MDK |
 | --- | --- |
-| `Messaging::open` | `AccountHome::open_with_keychain`, `MarmotApp::try_with_relays_and_account_home_and_config`, `MarmotAppRuntime::start` |
+| `Messaging::open` | `AccountHome::open_with_secret_store` with `KeychainSecretStore` or `LocalFileSecretStore` (#115), `MarmotApp::try_with_relays_and_account_home_and_config`, `MarmotAppRuntime::start` |
 | `create_account(name)` | `create_identity_local_ready_with_initial_profile` |
 | `accounts()` | `AccountManager::managed_accounts`, `display_name_for_account_id` |
 | `delete_account` | `sign_out_and_wipe` |
@@ -65,7 +65,8 @@ The spec's rule (Identity and keys): the app reaches the account key only throug
 signers and threshold signing stay possible. MDK provides that interface, and the core adds none of its own. No code of
 ours reads, holds or passes the key, except to export it when the user asks (below).
 
-**Where it lives.** `AccountHome::open_with_keychain` keeps one entry per account in the platform's key store:
+**Where it lives.** The account home keeps one entry per account in the platform's key store (MDK's
+`KeychainSecretStore`):
 
 - the service is the app's `chat.peoples.client`;
 - the user is the account's public key, in hex;
@@ -78,6 +79,24 @@ ours reads, holds or passes the key, except to export it when the user asks (bel
 | Android | SharedPreferences, encrypted with an AES-GCM key in Android Keystore | The Keystore key needs no user authentication, so the key works while the phone is locked. As on iOS, that holds once the phone has been unlocked since it was switched on; until then Android doesn't start the app. Tauri provides the Android context the store needs. |
 | Linux, Windows | Secret Service, Credential Manager | |
 | Tests | `keyring-core`'s in-memory store | Never the machine's own keychain. |
+
+**Development builds on computers keep the key in a file** (#115):
+
+- **Why.** The Mac's keychain sees each rebuild as a new app. It asks for the login password at every start, and
+  "Always Allow" doesn't last.
+- **Where.** Such builds use MDK's `LocalFileSecretStore`: `accounts/<label>/secret.json` in the data folder, in plain
+  text. It is fine for test accounts, but a development build shouldn't hold an account that matters.
+- **Turning it off.** Build with `TAURI_PEOPLES_CHAT_KEYCHAIN=1` to keep the keychain.
+- **Not affected.** Release builds and phones always use the platform's store.
+- **One place at a time.** A key moves at the first start of a build that keeps keys somewhere other than the build
+  before did: into the file, or back into the keychain (`core/src/keys.rs`).
+  - Only the file is asked where a key is, so a development build reads the keychain only to move a key out. That
+    is one last prompt.
+  - A key that can't move, because the prompt was declined, stays where it is, and the app uses that place for the
+    session.
+  - If the old copy can't be removed once the key has moved, it stays behind, and the log says so.
+- **Release builds on Macs** will move to the data-protection keychain, which never asks. That needs the signed app
+  (#61).
 
 **Signing.**
 
