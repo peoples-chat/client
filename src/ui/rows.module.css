@@ -52,6 +52,47 @@
   color: var(--color-disabled);
 }
 
+/* The design's switch: a 50 by 30 track, with the knob on the right when on. */
+.switchTrack {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 50px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 3px;
+  border-radius: 15px;
+  background: var(--color-switch-off);
+  transition: background 0.15s;
+}
+
+.switchKnob {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s;
+}
+
+.switchOn {
+  background: var(--color-primary);
+}
+
+.switchOn .switchKnob {
+  transform: translateX(20px);
+}
+
+.actionRow:disabled .switchTrack {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switchTrack,
+  .switchKnob {
+    transition: none;
+  }
+}
+
 .contactRow {
   gap: 12px;
   min-height: 52px;

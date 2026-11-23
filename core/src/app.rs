@@ -26,7 +26,10 @@ use crate::messaging::{
 };
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
+use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::Reachability;
+
+mod radio;
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
@@ -59,6 +62,10 @@ struct Inner {
     avatars: Avatars,
     /// The invitations the user sent (#95).
     invites: Invites,
+    /// What the core keeps about the radio (#40).
+    radio_store: RadioStore,
+    /// The radio the core uses, and the chats' radio keys.
+    radio: radio::RadioParts,
 }
 
 impl Core {
@@ -68,6 +75,7 @@ impl Core {
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
         let avatars = Avatars::new(&options.data_dir);
         let invites = Invites::open(&options.data_dir);
+        let radio_store = RadioStore::open(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
@@ -93,6 +101,10 @@ impl Core {
                         .map(|account| invite_views(account, &invites.all()))
                         .unwrap_or_default(),
                     account: account.clone(),
+                    radio: crate::interface::RadioStatus {
+                        paired: None,
+                        forced: radio_store.forced(),
+                    },
                     ..Snapshot::default()
                 }),
                 events,
@@ -101,6 +113,8 @@ impl Core {
                 reach: Mutex::new(Reachability::default()),
                 avatars,
                 invites,
+                radio_store,
+                radio: radio::RadioParts::default(),
             }),
         };
         if let Some(account) = account {
@@ -409,6 +423,7 @@ impl Core {
         if let Err(error) = self.inner.invites.clear() {
             log::warn!("could not remove the invitations: {error}");
         }
+        self.forget_radio();
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
     }
@@ -629,6 +644,9 @@ impl Core {
     ///
     /// The message is stored before this returns. While no relay can be reached, MDK keeps it
     /// and tries again, also after a restart; until then it is `waiting`.
+    ///
+    /// With the switch that forces radio on, the radio carries it too (#40), and it is
+    /// `confirmed` once the other radio confirms it.
     pub async fn send_message(&self, chat_id: &str, text: &str) -> Result<Message, CommandError> {
         let account = self.account()?;
         let text = text.trim();
@@ -637,6 +655,9 @@ impl Core {
         }
         if self.chat(chat_id).is_none() {
             return Err(CommandError::new("This chat no longer exists."));
+        }
+        if self.inner.radio_store.forced() {
+            return self.send_by_radio(&account, chat_id, text).await;
         }
 
         let message_id = self
@@ -768,6 +789,7 @@ impl Core {
     /// Stops messaging and closes the stores. The core cannot be used afterwards.
     pub async fn close(&self) -> Result<(), MessagingError> {
         self.stop_following();
+        self.stop_radio();
         self.inner.messaging.close().await
     }
 
@@ -982,7 +1004,11 @@ impl Core {
     /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
     /// doesn't have yet is in that chat's history when it arrives.
     fn apply_message(&self, message: &TextMessage) {
-        let view = message_view(message);
+        let view = message_view(
+            message,
+            self.inner.radio_store.message(&message.id).as_ref(),
+        );
+        let waits = message.outgoing && self.radio_sending_in(&message.chat_id);
         let mut guard = self.state();
         let state = &mut *guard;
         let messages = if let Some(chat) = state.chats.iter_mut().find(|c| c.id == message.chat_id)
@@ -1000,6 +1026,8 @@ impl Core {
         };
 
         let event = match messages.iter_mut().find(|known| known.id == view.id) {
+            // A radio send in the chat adds its own message when it is done, as radio (#40).
+            None if waits => return,
             None => {
                 messages.push(view.clone());
                 CoreEvent::MessageAdded {
@@ -1007,16 +1035,16 @@ impl Core {
                     message: view,
                 }
             }
-            // Delivery only moves forward.
+            // Delivery only moves forward: waiting, sent, confirmed.
             Some(known)
-                if known.delivery == Some(DeliveryState::Waiting)
-                    && view.delivery == Some(DeliveryState::Sent) =>
+                if delivery_rank(view.delivery) > delivery_rank(known.delivery)
+                    && let Some(delivery) = view.delivery =>
             {
                 known.delivery = view.delivery;
                 CoreEvent::DeliveryChanged {
                     chat_id: message.chat_id.clone(),
                     message_id: view.id,
-                    delivery: DeliveryState::Sent,
+                    delivery,
                 }
             }
             Some(_) => return,
@@ -1063,15 +1091,38 @@ impl Core {
         reachability.next_change(now)
     }
 
-    /// The latest messages of a chat or invitation.
+    /// The latest messages of a chat or invitation, with those that came by radio and whose
+    /// relay copies haven't arrived yet (#40).
     fn history(&self, account_hex: &str, chat_id: &str) -> Vec<Message> {
-        match self.inner.messaging.chat_messages(account_hex, chat_id) {
-            Ok(messages) => messages.iter().map(message_view).collect(),
-            Err(error) => {
-                log::warn!("could not read a chat's messages: {error}");
-                Vec::new()
-            }
+        let store = &self.inner.radio_store;
+        let mut messages: Vec<Message> =
+            match self.inner.messaging.chat_messages(account_hex, chat_id) {
+                Ok(messages) => messages
+                    .iter()
+                    .map(|message| message_view(message, store.message(&message.id).as_ref()))
+                    .collect(),
+                Err(error) => {
+                    log::warn!("could not read a chat's messages: {error}");
+                    Vec::new()
+                }
+            };
+        let kept = store.messages_in(chat_id);
+        let radio_only: Vec<Message> = kept
+            .iter()
+            .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
+            .map(radio_view)
+            .collect();
+        if !radio_only.is_empty() {
+            messages.extend(radio_only);
+            // Times are whole seconds. Within one, what this phone kept first comes first.
+            let kept_at = |id: &str| {
+                kept.iter()
+                    .find(|radio| radio.id == id)
+                    .map_or(0, |radio| radio.kept_at)
+            };
+            messages.sort_by_key(|message| (message.sent_at, kept_at(&message.id)));
         }
+        messages
     }
 
     fn account(&self) -> Result<Account, CommandError> {
@@ -1249,8 +1300,16 @@ fn account_view(
     })
 }
 
-/// A message as an interface sees it. Internet only, until the radio (#40).
-fn message_view(message: &TextMessage) -> Message {
+/// A message as an interface sees it. `radio` is the message's record in the radio store, if
+/// it travelled by radio (#40).
+fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message {
+    let delivery = if radio.is_some_and(|radio| radio.confirmed) {
+        DeliveryState::Confirmed
+    } else if message.acknowledged {
+        DeliveryState::Sent
+    } else {
+        DeliveryState::Waiting
+    };
     Message {
         id: message.id.clone(),
         direction: if message.outgoing {
@@ -1260,12 +1319,42 @@ fn message_view(message: &TextMessage) -> Message {
         },
         text: message.text.clone(),
         sent_at: message.sent_at,
-        transport: Transport::Internet,
-        delivery: message.outgoing.then_some(if message.acknowledged {
-            DeliveryState::Sent
+        transport: if radio.is_some() {
+            Transport::Radio
+        } else {
+            Transport::Internet
+        },
+        delivery: message.outgoing.then_some(delivery),
+    }
+}
+
+/// A message that came by radio, before its relay copy has.
+fn radio_view(radio: &RadioMessage) -> Message {
+    Message {
+        id: radio.id.clone(),
+        direction: if radio.outgoing {
+            Direction::Out
+        } else {
+            Direction::In
+        },
+        text: radio.text.clone(),
+        sent_at: radio.sent_at,
+        transport: Transport::Radio,
+        delivery: radio.outgoing.then_some(if radio.confirmed {
+            DeliveryState::Confirmed
         } else {
             DeliveryState::Waiting
         }),
+    }
+}
+
+/// How far a message's delivery has come.
+fn delivery_rank(delivery: Option<DeliveryState>) -> u8 {
+    match delivery {
+        None => 0,
+        Some(DeliveryState::Waiting) => 1,
+        Some(DeliveryState::Sent) => 2,
+        Some(DeliveryState::Confirmed) => 3,
     }
 }
 

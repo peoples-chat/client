@@ -73,7 +73,15 @@
         "createdAt": 1795300000000,
         "expiresAt": 1795904800000
       }
-    ]
+    ],
+    "radio": {
+      "paired": {
+        "name": "Emil's radio",
+        "publicKey": "7d1c4a3be0f2a9c85e6b1f40d3a29e7c1b8f05d64e2a97c3b51f80e6d4c2a913",
+        "connected": true
+      },
+      "forced": false
+    }
   },
   "events": [
     {
@@ -183,6 +191,12 @@
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
         "inviteLink": "nostr:nprofile1fixtureemildahl",
         "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
+      }
+    },
+    {
+      "type": "radioChanged",
+      "radio": {
+        "forced": true
       }
     }
   ],

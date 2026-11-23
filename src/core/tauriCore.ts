@@ -9,6 +9,7 @@ import {
   type CoreEvent,
   type CoreListener,
   type Message,
+  type RadioStatus,
   type SentInvite,
   type Snapshot,
 } from "./types";
@@ -67,6 +68,7 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     createInvite: (name) => call<SentInvite>("create_invite", { name }),
     previewInvite: (inviteLink) => call<Contact>("preview_invite", { inviteLink }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
+    setForceRadio: (forced) => call<RadioStatus>("set_force_radio", { forced }),
     // Without a password the core exports the plain key.
     exportAccountKey: (copy) =>
       call<string>("export_account_key", { password: copy.kind === "protected" ? copy.password : null }),

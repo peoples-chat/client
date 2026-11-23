@@ -190,7 +190,31 @@ inputs in CI.
 
 Only an authentic packet counts against the window, so a forgery can't use up a counter. The windows live in memory; after a
 restart, a replayed packet is caught by its message id, because received radio messages are stored with it (#40). A
-refusal returns nothing to show and nothing to send. Wiring it to the radio is #40.
+refusal returns nothing to show and nothing to send.
+
+**On the radio** (#40, `core/src/app/radio.rs`). The core uses a radio once it is handed one (pairing is #24; the tests
+hand it mock radios). With the switch that forces radio on, `send_message` sends like this:
+
+1. MDK takes the message and keeps it until a relay can be reached. MDK's id is the id above.
+2. The core rebuilds that id from the account key, the time and the text. If it differs, as for a text with mentions,
+   the message waits for the internet.
+3. It takes the chat's newest kept keys: the current ones if the chat is settled, else the last it took. A chat can't
+   give keys while it waits for a relay to confirm a change, so the core takes them every minute while it has a radio.
+4. It stores the next counter for the chat and epoch, then seals the packet and hands it to the radio, addressed to
+   the contact's radio from the address book (#34).
+
+Every packet the radio receives goes through the inbox. Before giving up on one, the core takes the chats' current
+keys once and tries again, in case a chat has moved to a new epoch.
+
+`core/src/radio_store.rs` keeps, in `radio.json`:
+
+- **the counters,** written and synced before the packet goes out. A damaged file means lost counters: each chat then
+  sends again only from its next epoch, whose key has never been used.
+- **every message that went or came by radio,** with its id. A received one is shown from there until its relay copy
+  arrives, and is marked as radio after that too.
+- **the contacts' radios,** and the switch.
+
+Two cores with mock radios exchange text this way with the relay blocked (`core/tests/radio_chat.rs`).
 
 **Fuzzing.** `core/fuzz` holds a cargo-fuzz target. It feeds arbitrary input to the decoder, as raw packets and as text
 messages, and checks two things: nothing panics, and a packet that opens seals back to the same bytes. It needs cargo-fuzz and a

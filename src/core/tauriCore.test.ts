@@ -75,6 +75,7 @@ describe("Tauri core", () => {
       add_contact: chat,
       accept_invitation: chat,
       send_message: message,
+      set_force_radio: { forced: true },
       export_account_key: "ncryptsec1fixture",
     };
     const { ipc, calls } = fakeIpc((command) => answers[command]);
@@ -87,6 +88,7 @@ describe("Tauri core", () => {
     expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
+    expect(await core.setForceRadio(true)).toEqual({ forced: true });
     expect(await core.exportAccountKey({ kind: "protected", password: "a long password" })).toBe("ncryptsec1fixture");
     await core.exportAccountKey({ kind: "plain" });
     await core.deleteAccount();
@@ -98,6 +100,7 @@ describe("Tauri core", () => {
       'add_contact {"inviteLink":"nostr:nprofile1abc"}',
       'accept_invitation {"invitationId":"inv-1"}',
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
+      'set_force_radio {"forced":true}',
       'export_account_key {"password":"a long password"}',
       'export_account_key {"password":null}',
       "delete_account",
@@ -133,6 +136,11 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);
     expect(state.relays.map((r) => r.operator)).toEqual(["peoplesChat", "independent"]);
+    expect([state.radio.paired?.name, state.radio.paired?.connected, state.radio.forced]).toEqual([
+      "Emil's radio",
+      true,
+      false,
+    ]);
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
@@ -147,6 +155,7 @@ describe("the JSON shared with the Rust core", () => {
           "data:image/jpeg;base64,",
         ]),
       inviteChanged: (next) => expect(next.invites[0].joinedChatId).toBe("chat-1"),
+      radioChanged: (next) => expect([next.radio.paired, next.radio.forced]).toEqual([undefined, true]),
       contactChanged: (next) =>
         expect([next.invitations[0].from.name, next.invitations[0].from.photo?.slice(0, 23)]).toEqual([
           "Karen W.",
@@ -154,7 +163,8 @@ describe("the JSON shared with the Rust core", () => {
         ]),
       invitationReceived: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1", "inv-2"]),
       invitationRemoved: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1"]),
-      accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [], relays: [] }),
+      accountDeleted: (next) =>
+        expect(next).toMatchObject({ account: null, chats: [], invitations: [], relays: [], radio: { forced: false } }),
       accountCreated: (next) => expect(next.account?.publicKey).toBe(shared.snapshot.account?.publicKey),
     };
 

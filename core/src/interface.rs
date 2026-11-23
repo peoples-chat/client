@@ -175,6 +175,31 @@ pub struct SentInvite {
     pub joined_chat_id: Option<String>,
 }
 
+/// The radio, as an interface shows it (#40).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioStatus {
+    /// The radio the core uses. Pairing one is #24; until then, only tests give the core one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<PairedRadio>,
+    /// Every message goes by radio: a switch for testing, until the core chooses the transport
+    /// by itself (#45).
+    #[serde(default)]
+    pub forced: bool,
+}
+
+/// The radio the core uses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedRadio {
+    /// The name the radio announces.
+    pub name: String,
+    /// The radio's public key, in hex: its address on the mesh.
+    pub public_key: String,
+    /// The link to the radio is open.
+    pub connected: bool,
+}
+
 /// Everything an interface shows, as the core holds it now. Every later change arrives as a
 /// [`CoreEvent`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +215,8 @@ pub struct Snapshot {
     /// The invitations the user sent, oldest first (#95).
     #[serde(default)]
     pub invites: Vec<SentInvite>,
+    #[serde(default)]
+    pub radio: RadioStatus,
 }
 
 /// A change in the core. Applying an event twice, or one that a snapshot already contains,
@@ -246,6 +273,11 @@ pub enum CoreEvent {
     /// The user sent an invitation, or the person used it (#95).
     InviteChanged {
         invite: SentInvite,
+    },
+    /// The radio was paired, connected or disconnected, or the switch that forces it changed
+    /// (#40).
+    RadioChanged {
+        radio: RadioStatus,
     },
 }
 

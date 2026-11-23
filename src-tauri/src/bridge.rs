@@ -3,7 +3,7 @@
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
 use peoples_chat_core::interface::{
-    Account, Chat, CommandError, Contact, CoreEvent, Message, SentInvite, Snapshot,
+    Account, Chat, CommandError, Contact, CoreEvent, Message, RadioStatus, SentInvite, Snapshot,
 };
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -280,4 +280,13 @@ pub async fn send_message<R: Runtime>(
     text: String,
 ) -> Result<Message, CommandError> {
     slot.get(&app).await?.send_message(&chat_id, &text).await
+}
+
+#[tauri::command]
+pub async fn set_force_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    forced: bool,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.set_force_radio(forced)
 }

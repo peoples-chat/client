@@ -53,7 +53,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
 | `createInvite(name)` | `create_invite` | `SentInvite` | `inviteChanged` | Done (#95) |
 | `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
-| `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20) |
+| `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40) |
+| `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
 
@@ -73,14 +74,14 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
 | `contactChanged` | `contact` | A contact's name or photo changed | Done (#93, #94) |
 | `inviteChanged` | `invite` | The user sent an invitation, or the person used it | Done (#95) |
+| `radioChanged` | `radio` | The radio was paired, connected or disconnected, or the switch that forces it changed | Done (#40) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
-| `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
 ## Types
 
 | Type | Fields |
 | --- | --- |
-| `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites` |
+| `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
@@ -88,6 +89,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
+| `RadioStatus` | `paired` (optional: `name`, `publicKey`, `connected`), `forced` |
 
 - A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
   an outage.
@@ -310,7 +312,36 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
 - **In radio mode, the field** takes short text only. A counter shows UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in
   `src/core/types.ts`), and Send stays off past it.
 
-Only the mock reaches a chat by radio for now; the core's radio comes with #40, #44 and #45.
+The core reaches a chat by radio once #44 tells it the contact's radio was heard, and chooses by itself with #45.
+Until then, the switch below sends by radio, and the mock's demo has a chat reached by radio.
+
+## Radio
+
+The snapshot's `radio` says which radio the core uses, and `radioChanged` carries it whenever it changes (#40):
+
+- `paired`: the radio's `name`, its `publicKey` (its address on the mesh) and whether its link is `connected`. Pairing
+  is #24, so in the app nothing is paired yet; the core's tests hand it mock radios.
+- `forced`: the switch that sends every message by radio, for testing until the core chooses the transport (#45). It
+  stays across restarts. `setForceRadio(forced)` turns it on or off.
+
+**Sending with the switch on.** `sendMessage` checks first, and says why it can't send:
+
+- "That is too long for radio. Keep it to 96 bytes."
+- "Pair a radio first."
+- "Bea Holm's radio isn't known yet.": the contact's radio comes with their radio address record (#34).
+- "Could not send by radio: the chat's keys aren't ready. Try again."
+
+Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and
+that copy is the permanent record (#47). With the relays up, the message goes both ways at once; the other phone keeps
+one copy. If the radio fails after the checks, the message waits for the internet.
+
+**What arrives.** The message is `radio`, and `confirmed` once the other radio confirms it. On the other phone it
+arrives as `radio` too, and its relay copy later changes nothing. Messages that came by radio stay across a restart,
+also before their relay copies arrive. The radio parts are in [radio-format-v0.md](radio-format-v0.md#in-the-core).
+
+**What the interface shows.** Settings → Radio shows the paired radio, or "No radio paired", and the switch "Send
+everything by radio" under Testing. With it on, a chat on the internet says "Testing: every message goes by radio."
+above the field, which opens Radio, and the field takes short text as in radio mode.
 
 ## Relays
 
@@ -353,7 +384,6 @@ These shapes are sketches. The issues settle them together with their screens.
   few commands, with events for radios found and for the pairing's progress.
 - **`transportChanged` (#48).** For example `{ "transport": "internet" | "radio", "state": "available" |
   "unavailable" }`. Each chat's `reach` (#43) may already be enough.
-- **`radioChanged` (#24, #48).** For example not paired, connecting, connected or disconnected, with the radio's name.
 
 ## Running the app with the real core
 

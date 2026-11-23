@@ -20,6 +20,8 @@
   --color-bubble-in: #edf1eb;
   --color-border: #e1e6de;
   --color-disabled: #a8b1a9;
+  /* The track of a switch that is off, as in the design. */
+  --color-switch-off: #7c897f;
   --color-danger: #a3271f;
   /* Avatar tints; green also marks the selected chip and tab. */
   --color-green-bg: #dce8dd;
@@ -47,6 +49,7 @@
     --color-bubble-in: #1f2b24;
     --color-border: #28342c;
     --color-disabled: #3c4a41;
+    --color-switch-off: #56635a;
     --color-danger: #f0a59e;
     --color-green-bg: #213327;
     --color-green-fg: #a9d4b5;

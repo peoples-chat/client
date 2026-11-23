@@ -7,8 +7,7 @@
 // real core through the app shell, and `mockCore.ts` implements the same interface with demo
 // data.
 //
-// Not here yet: `pairRadio` and the radio state events. They arrive with the radio pairing work
-// (#24) and the transport work (#48).
+// Not here yet: `pairRadio`, which arrives with the radio pairing work (#24).
 
 /** Public key of an account, formatted by the core. Opaque to the interface. */
 export type PublicKey = string;
@@ -136,6 +135,26 @@ export interface SentInvite {
 }
 
 /** Everything the interface shows, as the core holds it now. */
+/** The radio, as the core uses it (#40). */
+export interface RadioStatus {
+  /** The radio the core uses. Pairing one is #24; until then only the core's tests give it one. */
+  paired?: PairedRadio;
+  /**
+   * Every message goes by radio: a switch for testing, until the core chooses the transport by
+   * itself (#45).
+   */
+  forced: boolean;
+}
+
+export interface PairedRadio {
+  /** The name the radio announces. */
+  name: string;
+  /** The radio's public key: its address on the mesh. Opaque to the interface. */
+  publicKey: string;
+  /** The link to the radio is open. */
+  connected: boolean;
+}
+
 export interface Snapshot {
   account: Account | null;
   chats: Chat[];
@@ -144,6 +163,7 @@ export interface Snapshot {
   relays: Relay[];
   /** The invitations the user sent, oldest first (#95). */
   invites: SentInvite[];
+  radio: RadioStatus;
 }
 
 /**
@@ -167,7 +187,9 @@ export type CoreEvent =
   /** A contact's profile changed, for example their name. Applies to their chats and invitations (#93). */
   | { type: "contactChanged"; contact: Contact }
   /** The user sent an invitation, or the person used it (#95). */
-  | { type: "inviteChanged"; invite: SentInvite };
+  | { type: "inviteChanged"; invite: SentInvite }
+  /** The radio was paired, connected or disconnected, or the switch that forces it changed (#40). */
+  | { type: "radioChanged"; radio: RadioStatus };
 
 export type CoreListener = (event: CoreEvent) => void;
 
@@ -210,8 +232,13 @@ export interface Core {
   previewInvite(inviteLink: string): Promise<Contact>;
   /** Accepts an invitation. The chat it opens has the invitation's id. */
   acceptInvitation(invitationId: string): Promise<Chat>;
-  /** Sends text. The message is `waiting` until a relay has acknowledged it, then `sent`. */
+  /**
+   * Sends text. The message is `waiting` until a relay has acknowledged it, then `sent`. With radio
+   * forced, the radio carries it too, and it is `confirmed` once the other radio confirms it (#40).
+   */
   sendMessage(chatId: string, text: string): Promise<Message>;
+  /** Sends every message by radio, or stops doing so: a switch for testing (#40). */
+  setForceRadio(forced: boolean): Promise<RadioStatus>;
   /**
    * Exports the account key once the device's owner has unlocked it (#86). A protected copy is
    * a NIP-49 `ncryptsec1…` that other Nostr apps open with its password; a plain one is the
