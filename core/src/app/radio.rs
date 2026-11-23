@@ -27,6 +27,7 @@ use crate::messaging::{RadioAddressItem, TextMessage};
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
 use crate::radio::{Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, ReceivedText, Refusal};
 use crate::radio_store::RadioMessage;
+use crate::reach::Heard;
 
 /// How often the core takes each chat's current radio keys while it has a radio. Keys can't be
 /// had while a chat waits for a relay to confirm a change, so the newest are kept beforehand.
@@ -55,6 +56,8 @@ pub(super) struct RadioParts {
     /// Chats with a radio send in flight. A new outgoing message of theirs waits for the send to
     /// finish, so that the one it sends shows as radio from the start.
     pub(super) sending: std::sync::Mutex<HashSet<String>>,
+    /// When each radio was last heard (#44). Taken after `state` and `reach`.
+    pub(super) heard: std::sync::Mutex<Heard>,
 }
 
 impl Core {
@@ -80,6 +83,7 @@ impl Core {
         drop(previous);
         self.keep_radio_keys().await;
         let status = self.radio_changed();
+        self.reach_changed();
         self.share_radio_address(None).await;
         Ok(status)
     }
@@ -90,7 +94,23 @@ impl Core {
         if previous.is_some() {
             drop(previous);
             self.radio_changed();
+            self.reach_changed();
         }
+    }
+
+    /// How long a radio counts as heard after the last sign of it, in place of
+    /// [`crate::reach::HEARD_WINDOW`]: for tests, and for tuning on hardware day (#44).
+    pub fn set_radio_heard_window(&self, window: Duration) {
+        self.heard().set_window(window);
+        self.reach_changed();
+    }
+
+    /// The record of the radio the core uses, for comparing presets, while its link is open.
+    pub(super) fn own_radio_record(&self) -> Option<RadioAddress> {
+        self.attached()
+            .as_ref()
+            .filter(|attached| attached.connected)
+            .map(|attached| RadioAddress::new(&attached.info, 0))
     }
 
     /// Sends every message by radio, or stops doing so: the switch for testing until the core
@@ -169,7 +189,10 @@ impl Core {
             return;
         };
         match self.inner.radio_store.set_contact_radio(&contact, record) {
-            Ok(true) => self.contact_meshes_changed(&contact),
+            Ok(true) => {
+                self.contact_meshes_changed(&contact);
+                self.reach_changed();
+            }
             Ok(false) => {}
             Err(error) => log::warn!("could not keep a contact's radio: {error}"),
         }
@@ -199,6 +222,7 @@ impl Core {
     /// chat gets this phone's record if it has a radio.
     pub(super) fn radio_chat_added(&self, chat_id: &str) {
         self.read_radio_addresses(chat_id);
+        self.reach_changed();
         if self.attached().is_some() {
             let core = self.clone();
             let chat_id = chat_id.to_owned();
@@ -430,18 +454,27 @@ impl Core {
     async fn on_radio_event(&self, event: RadioEvent) {
         match event {
             RadioEvent::TextReceived { from, text, .. } => {
+                if let Some(radio) = &from {
+                    self.hear(radio);
+                }
                 self.receive_by_radio(from.as_deref(), &text).await;
             }
             RadioEvent::Delivered { ack } => self.radio_confirmed(&ack),
-            // Reachability from heard radios is #44.
-            RadioEvent::ContactHeard { .. } => {}
+            RadioEvent::ContactHeard { public_key } => self.hear(&public_key),
             RadioEvent::Disconnected => {
                 if let Some(attached) = self.attached().as_mut() {
                     attached.connected = false;
                 }
                 self.radio_changed();
+                self.reach_changed();
             }
         }
+    }
+
+    /// The radio `radio` was heard just now (#44).
+    fn hear(&self, radio: &str) {
+        self.heard().hear(radio, tokio::time::Instant::now());
+        self.reach_changed();
     }
 
     /// Takes a text message the radio received. Only a packet that passes the inbox is shown;
@@ -540,6 +573,15 @@ impl Core {
         ) {
             self.apply_message(&message);
         }
+        // The contact's radio confirmed it, so it was heard.
+        let radio = self.chat(&confirmed.chat_id).and_then(|chat| {
+            self.inner
+                .radio_store
+                .contact_radio(&chat.contact.public_key)
+        });
+        if let Some(radio) = radio {
+            self.hear(&radio.key);
+        }
     }
 
     /// Stops following the radio, as when the core closes.
@@ -551,6 +593,7 @@ impl Core {
     pub(super) fn forget_radio(&self) {
         self.stop_radio();
         self.inbox().clear();
+        self.heard().clear();
         if let Err(error) = self.inner.radio_store.clear() {
             log::warn!("could not remove the radio store: {error}");
         }
@@ -568,6 +611,14 @@ impl Core {
         self.inner
             .radio
             .inbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn heard(&self) -> MutexGuard<'_, Heard> {
+        self.inner
+            .radio
+            .heard
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }

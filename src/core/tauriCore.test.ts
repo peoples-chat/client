@@ -146,7 +146,11 @@ describe("the JSON shared with the Rust core", () => {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
       messageAdded: (next) => expect(next.chats[1].messages[0].delivery).toBe("waiting"),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
-      reachChanged: (next) => expect(next.chats.map((c) => c.reach)).toEqual(["radio", "unreachable"]),
+      reachChanged: (next) =>
+        expect(next.chats.map((c) => [c.reach, c.radioIssue])).toEqual([
+          ["radio", undefined],
+          ["unreachable", "notHeard"],
+        ]),
       relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
       accountChanged: (next) =>
         expect([next.account?.name, next.account?.about, next.account?.photo?.slice(0, 23)]).toEqual([

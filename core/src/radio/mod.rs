@@ -26,7 +26,7 @@ pub use self::address::{AddressError, RADIO_ADDRESS_VERSION, RadioAddress};
 pub use self::inbox::{KEPT_EPOCHS, REPLAY_WINDOW, RadioInbox, ReceivedText, Refusal};
 pub use self::keys::{RADIO_KEY_BYTES, RADIO_KEY_LABEL, RadioKey, RadioKeyError, RadioKeys};
 pub use self::meshcore::{MAX_TEXT_BYTES, MeshCoreRadio};
-pub use self::mock::{MockMesh, MockRadio};
+pub use self::mock::{MOCK_SETTINGS, MockMesh, MockRadio};
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 256;

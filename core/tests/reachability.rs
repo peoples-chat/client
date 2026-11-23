@@ -32,6 +32,7 @@ async fn next_reach(
             Ok(Ok(CoreEvent::ReachChanged {
                 chat_id: changed,
                 reach,
+                ..
             })) if changed == chat_id => return Some(reach),
             Ok(Ok(_)) => {}
             Ok(Err(error)) => panic!("the core stopped sending events: {error}"),

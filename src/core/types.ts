@@ -87,7 +87,19 @@ export interface Chat {
   /** Oldest first. */
   messages: Message[];
   reach: Reach;
+  /** Why the chat isn't reachable by radio, when it is `unreachable` (#44). */
+  radioIssue?: RadioIssue;
 }
+
+/**
+ * Why a chat can't be reached by radio while no relay can reach it either (#44).
+ * - `noRadio`: the user has no radio, or its link is down.
+ * - `noContactRadio`: the contact hasn't shared a radio.
+ * - `otherMesh`: the contact's radio runs another mesh.
+ * - `otherPreset`: the contact's radio uses another region or preset.
+ * - `notHeard`: the contact's radio hasn't been heard lately.
+ */
+export type RadioIssue = "noRadio" | "noContactRadio" | "otherMesh" | "otherPreset" | "notHeard";
 
 /**
  * Who runs a relay (#88).
@@ -184,7 +196,7 @@ export type CoreEvent =
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
-  | { type: "reachChanged"; chatId: string; reach: Reach }
+  | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
   /** The account's relays changed, or their connections did. Carries all of them. */
   | { type: "relaysChanged"; relays: Relay[] }
   /** The user changed their profile (#93). */

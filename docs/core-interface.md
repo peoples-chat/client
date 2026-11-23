@@ -69,7 +69,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
-| `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
+| `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
 | `contactChanged` | `contact` | A contact's name, photo or radio changed | Done (#93, #94, #34) |
@@ -84,7 +84,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
-| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
@@ -284,8 +284,21 @@ that comes before the user accepts an invitation is added to the invitation: `me
 Each chat says how its messages can travel now (#43):
 
 - `internet`: at least one of the chat's relays is connected.
-- `radio`: no relay is, but the contact's radio has been heard. Comes with #44.
-- `unreachable`: neither. Messages wait, and go out when a relay is back.
+- `radio`: no relay is, but the contact's radio has been heard lately, on the mesh and preset of the user's radio (#44).
+- `unreachable`: neither. Messages wait, and go out when a relay is back. `radioIssue` says why radio can't help:
+  - `noRadio`: the user has no radio, or its link is down;
+  - `noContactRadio`: the contact hasn't shared a radio;
+  - `otherMesh` or `otherPreset`: the contact's radio runs another mesh, or another region or preset;
+  - `notHeard`: the contact's radio hasn't been heard lately.
+
+**Hearing a radio** (#44). The app sends nothing to find out who can be reached. A contact's radio counts as heard for
+an hour (`HEARD_WINDOW` in `core/src/reach.rs`, provisional until hardware day) after:
+
+- an advert it sends anyway;
+- a message from it;
+- its confirmation of one of the user's messages.
+
+Heard times live in memory, so after a restart a contact counts as reachable by radio once their radio is heard again.
 
 **When it changes** (`reachChanged`):
 
@@ -307,13 +320,14 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
 
 - **The header:** "Reachable by radio" in the radio colour, or "Not reachable". On the internet it shows nothing extra.
 - **A notice above the field** says where messages go: "Messages now go by radio", or "Messages wait until it is
-  back". It opens Radio and privacy, which says what radio protects and what it doesn't.
+  back", with the reason radio can't help, such as "Astrid's radio uses another preset." It opens Radio and privacy,
+  which says what radio protects and what it doesn't.
 - **Each radio message** is marked "Radio", in the radio colour, next to its time and delivery.
 - **In radio mode, the field** takes short text only. A counter shows UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in
   `src/core/types.ts`), and Send stays off past it.
 
-The core reaches a chat by radio once #44 tells it the contact's radio was heard, and chooses by itself with #45.
-Until then, the switch below sends by radio, and the mock's demo has a chat reached by radio.
+The core marks a chat `radio` when the contact's radio has been heard (#44); sending there by itself is #45. Until
+then, the switch below sends by radio, and the mock's demo has a chat reached by radio.
 
 ## Radio
 

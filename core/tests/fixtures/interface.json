@@ -120,7 +120,8 @@
     {
       "type": "reachChanged",
       "chatId": "chat-2",
-      "reach": "unreachable"
+      "reach": "unreachable",
+      "radioIssue": "notHeard"
     },
     {
       "type": "relaysChanged",

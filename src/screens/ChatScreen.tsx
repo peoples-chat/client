@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { core } from "../core";
-import type { Contact, Reach } from "../core/types";
+import type { Contact, RadioIssue, Reach } from "../core/types";
 import { useNavigation } from "../navigation/Navigator";
 import { useAppState } from "../state";
 import { Avatar } from "../ui/Avatar";
@@ -110,7 +110,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           <span>
             {reach === "radio"
               ? "Internet is down. Messages now go by radio."
-              : "Internet is down. Messages wait until it is back."}
+              : `Internet is down.${chat.radioIssue ? ` ${radioIssueText(chat.radioIssue, first)}` : ""} Messages wait until it is back.`}
           </span>
         </button>
       )}
@@ -154,6 +154,22 @@ function ChatIntro({ contact, line }: { contact: Contact; line: string }) {
       </p>
     </div>
   );
+}
+
+/** Why the chat can't go by radio, as the notice says it (#44). */
+function radioIssueText(issue: RadioIssue, first: string): string {
+  switch (issue) {
+    case "noRadio":
+      return "Your radio isn't connected.";
+    case "noContactRadio":
+      return `${first} hasn't shared a radio.`;
+    case "otherMesh":
+      return `${first}'s radio runs another mesh.`;
+    case "otherPreset":
+      return `${first}'s radio uses another preset.`;
+    case "notHeard":
+      return `${first}'s radio hasn't been heard lately.`;
+  }
 }
 
 /** The header's line under the name, when the contact can't be reached over the internet. */
