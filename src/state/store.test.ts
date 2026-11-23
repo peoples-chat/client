@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Chat, Core, CoreEvent, CoreListener, Message, Relay, Snapshot } from "../core/types";
+import type { Chat, Core, CoreEvent, CoreListener, Message, RadioStatus, Relay, Snapshot } from "../core/types";
 import { applyEvent, chatListItems, createStore, fromSnapshot, initialState } from "./store";
 
 const message = (id: string, sentAt: number, extra: Partial<Message> = {}): Message => ({
@@ -32,6 +32,41 @@ describe("applyEvent", () => {
 
     expect(once.chats[0].messages).toHaveLength(1);
     expect(twice).toBe(once);
+  });
+
+  it("follows the paired radio's connection, port and preset, and nothing that is the same (#24)", () => {
+    const radio: RadioStatus = {
+      forced: false,
+      canPair: true,
+      paired: {
+        name: "Emil's radio",
+        publicKey: "ab".repeat(32),
+        connection: "connected",
+        port: "/dev/cu.usbmodem1101",
+        preset: { frequencyKhz: 869_618, bandwidthHz: 62_500, spreadingFactor: 8, codingRate: 8, expected: true },
+      },
+    };
+    const paired = applyEvent(ready(), { type: "radioChanged", radio });
+    expect(paired.radio).toEqual(radio);
+    expect(applyEvent(paired, { type: "radioChanged", radio: structuredClone(radio) })).toBe(paired);
+
+    const looking = applyEvent(paired, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, connection: "connecting" } },
+    });
+    expect(looking.radio.paired?.connection).toBe("connecting");
+    const moved = applyEvent(looking, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, port: "/dev/cu.usbmodem2101" } },
+    });
+    expect(moved.radio.paired?.port).toBe("/dev/cu.usbmodem2101");
+    const retuned = applyEvent(moved, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, preset: { ...radio.paired!.preset, spreadingFactor: 7, expected: false } } },
+    });
+    expect(retuned.radio.paired?.preset.expected).toBe(false);
+    // Pairing becomes possible once the shell gives the core its ports.
+    expect(applyEvent(ready(), { type: "radioChanged", radio: { forced: false, canPair: true } }).radio.canPair).toBe(true);
   });
 
   it("changes the delivery state of one message", () => {

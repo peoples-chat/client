@@ -1,5 +1,6 @@
 //! What the core keeps about the radio (#40), in `radio.json` in the data folder:
 //!
+//! - **The paired radio** (#24): which radio it is and where it was plugged in, to open it again.
 //! - **The switch that forces radio**, for testing until the core chooses the transport (#45).
 //! - **The counters** for what this phone sends: each chat's next counter in each epoch. A
 //!   counter is stored before its packet goes out, so that it is never used twice with one key
@@ -57,6 +58,21 @@ pub struct RadioMessage {
     pub kept_at: u64,
 }
 
+/// The radio paired over a cable (#24).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pairing {
+    /// The port the radio was on last.
+    pub port: String,
+    /// The USB device's serial number, which goes with the radio when it is plugged in
+    /// elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
+    /// The name the radio announced last.
+    pub name: String,
+    /// Which radio it is, and its settings when it was last connected.
+    pub radio: RadioAddress,
+}
+
 /// A transmission the app caused (#52).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transmission {
@@ -89,6 +105,8 @@ pub enum CounterError {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Data {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pairing: Option<Pairing>,
     #[serde(default)]
     forced: bool,
     /// Chat → epoch → the next counter.
@@ -159,6 +177,21 @@ impl RadioStore {
             log::warn!("could not note that the radio counters are lost: {error}");
         }
         store
+    }
+
+    /// The radio paired over a cable, if any (#24).
+    pub fn pairing(&self) -> Option<Pairing> {
+        self.lock().pairing.clone()
+    }
+
+    /// Remembers `pairing` as the paired radio, or forgets it with `None`.
+    pub fn set_pairing(&self, pairing: Option<Pairing>) -> std::io::Result<()> {
+        let mut data = self.lock();
+        if data.pairing == pairing {
+            return Ok(());
+        }
+        data.pairing = pairing;
+        self.save(&data)
     }
 
     pub fn forced(&self) -> bool {
@@ -641,6 +674,37 @@ mod tests {
         assert!(!cleared.forced());
         assert!(cleared.message("m1").is_none());
         assert_eq!(cleared.take_counter("chat", 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn remembers_the_paired_radio_until_it_is_forgotten() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        assert_eq!(store.pairing(), None);
+        let pairing = Pairing {
+            port: "/dev/cu.usbmodem1101".to_owned(),
+            serial_number: Some("A1B2".to_owned()),
+            name: "Ada's radio".to_owned(),
+            radio: record(&"ab".repeat(32), 10),
+        };
+        store.set_pairing(Some(pairing.clone())).unwrap();
+        let reopened = RadioStore::open(data.path());
+        assert_eq!(reopened.pairing(), Some(pairing));
+        reopened.set_pairing(None).unwrap();
+        assert_eq!(RadioStore::open(data.path()).pairing(), None);
+
+        // Deleting the account forgets it too.
+        let store = RadioStore::open(data.path());
+        store
+            .set_pairing(Some(Pairing {
+                port: "/dev/ttyACM0".to_owned(),
+                serial_number: None,
+                name: "Bea's radio".to_owned(),
+                radio: record(&"be".repeat(32), 11),
+            }))
+            .unwrap();
+        store.clear().unwrap();
+        assert_eq!(RadioStore::open(data.path()).pairing(), None);
     }
 
     #[test]

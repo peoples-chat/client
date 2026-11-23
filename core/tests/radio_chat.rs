@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use peoples_chat_core::Core;
-use peoples_chat_core::interface::{CoreEvent, DeliveryState, Direction, Mesh, Message, Transport};
+use peoples_chat_core::interface::{
+    CoreEvent, DeliveryState, Direction, Mesh, Message, RadioConnection, Transport,
+};
 use peoples_chat_core::radio::{MockMesh, Radio, RadioEvent};
 use support::{Phone, TestRelay, WAIT, make_contacts, next_event, until};
 use tokio::time::Instant;
@@ -90,7 +92,10 @@ async fn two_phones_chat_by_radio_while_the_relay_is_blocked() {
     let paired = status.paired.unwrap();
     assert_eq!(paired.name, "Ada's radio");
     assert_eq!(paired.public_key, ada_radio.public_key());
-    assert!(paired.connected && !status.forced);
+    assert_eq!(paired.connection, RadioConnection::Connected);
+    assert!(!status.forced);
+    // A radio handed over, not paired: no port.
+    assert_eq!(paired.port, None);
 
     // The switch: the radio carries everything from now on, and says so.
     let mut ada_events = ada.subscribe();

@@ -107,8 +107,18 @@ impl MeshCoreRadio {
             link,
             pump,
         };
+        if let Err(error) = radio.greet().await {
+            // Lets go of the port, so that it can be opened again (#24).
+            let _ = radio.disconnect().await;
+            return Err(error);
+        }
+        Ok(radio)
+    }
+
+    /// Introduces the app to the radio, and reads its contacts.
+    async fn greet(&self) -> Result<(), RadioError> {
         {
-            let commands = radio.commands.lock().await;
+            let commands = self.commands.lock().await;
             // The radio expects an app to introduce itself before it pushes anything.
             commands.send_appstart().await.map_err(command_error)?;
             // Asking for the device information also makes the radio send messages with their
@@ -117,8 +127,8 @@ impl MeshCoreRadio {
                 log::info!("the radio didn't describe itself: {error}");
             }
         }
-        refresh_contacts(&radio.commands, &radio.state).await?;
-        Ok(radio)
+        refresh_contacts(&self.commands, &self.state).await?;
+        Ok(())
     }
 
     fn ensure_connected(&self) -> Result<(), RadioError> {
@@ -133,6 +143,14 @@ impl MeshCoreRadio {
 impl Drop for MeshCoreRadio {
     fn drop(&mut self) {
         self.pump.abort();
+        // A link this radio opened holds the serial port until it ends (#24).
+        if let Some(link) = self.link.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = link.disconnect().await;
+            });
+        }
     }
 }
 

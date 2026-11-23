@@ -65,7 +65,14 @@ pub fn run() {
             bridge::send_message,
             bridge::set_force_radio,
             bridge::cancel_message,
-            bridge::export_account_key
+            bridge::export_account_key,
+            // Pairing a radio over USB (#24). Phones will pair over Bluetooth (#23).
+            #[cfg(desktop)]
+            bridge::radio_ports,
+            #[cfg(desktop)]
+            bridge::pair_radio,
+            #[cfg(desktop)]
+            bridge::forget_radio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

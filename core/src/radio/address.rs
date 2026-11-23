@@ -20,6 +20,10 @@ use super::{Mesh, RadioInfo, RadioSettings};
 
 /// The record's version.
 pub const RADIO_ADDRESS_VERSION: u8 = 0;
+/// The LoRa settings the app expects (#24): MeshCore's EU/UK (Narrow) preset, at 869.618 MHz,
+/// 62.5 kHz, spreading factor 8 and coding rate 4/8. Frequency in kHz and bandwidth in Hz, as in
+/// the record.
+pub const EXPECTED_PRESET: (u32, u32, u8, u8) = (869_618, 62_500, 8, 8);
 /// The longest record taken, in bytes. A record is about 130.
 const MAX_RECORD_BYTES: usize = 1024;
 
@@ -122,6 +126,12 @@ impl RadioAddress {
             at: 0,
             ..other.clone()
         }
+    }
+
+    /// The region and preset: frequency in kHz, bandwidth in Hz, spreading factor and coding
+    /// rate. Radios hear each other only when these are the same.
+    pub fn preset(&self) -> (u32, u32, u8, u8) {
+        (self.freq, self.bw, self.sf, self.cr)
     }
 
     /// The mesh the radio runs.

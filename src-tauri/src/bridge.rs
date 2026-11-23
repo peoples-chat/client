@@ -51,6 +51,10 @@ impl CoreSlot {
                     .await
                     .map_err(start_failed)?;
                 forward_events(app.clone(), core.subscribe());
+                // Computers pair radios over USB, and open the paired one again (#24). Phones
+                // will pair over Bluetooth (#23).
+                #[cfg(desktop)]
+                core.use_radio_ports(std::sync::Arc::new(peoples_chat_core::radio::SerialPorts));
                 Ok(core)
             })
             .await
@@ -302,4 +306,35 @@ pub async fn set_force_radio<R: Runtime>(
     forced: bool,
 ) -> Result<RadioStatus, CommandError> {
     slot.get(&app).await?.set_force_radio(forced)
+}
+
+/// The USB ports a radio may be plugged into (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn radio_ports<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<Vec<peoples_chat_core::interface::RadioPort>, CommandError> {
+    slot.get(&app).await?.radio_ports().await
+}
+
+/// Pairs the radio on the USB port `port` (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn pair_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    port: String,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.pair_radio(&port).await
+}
+
+/// Forgets the paired radio (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn forget_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.forget_radio().await
 }

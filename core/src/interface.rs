@@ -219,13 +219,17 @@ pub struct SentInvite {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RadioStatus {
-    /// The radio the core uses. Pairing one is #24; until then, only tests give the core one.
+    /// The radio the core uses: the one paired (#24), or one a test handed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paired: Option<PairedRadio>,
     /// Every message goes by radio: a switch for testing, until the core chooses the transport
     /// by itself (#45).
     #[serde(default)]
     pub forced: bool,
+    /// This device can pair a radio: over USB on computers (#24). Phones pair over Bluetooth
+    /// later (#23).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_pair: bool,
 }
 
 /// The radio the core uses.
@@ -236,8 +240,50 @@ pub struct PairedRadio {
     pub name: String,
     /// The radio's public key, in hex: its address on the mesh.
     pub public_key: String,
-    /// The link to the radio is open.
-    pub connected: bool,
+    /// Whether the link to the radio is open (#24).
+    pub connection: RadioConnection,
+    /// Where the radio is plugged in, for one paired over USB (#24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+    /// The radio's LoRa settings, as it reported them last (#24).
+    pub preset: RadioPreset,
+}
+
+/// Whether the link to the paired radio is open (#24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RadioConnection {
+    Connected,
+    /// The core is opening it again: at start, or after the radio restarted or was unplugged.
+    Connecting,
+    Disconnected,
+}
+
+/// A radio's LoRa settings: its region and preset. Radios hear each other only with the same
+/// ones (#24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioPreset {
+    pub frequency_khz: u32,
+    pub bandwidth_hz: u32,
+    pub spreading_factor: u8,
+    /// The coding rate, as the 8 of 4/8.
+    pub coding_rate: u8,
+    /// MeshCore's EU/UK (Narrow) preset, which the app expects: 869.618 MHz, 62.5 kHz,
+    /// spreading factor 8, coding rate 4/8. Otherwise an interface warns that the radio reaches
+    /// only radios with its own settings.
+    pub expected: bool,
+}
+
+/// A port a radio may be plugged into, for pairing (#24).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioPort {
+    /// `/dev/cu.usbmodem1101` on a Mac, `/dev/ttyACM0` on Linux, `COM3` on Windows.
+    pub path: String,
+    /// What the device on it says it is, such as its USB product name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Everything an interface shows, as the core holds it now. Every later change arrives as a

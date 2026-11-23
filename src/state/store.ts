@@ -6,6 +6,7 @@ import type {
   CoreEvent,
   Invitation,
   Message,
+  RadioPreset,
   RadioStatus,
   Relay,
   SentInvite,
@@ -61,7 +62,8 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "accountDeleted":
-      // The core forgets the radio with the account.
+      // The core forgets the radio with the account. Whether the device can pair one follows
+      // as `radioChanged` (#24).
       return { ...state, account: null, chats: [], invitations: [], relays: [], invites: [], radio: NO_RADIO };
 
     case "chatAdded":
@@ -164,9 +166,22 @@ function updateContact(state: AppState, contact: Contact): AppState {
 function sameRadio(a: RadioStatus, b: RadioStatus): boolean {
   return (
     a.forced === b.forced &&
+    (a.canPair ?? false) === (b.canPair ?? false) &&
     a.paired?.name === b.paired?.name &&
     a.paired?.publicKey === b.paired?.publicKey &&
-    a.paired?.connected === b.paired?.connected
+    a.paired?.connection === b.paired?.connection &&
+    a.paired?.port === b.paired?.port &&
+    samePreset(a.paired?.preset, b.paired?.preset)
+  );
+}
+
+function samePreset(a?: RadioPreset, b?: RadioPreset): boolean {
+  return (
+    a?.frequencyKhz === b?.frequencyKhz &&
+    a?.bandwidthHz === b?.bandwidthHz &&
+    a?.spreadingFactor === b?.spreadingFactor &&
+    a?.codingRate === b?.codingRate &&
+    a?.expected === b?.expected
   );
 }
 

@@ -31,6 +31,7 @@ use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
 
+mod pairing;
 mod radio;
 mod waiting;
 
@@ -117,10 +118,6 @@ impl Core {
                         .map(|account| invite_views(account, &invites.all()))
                         .unwrap_or_default(),
                     account: account.clone(),
-                    radio: crate::interface::RadioStatus {
-                        paired: None,
-                        forced: radio_store.forced(),
-                    },
                     ..Snapshot::default()
                 }),
                 events,
@@ -136,6 +133,8 @@ impl Core {
                 flushing: Mutex::new(std::collections::HashSet::new()),
             }),
         };
+        // The switch, and the paired radio until the shell gives the core its ports (#24).
+        core.radio_changed();
         if let Some(account) = account {
             core.follow(&account.public_key).await;
         }
@@ -443,11 +442,13 @@ impl Core {
         if let Err(error) = self.inner.invites.clear() {
             log::warn!("could not remove the invitations: {error}");
         }
-        self.forget_radio();
+        self.clear_radio();
         if let Err(error) = self.inner.outbox.clear() {
             log::warn!("could not remove the waiting messages: {error}");
         }
         self.emit(CoreEvent::AccountDeleted);
+        // The paired radio went with the account, but the device can still pair one (#24).
+        self.radio_changed();
         Ok(())
     }
 

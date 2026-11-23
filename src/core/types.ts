@@ -6,8 +6,6 @@
 // material: public keys and invite links are opaque strings here. `tauriCore.ts` reaches the
 // real core through the app shell, and `mockCore.ts` implements the same interface with demo
 // data.
-//
-// Not here yet: `pairRadio`, which arrives with the radio pairing work (#24).
 
 /** Public key of an account, formatted by the core. Opaque to the interface. */
 export type PublicKey = string;
@@ -163,13 +161,15 @@ export interface SentInvite {
 /** Everything the interface shows, as the core holds it now. */
 /** The radio, as the core uses it (#40). */
 export interface RadioStatus {
-  /** The radio the core uses. Pairing one is #24; until then only the core's tests give it one. */
+  /** The radio the core uses: the one paired (#24), or one the core's tests gave it. */
   paired?: PairedRadio;
   /**
    * Every message goes by radio: a switch for testing, until the core chooses the transport by
    * itself (#45).
    */
   forced: boolean;
+  /** This device can pair a radio: over USB on computers (#24). Phones pair over Bluetooth later (#23). */
+  canPair?: boolean;
 }
 
 export interface PairedRadio {
@@ -177,8 +177,41 @@ export interface PairedRadio {
   name: string;
   /** The radio's public key: its address on the mesh. Opaque to the interface. */
   publicKey: string;
-  /** The link to the radio is open. */
-  connected: boolean;
+  /** Whether the link to the radio is open (#24). */
+  connection: RadioConnection;
+  /** Where the radio is plugged in, for one paired over USB (#24). */
+  port?: string;
+  /** The radio's LoRa settings, as it reported them last (#24). */
+  preset: RadioPreset;
+}
+
+/**
+ * Whether the link to the paired radio is open (#24). `connecting`: the core is opening it again,
+ * at start or after the radio restarted or was unplugged.
+ */
+export type RadioConnection = "connected" | "connecting" | "disconnected";
+
+/** A radio's LoRa settings: its region and preset. Radios hear each other only with the same ones. */
+export interface RadioPreset {
+  frequencyKhz: number;
+  bandwidthHz: number;
+  spreadingFactor: number;
+  /** The coding rate, as the 8 of 4/8. */
+  codingRate: number;
+  /**
+   * MeshCore's EU/UK (Narrow) preset, which the app expects: 869.618 MHz, 62.5 kHz, spreading
+   * factor 8, coding rate 4/8. Otherwise the interface warns that the radio reaches only radios
+   * with its own settings.
+   */
+  expected: boolean;
+}
+
+/** A port a radio may be plugged into, for pairing (#24). */
+export interface RadioPort {
+  /** `/dev/cu.usbmodem1101` on a Mac, `/dev/ttyACM0` on Linux, `COM3` on Windows. */
+  path: string;
+  /** What the device on it says it is, such as its USB product name. */
+  description?: string;
 }
 
 export interface Snapshot {
@@ -269,6 +302,15 @@ export interface Core {
   cancelMessage(chatId: string, messageId: string): Promise<void>;
   /** Sends every message by radio, or stops doing so: a switch for testing (#40). */
   setForceRadio(forced: boolean): Promise<RadioStatus>;
+  /** The USB ports a radio may be plugged into, where `canPair` is set (#24). */
+  radioPorts(): Promise<RadioPort[]>;
+  /**
+   * Pairs the radio on the USB port `port` (#24): the core reads its key, name and settings, uses
+   * it from then on, and opens it again by itself after a restart. It never changes the radio.
+   */
+  pairRadio(port: string): Promise<RadioStatus>;
+  /** Stops using the paired radio and forgets it (#24). Nothing on the radio changes. */
+  forgetRadio(): Promise<RadioStatus>;
   /**
    * Exports the account key once the device's owner has unlocked it (#86). A protected copy is
    * a NIP-49 `ncryptsec1…` that other Nostr apps open with its password; a plain one is the

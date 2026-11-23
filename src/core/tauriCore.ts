@@ -9,6 +9,7 @@ import {
   type CoreEvent,
   type CoreListener,
   type Message,
+  type RadioPort,
   type RadioStatus,
   type SentInvite,
   type Snapshot,
@@ -70,6 +71,10 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
     cancelMessage: (chatId, messageId) => call<void>("cancel_message", { chatId, messageId }),
     setForceRadio: (forced) => call<RadioStatus>("set_force_radio", { forced }),
+    // Computers only: phone builds have no such commands, and say `canPair` is off (#24).
+    radioPorts: () => call<RadioPort[]>("radio_ports"),
+    pairRadio: (port) => call<RadioStatus>("pair_radio", { port }),
+    forgetRadio: () => call<RadioStatus>("forget_radio"),
     // Without a password the core exports the plain key.
     exportAccountKey: (copy) =>
       call<string>("export_account_key", { password: copy.kind === "protected" ? copy.password : null }),

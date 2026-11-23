@@ -95,7 +95,7 @@ pub fn radio_reach(
     }
     // Radios hear each other only on the same frequency, bandwidth, spreading factor and coding
     // rate: the same region and preset.
-    if (own.freq, own.bw, own.sf, own.cr) != (contact.freq, contact.bw, contact.sf, contact.cr) {
+    if own.preset() != contact.preset() {
         return Err(RadioIssue::OtherPreset);
     }
     if !heard.is_heard(&contact.key, now) {

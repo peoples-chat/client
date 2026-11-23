@@ -13,6 +13,8 @@ export type Screen =
   | { name: "account" }
   | { name: "exportKey" }
   | { name: "radioSettings" }
+  /** The USB ports a radio may be on, to pair it (#24). */
+  | { name: "pairRadio" }
   | { name: "radioNotice" }
   | { name: "invite" }
   | { name: "inviteOne" }

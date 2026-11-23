@@ -57,7 +57,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `cancelMessage(chatId, messageId)` | `cancel_message` | | `messageRemoved` | Done (#46) |
 | `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
-| `pairRadio` | | | `radioChanged` | Planned (#24) |
+| `radioPorts()` | `radio_ports` (computers only) | `RadioPort[]` | | Done (#24) |
+| `pairRadio(port)` | `pair_radio` (computers only) | `RadioStatus` | `radioChanged` | Done (#24) |
+| `forgetRadio()` | `forget_radio` (computers only) | `RadioStatus` | `radioChanged` | Done (#24) |
 
 ## Events
 
@@ -76,7 +78,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
 | `contactChanged` | `contact` | A contact's name, photo or radio changed | Done (#93, #94, #34) |
 | `inviteChanged` | `invite` | The user sent an invitation, or the person used it | Done (#95) |
-| `radioChanged` | `radio` | The radio was paired, connected or disconnected, or the switch that forces it changed | Done (#40) |
+| `radioChanged` | `radio` | The radio was paired or forgotten, its link opened or dropped, or the switch that forces it changed | Done (#40, #24) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 
 ## Types
@@ -91,7 +93,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
-| `RadioStatus` | `paired` (optional: `name`, `publicKey`, `connected`), `forced` |
+| `RadioStatus` | `paired` (optional: `name`, `publicKey`, `connection`, `port` (optional), `preset`), `forced`, `canPair` (optional) |
+| `RadioPreset` | `frequencyKhz`, `bandwidthHz`, `spreadingFactor`, `codingRate`, `expected` |
+| `RadioPort` | `path`, `description` (optional) |
 
 - A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
   an outage.
@@ -346,10 +350,34 @@ The mock's demo has a chat reached by radio.
 
 The snapshot's `radio` says which radio the core uses, and `radioChanged` carries it whenever it changes (#40):
 
-- `paired`: the radio's `name`, its `publicKey` (its address on the mesh) and whether its link is `connected`. Pairing
-  is #24, so in the app nothing is paired yet; the core's tests hand it mock radios.
+- `paired`: the radio the user paired (#24), or one the core's tests handed it:
+  - its `name`, and its `publicKey`: its address on the mesh;
+  - `connection`: `connected`; `connecting` while the core opens its link again, at start or after the radio restarted
+    or was unplugged; `disconnected` otherwise, as before the shell gives the core its ports;
+  - `port`: where it is plugged in, for a radio paired over USB;
+  - `preset`: its LoRa settings as it reported them last, with frequency in kHz and bandwidth in Hz. `expected` says
+    whether they are MeshCore's EU/UK (Narrow) preset (869.618 MHz, 62.5 kHz, spreading factor 8, coding rate 4/8);
+    radios on other settings can't hear each other.
 - `forced`: the switch that sends every message by radio, for testing until the core chooses the transport (#45). It
   stays across restarts. `setForceRadio(forced)` turns it on or off.
+- `canPair`: the device can pair a radio. Computers pair over USB; phones will pair over Bluetooth (#23), so the
+  phone builds don't have the three pairing commands.
+
+**Pairing** (#24, `core/src/app/pairing.rs`). The shell gives the core the computer's USB serial ports at start:
+
+- `radioPorts()` lists the ports a radio may be on: USB serial ports, each with its `path` and, where the device says,
+  a `description` such as its product name.
+- `pairRadio(port)` opens the radio there, reads its key, name and settings, remembers it in `radio.json`, and uses it
+  in place of any radio before. Its key becomes the user's address on the mesh, shared with every contact (#34).
+  Pairing the radio in use again changes nothing. It fails with "The device on /dev/cu.usbserial-0001 didn't answer. Is
+  it a MeshCore radio with companion firmware for USB?", "Could not open /dev/cu.usbmodem1101. Another app may be using
+  it." or "That port is gone. Plug the radio in and look again."
+- **The core opens the paired radio again by itself:** at start, and when its link drops because the radio restarted
+  or was unplugged. It looks on the radio's port, or on another with the same USB serial number, first after a second,
+  then waiting up to 10 seconds between looks. Another radio on that port isn't taken for it.
+- `forgetRadio()` closes the link and forgets the radio. Deleting the account forgets it too; `radioChanged` then
+  follows `accountDeleted`, with `canPair` still set.
+- **The core never changes the radio's settings,** such as its frequency or region. It only reads them.
 
 **Choosing the path** (#45). `sendMessage` follows the spec's three rules:
 
@@ -376,6 +404,7 @@ a message the radio can't take waits for the internet instead:
 
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
+- "Your radio isn't connected.": it is paired, but the core is looking for it.
 - "Bea Holm's radio isn't known yet.": the contact's app hasn't sent a radio address record (#34); see
   [radio.md](radio.md).
 - "Could not send by radio: the chat's keys aren't ready. Try again."
@@ -401,9 +430,21 @@ phones then have the same history: each message once, where it was, the radio on
 copies are really in MDK. The other phone can take minutes to get what went over the relays after an outage (#78; see
 [mdk.md](mdk.md#relay-reachability)).
 
-**What the interface shows.** Settings → Radio shows the paired radio, or "No radio paired"; how many contacts have
-a MeshCore radio, under "Your contacts by mesh"; and the switch "Send everything by radio" under Testing. With it on, a chat on the internet says "Testing: every message goes by radio."
-above the field, which opens Radio, and the field takes short text as in radio mode.
+**What the interface shows.** Settings → Radio shows:
+
+- the paired radio, or "No radio paired": its name, "Connected by USB", "Looking for it. Check that it's plugged in."
+  or "Not connected", its preset ("EU/UK (Narrow)", or the settings themselves) and its port;
+- a warning for a radio on another preset: it reaches only radios with its own settings, and the app never changes
+  them;
+- "Pair a radio" ("Pair another radio" once one is), which opens Pair a radio: the USB ports, "Look again", and the
+  core's error under them. Without `canPair` it is greyed out with "Over USB on a computer, for now";
+- "Forget this radio", which asks once more;
+- how many contacts have a MeshCore radio, under "Your contacts by mesh";
+- the switch "Send everything by radio" under Testing. With it on, a chat on the internet says "Testing: every
+  message goes by radio." above the field, which opens Radio, and the field takes short text as in radio mode.
+
+The design has a Radio screen but no pairing screen, so Pair a radio follows the settings screens. The mock lists three
+demo ports: a radio on the expected preset, one on another preset, and a device that isn't a radio.
 
 ## Relays
 
@@ -442,8 +483,8 @@ that look the same and open nowhere. MDK's side is in [mdk.md](mdk.md#the-accoun
 
 These shapes are sketches. The issues settle them together with their screens.
 
-- **`pairRadio` (#24).** Pairing takes several steps: find radios nearby, choose one, confirm a PIN. It may become a
-  few commands, with events for radios found and for the pairing's progress.
+- **Pairing over Bluetooth (#23).** On phones, pairing takes more steps: find radios nearby, choose one, confirm a PIN.
+  It may need events for radios found and for the pairing's progress, next to the USB commands above.
 - **`transportChanged` (#48).** For example `{ "transport": "internet" | "radio", "state": "available" |
   "unavailable" }`. Each chat's `reach` (#43) may already be enough.
 
