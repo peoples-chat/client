@@ -32,6 +32,14 @@
             "sentAt": 1795300060000,
             "transport": "radio",
             "delivery": "confirmed"
+          },
+          {
+            "id": "msg-5",
+            "direction": "out",
+            "text": "Are you still there?",
+            "sentAt": 1795300090000,
+            "transport": "radio",
+            "delivery": "timedOut"
           }
         ],
         "reach": "radio"

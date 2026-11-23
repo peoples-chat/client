@@ -128,6 +128,26 @@ describe("mock core", () => {
     expect((await core.sendMessage(chat.id, "x".repeat(97))).transport).toBe("internet");
   });
 
+  it("lets a radio message time out when no radio confirms it", async () => {
+    const { core, events } = setup({ radioConfirms: false });
+    await core.createAccount("Emil");
+    const chat = (await core.load()).chats.find((c) => c.reach === "radio")!;
+    events.length = 0;
+
+    const message = await core.sendMessage(chat.id, "Are you okay?");
+    expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
+    vi.advanceTimersByTime(11_999);
+    expect(events).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(events[1]).toEqual({ type: "deliveryChanged", chatId: chat.id, messageId: message.id, delivery: "timedOut" });
+
+    // Nobody answers a message that didn't arrive.
+    vi.advanceTimersByTime(5000);
+    expect(events).toHaveLength(2);
+    const messages = (await core.load()).chats.find((c) => c.id === chat.id)!.messages;
+    expect(messages[messages.length - 1]).toMatchObject({ id: message.id, delivery: "timedOut" });
+  });
+
   it("keeps a message that has no path waiting, and lets the user cancel it", async () => {
     const { core, events } = setup();
     await core.createAccount("Emil");

@@ -90,7 +90,8 @@
   gap: 4px;
 }
 
-/* Under a message that waits for a path (#46): why, and Cancel. */
+/* Under a message that waits for a path (#46): why, and Cancel. Also under one the other radio
+   didn't confirm (#41). */
 .waiting {
   align-self: flex-end;
   display: flex;

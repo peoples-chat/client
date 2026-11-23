@@ -8,7 +8,8 @@
 //!   and which record this phone shared in each chat.
 //! - **Every message that travelled by radio,** sent or received, with its id. A received one is
 //!   in no other store until its relay copy arrives, and the ids catch a replayed packet after a
-//!   restart (#42).
+//!   restart (#42). A sent one keeps the codes its confirmation may carry, and whether one came
+//!   in time (#41).
 //! - **Every transmission the app caused** in the last two days, with its airtime and reason: the
 //!   hourly airtime cap counts them (#51), and they show that the app sends nothing by itself
 //!   (#52).
@@ -36,9 +37,20 @@ pub struct RadioMessage {
     /// Outgoing: the code that the other radio's confirmation carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ack: Option<String>,
+    /// Outgoing: the codes of the retries' confirmations. Each try has its own (#41).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retry_acks: Vec<String>,
     /// Outgoing: the other radio confirmed it.
     #[serde(default)]
     pub confirmed: bool,
+    /// Outgoing, while the other radio's confirmation is awaited: when it is due, in
+    /// milliseconds since the Unix epoch (#41).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm_by: Option<u64>,
+    /// Outgoing: no confirmation came in time, also after a retry (#41). One that comes later
+    /// still counts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
     /// When this phone kept it, in milliseconds since the Unix epoch. It orders messages sent
     /// within the same second.
     #[serde(default)]
@@ -54,7 +66,8 @@ pub struct Transmission {
     pub bytes: usize,
     /// Its time on air, in milliseconds.
     pub airtime_ms: u64,
-    /// Why the app sent it: `message` for a message the user sent, or one that waited.
+    /// Why the app sent it: `message` for a message the user sent, or one that waited; `retry`
+    /// for one sent again because no confirmation came (#41).
     pub reason: String,
 }
 
@@ -275,22 +288,80 @@ impl RadioStore {
             .collect()
     }
 
-    /// Marks the sent message whose confirmation carries `ack` as confirmed, and returns it.
-    /// Nothing for a code that isn't known, or a message that was confirmed already.
+    /// Marks the sent message whose confirmation carries `ack` as confirmed, and returns it: the
+    /// code of its first try or of a retry, also after it timed out. Nothing for a code that
+    /// isn't known, or a message that was confirmed already.
     pub fn confirm(&self, ack: &str) -> std::io::Result<Option<RadioMessage>> {
         let mut data = self.lock();
-        let Some(message) = data
-            .messages
-            .iter_mut()
-            .rev()
-            .find(|message| message.ack.as_deref() == Some(ack) && !message.confirmed)
-        else {
+        let Some(message) = data.messages.iter_mut().rev().find(|message| {
+            !message.confirmed
+                && (message.ack.as_deref() == Some(ack)
+                    || message.retry_acks.iter().any(|code| code == ack))
+        }) else {
             return Ok(None);
         };
         message.confirmed = true;
+        message.confirm_by = None;
         let confirmed = message.clone();
         self.save(&data)?;
         Ok(Some(confirmed))
+    }
+
+    /// Notes a retry of the sent message `id`: its confirmation carries `ack`, and is due by
+    /// `confirm_by`. Returns false, and notes nothing, for a message that is confirmed or timed
+    /// out already, or unknown.
+    pub fn retried(&self, id: &str, ack: String, confirm_by: u64) -> std::io::Result<bool> {
+        let mut data = self.lock();
+        let Some(message) = data.messages.iter_mut().find(|message| message.id == id) else {
+            return Ok(false);
+        };
+        if !awaits_confirmation(message) {
+            return Ok(false);
+        }
+        message.retry_acks.push(ack);
+        message.confirm_by = Some(confirm_by);
+        self.save(&data)?;
+        Ok(true)
+    }
+
+    /// Marks the sent message `id` as timed out, and returns it. Nothing for a message that is
+    /// confirmed or timed out already, or unknown.
+    pub fn time_out(&self, id: &str) -> std::io::Result<Option<RadioMessage>> {
+        let mut data = self.lock();
+        let Some(message) = data.messages.iter_mut().find(|message| message.id == id) else {
+            return Ok(None);
+        };
+        if !awaits_confirmation(message) {
+            return Ok(None);
+        }
+        message.timed_out = true;
+        message.confirm_by = None;
+        let timed_out = message.clone();
+        self.save(&data)?;
+        Ok(Some(timed_out))
+    }
+
+    /// After a restart: marks the sent messages whose confirmation was due by `now_ms` as timed
+    /// out, and returns those still awaited. Retries don't outlive the app.
+    pub fn after_restart(&self, now_ms: u64) -> std::io::Result<Vec<RadioMessage>> {
+        let mut data = self.lock();
+        let mut changed = false;
+        let mut awaited = Vec::new();
+        for message in data.messages.iter_mut().filter(|m| awaits_confirmation(m)) {
+            match message.confirm_by {
+                Some(due) if due > now_ms => awaited.push(message.clone()),
+                // Overdue, or sent before the core knew when a confirmation is due.
+                _ => {
+                    message.timed_out = true;
+                    message.confirm_by = None;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save(&data)?;
+        }
+        Ok(awaited)
     }
 
     /// Logs a transmission the app caused at `now_ms`, and forgets those older than two days.
@@ -359,6 +430,11 @@ impl RadioStore {
     }
 }
 
+/// Whether `message` is one this phone sent by radio whose confirmation is still awaited.
+fn awaits_confirmation(message: &RadioMessage) -> bool {
+    message.outgoing && !message.confirmed && !message.timed_out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,9 +447,87 @@ mod tests {
             text: "Hello".to_owned(),
             sent_at: 1_795_300_000_000,
             ack: Some(ack.to_owned()),
+            retry_acks: Vec::new(),
             confirmed: false,
+            confirm_by: None,
+            timed_out: false,
             kept_at: 1_795_300_000_100,
         }
+    }
+
+    #[test]
+    fn a_retry_or_a_late_confirmation_still_confirms() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        store
+            .add_message(RadioMessage {
+                confirm_by: Some(1_000),
+                ..sent("m1", "0001")
+            })
+            .unwrap();
+        assert!(store.retried("m1", "0002".to_owned(), 2_000).unwrap());
+        let retried = store.message("m1").unwrap();
+        assert_eq!(retried.retry_acks, vec!["0002".to_owned()]);
+        assert_eq!(retried.confirm_by, Some(2_000));
+        // The retry's code confirms it.
+        assert!(store.confirm("0002").unwrap().unwrap().confirmed);
+        assert_eq!(store.message("m1").unwrap().confirm_by, None);
+        // Nothing more happens to a confirmed message.
+        assert!(!store.retried("m1", "0003".to_owned(), 3_000).unwrap());
+        assert_eq!(store.time_out("m1").unwrap(), None);
+
+        // A message that timed out stays so across a restart, and its confirmation still counts
+        // when it comes late.
+        store.add_message(sent("m2", "0004")).unwrap();
+        let timed_out = store.time_out("m2").unwrap().unwrap();
+        assert!(timed_out.timed_out && !timed_out.confirmed);
+        assert_eq!(store.time_out("m2").unwrap(), None);
+        assert!(!store.retried("m2", "0005".to_owned(), 3_000).unwrap());
+        let reopened = RadioStore::open(data.path());
+        assert!(reopened.message("m2").unwrap().timed_out);
+        let late = reopened.confirm("0004").unwrap().unwrap();
+        assert!(late.confirmed && late.timed_out);
+
+        // Unknown messages change nothing.
+        assert!(!reopened.retried("m9", "0006".to_owned(), 3_000).unwrap());
+        assert_eq!(reopened.time_out("m9").unwrap(), None);
+    }
+
+    #[test]
+    fn after_a_restart_overdue_confirmations_time_out() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let due = |id: &str, ack: &str, confirm_by: Option<u64>| RadioMessage {
+            confirm_by,
+            ..sent(id, ack)
+        };
+        store
+            .add_message(due("overdue", "0001", Some(1_000)))
+            .unwrap();
+        store
+            .add_message(due("awaited", "0002", Some(5_000)))
+            .unwrap();
+        // Sent before the core knew when a confirmation is due.
+        store.add_message(due("older", "0003", None)).unwrap();
+        store.add_message(due("confirmed", "0004", None)).unwrap();
+        store.confirm("0004").unwrap();
+        store
+            .add_message(RadioMessage {
+                outgoing: false,
+                ack: None,
+                ..sent("received", "")
+            })
+            .unwrap();
+
+        let awaited = store.after_restart(2_000).unwrap();
+        assert_eq!(
+            awaited.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["awaited"]
+        );
+        let reopened = RadioStore::open(data.path());
+        let timed_out = |id: &str| reopened.message(id).unwrap().timed_out;
+        assert!(timed_out("overdue") && timed_out("older"));
+        assert!(!timed_out("awaited") && !timed_out("confirmed") && !timed_out("received"));
     }
 
     #[test]
