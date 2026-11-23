@@ -1,16 +1,24 @@
 import { radioBytes } from "./radio";
 import {
   CoreError,
+  MAX_ABOUT,
+  MAX_NAME,
   MIN_EXPORT_PASSWORD,
   RADIO_TEXT_LIMIT,
   type Account,
   type Chat,
+  type Contact,
   type Core,
   type CoreEvent,
   type CoreListener,
   type Invitation,
   type Message,
+  type PairedRadio,
+  type RadioPort,
+  type RadioPreset,
+  type RadioStatus,
   type Relay,
+  type SentInvite,
 } from "./types";
 
 // A stand-in for the Rust core with demo data: in the browser preview, and in the app when it is
@@ -30,20 +38,56 @@ const LINK_PATTERN = /^[a-z][a-z0-9+.-]*:\S+$/i;
 const DEMO_CONTACTS = ["Jonas Kjær", "Sofie Lund", "Lars Bak", "Mikkel Østergaard"];
 const DEMO_REPLIES = ["Got it.", "Sounds good.", "Thanks, see you then.", "Noted. Talk later."];
 
+/** MeshCore's EU/UK (Narrow) preset, which the app expects (#24). */
+const EU_NARROW: RadioPreset = {
+  frequencyKhz: 869_618,
+  bandwidthHz: 62_500,
+  spreadingFactor: 8,
+  codingRate: 8,
+  expected: true,
+};
+
+/**
+ * The demo's USB ports (#24): a radio on the preset the app expects, one on another preset, and a
+ * device that isn't a radio.
+ */
+const DEMO_PORTS: Array<RadioPort & { radio?: { name: string; preset: RadioPreset } }> = [
+  { path: "/dev/cu.usbmodem1101", description: "MeshCore radio", radio: { name: "Your radio", preset: EU_NARROW } },
+  {
+    path: "/dev/cu.usbmodem2101",
+    description: "MeshCore radio",
+    radio: {
+      name: "Spare radio",
+      preset: { frequencyKhz: 869_525, bandwidthHz: 250_000, spreadingFactor: 11, codingRate: 5, expected: false },
+    },
+  },
+  { path: "/dev/cu.usbserial-0001", description: "USB serial adapter" },
+];
+
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 export interface MockCoreOptions {
   /** Keeps the demo state between reloads. `null` keeps it in memory. Defaults to `localStorage`. */
   storage?: StorageLike | null;
   now?: () => number;
-  /** Milliseconds until a relay "acknowledges" a message, and until the contact replies after that. */
-  delays?: { sent: number; reply: number };
+  /**
+   * Milliseconds until a relay "acknowledges" a message, and until the contact replies after that;
+   * and until a radio message that no radio confirms times out.
+   */
+  delays?: { sent: number; reply: number; timedOut?: number };
+  /** Whether the contacts' radios confirm radio messages. Without, they time out (#41). Default true. */
+  radioConfirms?: boolean;
 }
 
 interface MockState {
   account: Account | null;
   chats: Chat[];
   invitations: Invitation[];
+  invites: SentInvite[];
+  /** Every message goes by radio: the switch for testing (#40). */
+  forceRadio: boolean;
+  /** The radio paired on one of the demo's ports (#24). */
+  pairedRadio: PairedRadio | null;
   /** Invite links already used, and the chat each one opened. */
   links: Record<string, string>;
   demoContactsAdded: number;
@@ -54,10 +98,15 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const storage = options.storage === undefined ? browserStorage() : options.storage;
   const now = options.now ?? Date.now;
   const delays = options.delays ?? { sent: 600, reply: 1500 };
+  // The core waits for the radio's estimate and a margin, then once more after a retry.
+  const timedOutDelay = delays.timedOut ?? 12_000;
+  const radioConfirms = options.radioConfirms ?? true;
   const listeners = new Set<CoreListener>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const replyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const state = restore(storage) ?? emptyState();
+  // Who each previewed invite link is from, so the chat it starts is with that person (#95).
+  const previewed = new Map<string, Contact>();
 
   // Runs `task` later, unless the account is deleted first.
   function later(ms: number, task: () => void) {
@@ -86,6 +135,21 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     const chat = state.chats.find((c) => c.id === chatId);
     if (!chat) throw new CoreError("This chat no longer exists.");
     return chat;
+  }
+
+  // The demo can pair a radio on its USB ports, as a computer can (#24).
+  function radioStatus(): RadioStatus {
+    return {
+      ...(state.pairedRadio ? { paired: state.pairedRadio } : {}),
+      forced: state.forceRadio,
+      canPair: true,
+    };
+  }
+
+  function radioChanged(): RadioStatus {
+    const radio = radioStatus();
+    emit({ type: "radioChanged", radio });
+    return structuredClone(radio);
   }
 
   // The demo contact answers once the user stops sending for a moment.
@@ -120,6 +184,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         chats: state.chats,
         invitations: state.invitations,
         relays: state.account ? demoRelays() : [],
+        invites: state.invites,
+        radio: radioStatus(),
       });
     },
 
@@ -131,14 +197,16 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     },
 
     async createAccount(name) {
-      const trimmed = name.trim();
-      if (!trimmed) throw new CoreError("Enter a name.");
+      const trimmed = checkedName(name);
       if (state.account) throw new CoreError("This device already has an account.");
 
+      const invite = randomHex(6);
       const account: Account = {
         name: trimmed,
+        about: "",
         publicKey: randomHex(32),
-        inviteLink: INVITE_PREFIX + randomHex(6),
+        inviteLink: INVITE_PREFIX + invite,
+        shareLink: `https://peoples.chat/i#demo-invite-${invite}`,
       };
       const chat = demoChat(now());
       const radioChat = demoRadioChat(now());
@@ -156,6 +224,37 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       return structuredClone(account);
     },
 
+    async updateProfile(name, about) {
+      const trimmedName = checkedName(name);
+      const trimmedAbout = about.trim();
+      if (Array.from(trimmedAbout).length > MAX_ABOUT) {
+        throw new CoreError(`About can have up to ${MAX_ABOUT} characters.`);
+      }
+      const account = requireAccount();
+      if (account.name === trimmedName && account.about === trimmedAbout) return structuredClone(account);
+      state.account = { ...account, name: trimmedName, about: trimmedAbout };
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
+    },
+
+    // The demo shows the photo the interface prepared, as it is.
+    async setProfilePhoto(photo) {
+      const account = requireAccount();
+      if (photo.length === 0) throw new CoreError("This photo can't be used. Try another one.");
+      state.account = { ...account, photo: `data:image/jpeg;base64,${toBase64(photo)}` };
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
+    },
+
+    async removeProfilePhoto() {
+      const account = requireAccount();
+      if (!account.photo) return structuredClone(account);
+      state.account = { ...account };
+      delete state.account.photo;
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
+    },
+
     async deleteAccount() {
       requireAccount();
       for (const timer of timers) clearTimeout(timer);
@@ -163,6 +262,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       replyTimers.clear();
       Object.assign(state, emptyState());
       emit({ type: "accountDeleted" });
+      // As the core does: the paired radio went with the account, and pairing stays possible.
+      radioChanged();
     },
 
     async addContact(inviteLink) {
@@ -176,19 +277,44 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const known = state.chats.find((c) => c.id === state.links[link]);
       if (known) return structuredClone(known);
 
-      const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
-      const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
-      const chat: Chat = {
-        id: randomHex(8),
-        contact: { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` },
-        messages: [],
-        reach: "internet",
-      };
-      state.demoContactsAdded += 1;
+      let contact = previewed.get(link);
+      if (!contact) {
+        const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
+        const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
+        contact = { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` };
+        state.demoContactsAdded += 1;
+      }
+      const chat: Chat = { id: randomHex(8), contact, messages: [], reach: "internet" };
       state.chats.push(chat);
       state.links[link] = chat.id;
       emit({ type: "chatAdded", chat });
       return structuredClone(chat);
+    },
+
+    // The demo's links open nothing; the real core's are https://peoples.chat/i links (#95).
+    async createInvite(name) {
+      const account = requireAccount();
+      const trimmed = name.trim();
+      if (!trimmed) throw new CoreError("Enter a name.");
+      const id = randomHex(10);
+      const invite = {
+        id,
+        name: trimmed,
+        link: `${account.shareLink}/${id}`,
+        createdAt: now(),
+        expiresAt: now() + 7 * 24 * 60 * MINUTE,
+      };
+      state.invites.push(invite);
+      emit({ type: "inviteChanged", invite });
+      return structuredClone(invite);
+    },
+
+    async previewInvite(inviteLink) {
+      const link = inviteLink.trim();
+      if (!LINK_PATTERN.test(link)) throw new CoreError("That is not an invite link.");
+      const contact = previewed.get(link) ?? { publicKey: randomHex(32), name: "Emil Dahl" };
+      previewed.set(link, contact);
+      return structuredClone(contact);
     },
 
     async acceptInvitation(invitationId) {
@@ -208,23 +334,36 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
 
-      // As the core will: radio carries short text, and a chat that can't be reached keeps it.
-      const radio = chat.reach === "radio";
-      if (radio && radioBytes(body) > RADIO_TEXT_LIMIT) {
+      // As the core does: radio carries short text, also when it is forced (#40). With the
+      // switch on, longer text is refused; otherwise it waits for the internet (#46), as
+      // everything does in a chat that can't be reached.
+      const tooLong = radioBytes(body) > RADIO_TEXT_LIMIT;
+      if (state.forceRadio && tooLong) {
         throw new CoreError(`That is too long for radio. Keep it to ${RADIO_TEXT_LIMIT} bytes.`);
       }
+      const radio = state.forceRadio || (chat.reach === "radio" && !tooLong);
+      const waits = !radio && chat.reach !== "internet";
       const message: Message = {
-        id: randomHex(8),
+        id: waits ? `queued-${randomHex(8)}` : randomHex(8),
         direction: "out",
         text: body,
         sentAt: now(),
         transport: radio ? "radio" : "internet",
         delivery: "waiting",
+        ...(waits ? { cancellable: true } : {}),
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
-      if (chat.reach === "unreachable") return structuredClone(message);
+      if (waits) return structuredClone(message);
 
+      if (radio && !radioConfirms) {
+        // No radio answers, also not to the retry: the message times out, and nobody replies.
+        later(timedOutDelay, () => {
+          message.delivery = "timedOut";
+          emit({ type: "deliveryChanged", chatId, messageId: message.id, delivery: "timedOut" });
+        });
+        return structuredClone(message);
+      }
       later(delays.sent, () => {
         // On radio, the other radio confirms; on the internet, a relay acknowledges.
         const delivery = radio ? "confirmed" : "sent";
@@ -233,6 +372,52 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         scheduleReply(chatId);
       });
       return structuredClone(message);
+    },
+
+    async cancelMessage(chatId, messageId) {
+      requireAccount();
+      const chat = chatById(chatId);
+      const message = chat.messages.find((m) => m.id === messageId);
+      if (!message) throw new CoreError("This message no longer exists.");
+      if (!message.cancellable) throw new CoreError("This message is on its way already.");
+      chat.messages = chat.messages.filter((m) => m.id !== messageId);
+      emit({ type: "messageRemoved", chatId, messageId });
+    },
+
+    // The demo's radio reaches every contact, so the switch is all it takes.
+    async setForceRadio(forced) {
+      state.forceRadio = forced;
+      return radioChanged();
+    },
+
+    async radioPorts() {
+      return DEMO_PORTS.map(({ path, description }) => ({ path, description }));
+    },
+
+    // As the core says it, for a port that went and for a device that isn't a radio.
+    async pairRadio(path) {
+      const port = DEMO_PORTS.find((p) => p.path === path);
+      if (!port) throw new CoreError("That port is gone. Plug the radio in and look again.");
+      if (!port.radio) {
+        throw new CoreError(
+          `The device on ${path} didn't answer. Is it a MeshCore radio with companion firmware for USB?`,
+        );
+      }
+      if (state.pairedRadio?.port === path) return radioStatus();
+      state.pairedRadio = {
+        name: port.radio.name,
+        publicKey: randomHex(32),
+        connection: "connected",
+        port: path,
+        preset: port.radio.preset,
+      };
+      return radioChanged();
+    },
+
+    async forgetRadio() {
+      if (!state.pairedRadio) return radioStatus();
+      state.pairedRadio = null;
+      return radioChanged();
     },
 
     // The demo has no real key: these look like the real core's copies, and open nowhere.
@@ -245,6 +430,14 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       return `ncryptsec1demo${randomBech32(148)}`;
     },
   };
+}
+
+/** A name as given, trimmed, or the core's reason it can't be one. */
+function checkedName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new CoreError("Enter a name.");
+  if (Array.from(trimmed).length > MAX_NAME) throw new CoreError(`Your name can have up to ${MAX_NAME} characters.`);
+  return trimmed;
 }
 
 /**
@@ -288,7 +481,7 @@ function demoChat(now: number): Chat {
 function demoRadioChat(now: number): Chat {
   return {
     id: randomHex(8),
-    contact: { publicKey: randomHex(32), name: "Hanne Vang" },
+    contact: { publicKey: randomHex(32), name: "Hanne Vang", meshes: ["meshCore"] },
     messages: [
       {
         id: randomHex(8),
@@ -329,7 +522,17 @@ function demoInvitation(now: number, firstName: string): Invitation {
 }
 
 function emptyState(): MockState {
-  return { account: null, chats: [], invitations: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
+  return {
+    account: null,
+    chats: [],
+    invitations: [],
+    invites: [],
+    forceRadio: false,
+    pairedRadio: null,
+    links: {},
+    demoContactsAdded: 0,
+    repliesSent: 0,
+  };
 }
 
 function browserStorage(): StorageLike | null {
@@ -358,6 +561,11 @@ function restore(storage: StorageLike | null): MockState | null {
       return null;
     }
     const restored = { ...emptyState(), ...state } as MockState;
+    // Saved before profiles had an about (#93) and accounts a web link (#72).
+    if (restored.account && typeof restored.account.about !== "string") restored.account.about = "";
+    if (restored.account && typeof restored.account.shareLink !== "string") {
+      restored.account.shareLink = `https://peoples.chat/i#${restored.account.inviteLink.replace(INVITE_PREFIX, "demo-invite-")}`;
+    }
     // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
     // in a chat that can't be reached.
     for (const chat of restored.chats) {
@@ -370,6 +578,12 @@ function restore(storage: StorageLike | null): MockState | null {
   } catch {
     return null;
   }
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function randomBech32(length: number): string {

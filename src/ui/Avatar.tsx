@@ -11,10 +11,12 @@ interface AvatarProps {
   tint?: Tint;
   /** Shown instead of initials, for chats that are not a person. */
   icon?: IconName;
+  /** The person's profile photo, as the core made it (#94). Shown instead of initials. */
+  photo?: string;
 }
 
 /** Decorative: the name next to it says who it is. */
-export function Avatar({ name, size, tint = "green", icon }: AvatarProps) {
+export function Avatar({ name, size, tint = "green", icon, photo }: AvatarProps) {
   const letters = initials(name);
   const iconSize = Math.round(size * 0.46);
   return (
@@ -23,7 +25,13 @@ export function Avatar({ name, size, tint = "green", icon }: AvatarProps) {
       className={`${styles.avatar} ${styles[tint]}`}
       style={{ width: size, height: size, fontSize: FONT_SIZES[size] ?? Math.round(size * 0.34) }}
     >
-      {icon ? <Icon name={icon} size={iconSize} /> : letters || <Icon name="person" size={iconSize} />}
+      {photo ? (
+        <img src={photo} alt="" className={styles.photo} />
+      ) : icon ? (
+        <Icon name={icon} size={iconSize} />
+      ) : (
+        letters || <Icon name="person" size={iconSize} />
+      )}
     </div>
   );
 }

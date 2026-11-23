@@ -33,3 +33,77 @@
   gap: 5px;
   color: var(--color-amber-fg);
 }
+
+/* A chat without messages introduces the contact, as in the design's first chat (#95). */
+.intro {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.introPerson {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 18px;
+}
+
+.introPerson > :first-child {
+  margin-bottom: 6px;
+}
+
+.introName {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.introLine {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--color-muted);
+}
+
+.encrypted {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 2px 12px 4px;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.encrypted svg {
+  flex-shrink: 0;
+}
+
+/* Suggested first messages, above the composer. */
+.suggestions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.suggestion {
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 22px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.suggestion:disabled {
+  color: var(--color-disabled);
+}

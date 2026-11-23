@@ -51,16 +51,49 @@ export function InfoRow({ icon, label, description }: { icon: IconName; label: s
   );
 }
 
+interface SwitchRowProps {
+  icon: IconName;
+  label: string;
+  description?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}
+
+/** A setting that is on or off, with the design's switch. The whole row toggles it. */
+export function SwitchRow({ icon, label, description, checked, disabled, onChange }: SwitchRowProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={styles.actionRow}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <Icon name={icon} size={22} className={styles.actionIcon} />
+      <span className={styles.actionText}>
+        <span>{label}</span>
+        {description && <span className={styles.actionDescription}>{description}</span>}
+      </span>
+      <span className={`${styles.switchTrack} ${checked ? styles.switchOn : ""}`} aria-hidden="true">
+        <span className={styles.switchKnob} />
+      </span>
+    </button>
+  );
+}
+
 interface ContactRowProps {
   name: string;
   tint: Tint;
+  photo?: string;
   onClick?: () => void;
 }
 
-export function ContactRow({ name, tint, onClick }: ContactRowProps) {
+export function ContactRow({ name, tint, photo, onClick }: ContactRowProps) {
   return (
     <button type="button" className={styles.contactRow} onClick={onClick}>
-      <Avatar name={name} size={44} tint={tint} />
+      <Avatar name={name} size={44} tint={tint} photo={photo} />
       <span className={styles.contactName}>{name}</span>
     </button>
   );
@@ -69,6 +102,7 @@ export function ContactRow({ name, tint, onClick }: ContactRowProps) {
 interface ChatRowProps {
   name: string;
   tint: Tint;
+  photo?: string;
   time: string;
   preview: ReactNode;
   /** A message request: its preview is highlighted. */
@@ -76,10 +110,10 @@ interface ChatRowProps {
   onClick: () => void;
 }
 
-export function ChatRow({ name, tint, time, preview, request, onClick }: ChatRowProps) {
+export function ChatRow({ name, tint, photo, time, preview, request, onClick }: ChatRowProps) {
   return (
     <button type="button" className={styles.chatRow} onClick={onClick}>
-      <Avatar name={name} size={52} tint={tint} />
+      <Avatar name={name} size={52} tint={tint} photo={photo} />
       <span className={styles.chatBody}>
         <span className={styles.chatTop}>
           <span className={styles.chatName}>{name}</span>

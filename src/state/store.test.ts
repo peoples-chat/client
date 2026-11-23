@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Chat, Core, CoreEvent, CoreListener, Message, Relay, Snapshot } from "../core/types";
+import type { Chat, Core, CoreEvent, CoreListener, Message, RadioStatus, Relay, Snapshot } from "../core/types";
 import { applyEvent, chatListItems, createStore, fromSnapshot, initialState } from "./store";
 
 const message = (id: string, sentAt: number, extra: Partial<Message> = {}): Message => ({
@@ -19,7 +19,8 @@ const chat = (id: string, messages: Message[] = []): Chat => ({
   reach: "internet",
 });
 
-const ready = (chats: Chat[] = []) => fromSnapshot({ account: null, chats, invitations: [], relays: [] });
+const ready = (chats: Chat[] = []) =>
+  fromSnapshot({ account: null, chats, invitations: [], relays: [], invites: [], radio: { forced: false } });
 
 const relay = (url: string, status: Relay["status"]): Relay => ({ url, operator: "independent", status });
 
@@ -33,6 +34,41 @@ describe("applyEvent", () => {
     expect(twice).toBe(once);
   });
 
+  it("follows the paired radio's connection, port and preset, and nothing that is the same (#24)", () => {
+    const radio: RadioStatus = {
+      forced: false,
+      canPair: true,
+      paired: {
+        name: "Emil's radio",
+        publicKey: "ab".repeat(32),
+        connection: "connected",
+        port: "/dev/cu.usbmodem1101",
+        preset: { frequencyKhz: 869_618, bandwidthHz: 62_500, spreadingFactor: 8, codingRate: 8, expected: true },
+      },
+    };
+    const paired = applyEvent(ready(), { type: "radioChanged", radio });
+    expect(paired.radio).toEqual(radio);
+    expect(applyEvent(paired, { type: "radioChanged", radio: structuredClone(radio) })).toBe(paired);
+
+    const looking = applyEvent(paired, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, connection: "connecting" } },
+    });
+    expect(looking.radio.paired?.connection).toBe("connecting");
+    const moved = applyEvent(looking, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, port: "/dev/cu.usbmodem2101" } },
+    });
+    expect(moved.radio.paired?.port).toBe("/dev/cu.usbmodem2101");
+    const retuned = applyEvent(moved, {
+      type: "radioChanged",
+      radio: { ...radio, paired: { ...radio.paired!, preset: { ...radio.paired!.preset, spreadingFactor: 7, expected: false } } },
+    });
+    expect(retuned.radio.paired?.preset.expected).toBe(false);
+    // Pairing becomes possible once the shell gives the core its ports.
+    expect(applyEvent(ready(), { type: "radioChanged", radio: { forced: false, canPair: true } }).radio.canPair).toBe(true);
+  });
+
   it("changes the delivery state of one message", () => {
     const state = ready([chat("a", [message("m1", 1), message("m2", 2)])]);
     const next = applyEvent(state, { type: "deliveryChanged", chatId: "a", messageId: "m2", delivery: "sent" });
@@ -40,6 +76,15 @@ describe("applyEvent", () => {
     expect(next.chats[0].messages.map((m) => m.delivery)).toEqual(["waiting", "sent"]);
     expect(next.chats[0].messages[0]).toBe(state.chats[0].messages[0]);
     expect(applyEvent(next, { type: "deliveryChanged", chatId: "a", messageId: "m2", delivery: "sent" })).toBe(next);
+  });
+
+  it("shows a radio message as timed out, and confirmed when a late confirmation comes (#41)", () => {
+    const state = ready([chat("a", [message("m1", 1, { transport: "radio" })])]);
+    const timedOut = applyEvent(state, { type: "deliveryChanged", chatId: "a", messageId: "m1", delivery: "timedOut" });
+    expect(timedOut.chats[0].messages[0]).toMatchObject({ transport: "radio", delivery: "timedOut" });
+
+    const confirmed = applyEvent(timedOut, { type: "deliveryChanged", chatId: "a", messageId: "m1", delivery: "confirmed" });
+    expect(confirmed.chats[0].messages[0].delivery).toBe("confirmed");
   });
 
   it("adds a message to the invitation with that id, before it is accepted", () => {
@@ -71,6 +116,70 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "relaysChanged", relays: structuredClone(relays) })).toBe(next);
   });
 
+  it("takes the account's new profile, once", () => {
+    const account = { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" };
+    const state = { ...ready(), account };
+    const changed = { ...account, name: "Emil D.", about: "Aarhus" };
+    const next = applyEvent(state, { type: "accountChanged", account: changed });
+
+    expect(next.account).toEqual(changed);
+    expect(applyEvent(next, { type: "accountChanged", account: { ...changed } })).toBe(next);
+    // Without an account there is nothing to change.
+    expect(applyEvent(ready(), { type: "accountChanged", account: changed }).account).toBeNull();
+  });
+
+  it("renames a contact in their chats and invitations", () => {
+    const invitation = { id: "i1", from: { publicKey: "key-b", name: "Contact b" }, receivedAt: 5, messages: [] };
+    const state = { ...ready([chat("a"), chat("b")]), invitations: [invitation] };
+    const next = applyEvent(state, { type: "contactChanged", contact: { publicKey: "key-b", name: "Bea" } });
+
+    expect(next.chats.map((c) => c.contact.name)).toEqual(["Contact a", "Bea"]);
+    expect(next.chats[0]).toBe(state.chats[0]);
+    expect(next.invitations[0].from.name).toBe("Bea");
+    expect(applyEvent(next, { type: "contactChanged", contact: { publicKey: "key-b", name: "Bea" } })).toBe(next);
+    expect(applyEvent(state, { type: "contactChanged", contact: { publicKey: "x", name: "Nobody" } })).toBe(state);
+  });
+
+  it("takes a contact's new photo, and drops it again", () => {
+    const state = ready([chat("b")]);
+    const withPhoto = { publicKey: "key-b", name: "Contact b", photo: "data:image/jpeg;base64,AA==" };
+    const next = applyEvent(state, { type: "contactChanged", contact: withPhoto });
+
+    expect(next.chats[0].contact.photo).toBe(withPhoto.photo);
+    expect(applyEvent(next, { type: "contactChanged", contact: { ...withPhoto } })).toBe(next);
+    const without = applyEvent(next, { type: "contactChanged", contact: { publicKey: "key-b", name: "Contact b" } });
+    expect(without.chats[0].contact.photo).toBeUndefined();
+  });
+
+  it("removes a message, once", () => {
+    const state = ready([chat("a", [message("m1", 1), message("m2", 2)])]);
+    const event: CoreEvent = { type: "messageRemoved", chatId: "a", messageId: "m1" };
+    const next = applyEvent(state, event);
+    expect(next.chats[0].messages.map((m) => m.id)).toEqual(["m2"]);
+    expect(applyEvent(next, event)).toBe(next);
+    expect(applyEvent(state, { type: "messageRemoved", chatId: "x", messageId: "m1" })).toBe(state);
+  });
+
+  it("takes the mesh of a contact's radio", () => {
+    const state = ready([chat("b")]);
+    const withRadio = { publicKey: "key-b", name: "Contact b", meshes: ["meshCore" as const] };
+    const next = applyEvent(state, { type: "contactChanged", contact: withRadio });
+
+    expect(next.chats[0].contact.meshes).toEqual(["meshCore"]);
+    expect(applyEvent(next, { type: "contactChanged", contact: { ...withRadio, meshes: ["meshCore"] } })).toBe(next);
+  });
+
+  it("adds a sent invitation, and marks it used once, when the person joins", () => {
+    const invite = { id: "t1", name: "Sofie", link: "https://peoples.chat/i#x/t1", createdAt: 1, expiresAt: 2 };
+    const added = applyEvent(ready(), { type: "inviteChanged", invite });
+    expect(added.invites).toEqual([invite]);
+    expect(applyEvent(added, { type: "inviteChanged", invite: { ...invite } })).toBe(added);
+
+    const joined = applyEvent(added, { type: "inviteChanged", invite: { ...invite, joinedChatId: "c1" } });
+    expect(joined.invites).toEqual([{ ...invite, joinedChatId: "c1" }]);
+    expect(applyEvent(joined, { type: "accountDeleted" }).invites).toEqual([]);
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);
@@ -82,7 +191,7 @@ describe("applyEvent", () => {
   it("clears the account, chats, requests and relays when the account is deleted", () => {
     const state = {
       ...ready([chat("a")]),
-      account: { name: "Emil", publicKey: "k", inviteLink: "peopleschat:x" },
+      account: { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" },
       invitations: [{ id: "i1", from: { publicKey: "k2", name: "Karen" }, receivedAt: 5, messages: [] }],
       relays: [relay("wss://a.example", "connected")],
     };
@@ -137,7 +246,14 @@ describe("createStore", () => {
   }
 
   it("applies events that arrive while the snapshot loads", async () => {
-    const { core, emit, finishLoad } = fakeCore({ account: null, chats: [chat("a")], invitations: [], relays: [] });
+    const { core, emit, finishLoad } = fakeCore({
+      account: null,
+      chats: [chat("a")],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false },
+    });
     const store = createStore(core);
     let notified = 0;
     store.subscribe(() => notified++);

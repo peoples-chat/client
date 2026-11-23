@@ -16,20 +16,35 @@ use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Relay, RelayOperator, RelayStatus, Snapshot, Transport,
+    Reach, Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
 };
 use crate::invite;
+use crate::invites::{InviteRecord, Invites};
 use crate::messaging::{
-    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink,
-    RelayLinks, TextMessage, canonical_relay,
+    ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
+    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
+use crate::outbox::Outbox;
+use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
-use crate::reach::Reachability;
+use crate::radio_store::{RadioMessage, RadioStore};
+use crate::reach::{Reachability, radio_reach};
+use crate::transport::{Route, route};
+
+mod pairing;
+mod radio;
+mod waiting;
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
 /// The shortest password for an exported key, as the design asks.
 pub const MIN_EXPORT_PASSWORD_CHARS: usize = 12;
+/// The longest profile name, in characters (#93).
+pub const MAX_NAME_CHARS: usize = 64;
+/// The longest about text, in characters (#93).
+pub const MAX_ABOUT_CHARS: usize = 280;
+/// How often the core fetches its contacts' profiles again, for their new names (#93).
+const CONTACT_REFRESH: Duration = Duration::from_secs(5 * 60);
 
 /// The protocol core. Clones share one core.
 #[derive(Clone)]
@@ -47,6 +62,21 @@ struct Inner {
     watchers: Mutex<Vec<JoinHandle<()>>>,
     /// Which chats can reach their relays (#43). Whoever holds both locks takes `state` first.
     reach: Mutex<Reachability>,
+    /// Wakes the relays' watcher to look again at when a chat's reach changes next, as when a
+    /// radio was heard (#44).
+    reach_wake: Arc<tokio::sync::Notify>,
+    /// Avatars made from profile photos (#94).
+    avatars: Avatars,
+    /// The invitations the user sent (#95).
+    invites: Invites,
+    /// What the core keeps about the radio (#40).
+    radio_store: RadioStore,
+    /// The radio the core uses, and the chats' radio keys.
+    radio: radio::RadioParts,
+    /// Messages waiting for a path (#46).
+    outbox: Outbox,
+    /// Chats whose waiting messages are being sent.
+    flushing: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Core {
@@ -54,11 +84,21 @@ impl Core {
     /// already on this device, if any, with its chats and their latest messages; chats whose
     /// contacts' names aren't known yet follow as events. Must run inside a Tokio runtime.
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
+        let avatars = Avatars::new(&options.data_dir);
+        let invites = Invites::open(&options.data_dir);
+        let radio_store = RadioStore::open(&options.data_dir);
+        // Before the chats load, so that they show radio messages that timed out meanwhile (#41).
+        let awaited = radio_store.after_restart(now_ms()).unwrap_or_else(|error| {
+            log::warn!("could not check the radio confirmations: {error}");
+            Vec::new()
+        });
+        let outbox = Outbox::open(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
             Some(existing) => Some(account_view(
                 &messaging,
+                &avatars,
                 existing.public_key_hex,
                 existing.name.unwrap_or_default(),
             )?),
@@ -73,6 +113,10 @@ impl Core {
             inner: Arc::new(Inner {
                 messaging,
                 state: Mutex::new(Snapshot {
+                    invites: account
+                        .as_ref()
+                        .map(|account| invite_views(account, &invites.all()))
+                        .unwrap_or_default(),
                     account: account.clone(),
                     ..Snapshot::default()
                 }),
@@ -80,11 +124,21 @@ impl Core {
                 account_commands: tokio::sync::Mutex::new(()),
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
+                reach_wake: Arc::new(tokio::sync::Notify::new()),
+                avatars,
+                invites,
+                radio_store,
+                radio: radio::RadioParts::default(),
+                outbox,
+                flushing: Mutex::new(std::collections::HashSet::new()),
             }),
         };
+        // The switch, and the paired radio until the shell gives the core its ports (#24).
+        core.radio_changed();
         if let Some(account) = account {
             core.follow(&account.public_key).await;
         }
+        core.await_after_restart(awaited);
         Ok(core)
     }
 
@@ -105,10 +159,7 @@ impl Core {
     /// The key stays in the core: it goes to the platform's key store, and only the public key
     /// leaves.
     pub async fn create_account(&self, name: &str) -> Result<Account, CommandError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(CommandError::new("Enter a name."));
-        }
+        let name = checked_name(name)?;
         let _one_at_a_time = self.inner.account_commands.lock().await;
         if self.state().account.is_some() {
             return Err(CommandError::new("This device already has an account."));
@@ -128,6 +179,7 @@ impl Core {
                 })?;
         let account = account_view(
             &self.inner.messaging,
+            &self.inner.avatars,
             created.public_key_hex,
             name.to_owned(),
         )
@@ -140,6 +192,225 @@ impl Core {
         });
         self.follow(&account.public_key).await;
         Ok(account)
+    }
+
+    /// Changes the profile's name and about, and publishes them (#93). Emits
+    /// [`CoreEvent::AccountChanged`]. The photo and anything other apps put in the profile
+    /// stay as they are.
+    pub async fn update_profile(&self, name: &str, about: &str) -> Result<Account, CommandError> {
+        let name = checked_name(name)?;
+        let about = about.trim();
+        if about.chars().count() > MAX_ABOUT_CHARS {
+            return Err(CommandError::new(format!(
+                "About can have up to {MAX_ABOUT_CHARS} characters."
+            )));
+        }
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        if account.name == name && account.about == about {
+            return Ok(account);
+        }
+        self.inner
+            .messaging
+            .update_profile(&account.public_key, name, about)
+            .await
+            .map_err(|error| self.profile_not_published("update your profile", error))?;
+        log::info!("profile updated");
+        self.change_account(|account| {
+            account.name = name.to_owned();
+            account.about = about.to_owned();
+        })
+    }
+
+    /// Sets the profile photo (#94). The core turns `photo` upright, cuts it to a centred
+    /// square, shrinks it and saves it again as JPEG, which drops its metadata, such as where it
+    /// was taken. It then uploads it to the media server and publishes its address in the
+    /// profile. Emits [`CoreEvent::AccountChanged`].
+    pub async fn set_profile_photo(&self, photo: &[u8]) -> Result<Account, CommandError> {
+        self.account()?;
+        let upload = photo::square_jpeg(photo, UPLOAD_SIDE).map_err(|error| {
+            log::info!("a photo was refused: {error}");
+            CommandError::new("This photo can't be used. Try another one.")
+        })?;
+        let avatar = photo::square_jpeg(&upload, AVATAR_SIDE)
+            .map_err(|error| failed("set your photo", error))?;
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        let url = self
+            .inner
+            .messaging
+            .upload_photo(&account.public_key, upload)
+            .await
+            .map_err(|error| failed("upload your photo", error))?;
+        self.inner
+            .messaging
+            .set_picture(&account.public_key, Some(&url))
+            .await
+            .map_err(|error| self.profile_not_published("set your photo", error))?;
+        log::info!("profile photo set");
+        if let Err(error) = self.inner.avatars.put(&url, &avatar) {
+            log::warn!("could not keep the avatar: {error}");
+        }
+        self.change_account(|account| account.photo = Some(photo::data_url(&avatar)))
+    }
+
+    /// Removes the profile photo (#94). Emits [`CoreEvent::AccountChanged`]. The photo stays on
+    /// the media server: its address is just no longer in the profile.
+    pub async fn remove_profile_photo(&self) -> Result<Account, CommandError> {
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        if account.photo.is_none()
+            && self
+                .inner
+                .messaging
+                .known_picture(&account.public_key)
+                .is_none()
+        {
+            return Ok(account);
+        }
+        self.inner
+            .messaging
+            .set_picture(&account.public_key, None)
+            .await
+            .map_err(|error| self.profile_not_published("remove your photo", error))?;
+        log::info!("profile photo removed");
+        self.change_account(|account| account.photo = None)
+    }
+
+    /// Applies `change` to the account in the snapshot and emits [`CoreEvent::AccountChanged`].
+    fn change_account(&self, change: impl FnOnce(&mut Account)) -> Result<Account, CommandError> {
+        let mut state = self.state();
+        let Some(current) = state.account.as_mut() else {
+            return Err(CommandError::new("Create an account first."));
+        };
+        change(current);
+        let account = current.clone();
+        self.emit(CoreEvent::AccountChanged {
+            account: account.clone(),
+        });
+        Ok(account)
+    }
+
+    /// Why a profile wasn't published. MDK publishes at once, or not at all.
+    fn profile_not_published(&self, action: &str, error: MessagingError) -> CommandError {
+        if self.any_relay_connected() {
+            failed(action, error)
+        } else {
+            log::warn!("could not {action} without relays: {error}");
+            CommandError::new("Could not reach the relays. Try again when you are online.")
+        }
+    }
+
+    /// Fetches the contacts' profiles again, and emits [`CoreEvent::ContactChanged`] for each
+    /// contact whose name or photo changed (#93, #94). The core does this as it starts following
+    /// the account and every few minutes after; MDK doesn't follow other people's profiles by
+    /// itself.
+    pub async fn refresh_contacts(&self) {
+        let contacts: std::collections::BTreeSet<String> = {
+            let state = self.state();
+            state
+                .chats
+                .iter()
+                .map(|chat| chat.contact.public_key.clone())
+                .chain(
+                    state
+                        .invitations
+                        .iter()
+                        .map(|invitation| invitation.from.public_key.clone()),
+                )
+                .collect()
+        };
+        for public_key in contacts {
+            let Some(profile) = self.inner.messaging.fetch_profile(&public_key, &[]).await else {
+                continue;
+            };
+            let photo = match &profile.picture {
+                Some(url) => self.avatar_for(url).await,
+                None => None,
+            };
+            self.update_contact(&public_key, profile.name, photo);
+        }
+    }
+
+    /// The avatar for the photo at `url`: kept on this device, or downloaded and made now.
+    /// `None` when the photo can't be had; the contact then has no photo for now.
+    async fn avatar_for(&self, url: &str) -> Option<String> {
+        let avatar = match self.inner.avatars.get(url) {
+            Some(avatar) => avatar,
+            None => {
+                let downloaded = match self.inner.messaging.download_photo(url).await {
+                    Ok(downloaded) => downloaded,
+                    Err(error) => {
+                        log::info!("could not download a contact's photo: {error}");
+                        return None;
+                    }
+                };
+                let avatar = match photo::square_jpeg(&downloaded, AVATAR_SIDE) {
+                    Ok(avatar) => avatar,
+                    Err(error) => {
+                        log::info!("a contact's photo can't be shown: {error}");
+                        return None;
+                    }
+                };
+                if let Err(error) = self.inner.avatars.put(url, &avatar) {
+                    log::warn!("could not keep a contact's avatar: {error}");
+                }
+                avatar
+            }
+        };
+        Some(photo::data_url(&avatar))
+    }
+
+    /// A contact's photo as this device has it already, without fetching anything. Starts
+    /// fetching the avatar when only the photo's address is known.
+    fn known_photo(&self, contact: &str) -> Option<String> {
+        let url = self.inner.messaging.known_picture(contact)?;
+        if let Some(avatar) = self.inner.avatars.get(&url) {
+            return Some(photo::data_url(&avatar));
+        }
+        let core = self.clone();
+        let contact = contact.to_owned();
+        tokio::spawn(async move {
+            let photo = core.avatar_for(&url).await;
+            if photo.is_some() {
+                core.update_contact(&contact, None, photo);
+            }
+        });
+        None
+    }
+
+    fn any_relay_connected(&self) -> bool {
+        self.reach()
+            .relays(Instant::now())
+            .iter()
+            .any(|(_, status)| *status == RelayStatus::Connected)
+    }
+
+    /// Gives the contact with `public_key` their current name and photo in their chats and
+    /// invitations, and emits [`CoreEvent::ContactChanged`] if that changed anything. Without a
+    /// `name`, the contact keeps the one they have.
+    fn update_contact(&self, public_key: &str, name: Option<String>, photo: Option<String>) {
+        let mut state = self.state();
+        let state = &mut *state;
+        let mut changed = None;
+        let contacts = state.chats.iter_mut().map(|chat| &mut chat.contact).chain(
+            state
+                .invitations
+                .iter_mut()
+                .map(|invitation| &mut invitation.from),
+        );
+        for contact in contacts.filter(|contact| contact.public_key == public_key) {
+            let name = name.clone().unwrap_or_else(|| contact.name.clone());
+            if contact.name != name || contact.photo != photo {
+                contact.name = name;
+                contact.photo = photo.clone();
+                changed = Some(contact.clone());
+            }
+        }
+        if let Some(contact) = changed {
+            log::info!("a contact's profile changed");
+            self.emit(CoreEvent::ContactChanged { contact });
+        }
     }
 
     /// Removes the account and its data from this device, including its key. Emits
@@ -165,7 +436,19 @@ impl Core {
         log::info!("account deleted");
         *self.state() = Snapshot::default();
         *self.reach() = Reachability::default();
+        if let Err(error) = self.inner.avatars.clear() {
+            log::warn!("could not remove the avatars: {error}");
+        }
+        if let Err(error) = self.inner.invites.clear() {
+            log::warn!("could not remove the invitations: {error}");
+        }
+        self.clear_radio();
+        if let Err(error) = self.inner.outbox.clear() {
+            log::warn!("could not remove the waiting messages: {error}");
+        }
         self.emit(CoreEvent::AccountDeleted);
+        // The paired radio went with the account, but the device can still pair one (#24).
+        self.radio_changed();
         Ok(())
     }
 
@@ -216,8 +499,139 @@ impl Core {
             relays: Vec::new(),
         };
         self.apply(&started, name, now_ms());
+        // A personal invitation's token goes back to the inviter, whose app then opens the chat
+        // without a request (#95). Without it, the chat still works: as a request.
+        if let Some(token) = &invite.token
+            && let Err(error) = self
+                .inner
+                .messaging
+                .send_invite_token(&account.public_key, &started.id, token)
+                .await
+        {
+            log::warn!("could not send the invitation's token: {error}");
+        }
         self.chat(&started.id)
             .ok_or_else(|| failed("start the chat", "the chat is missing after starting it"))
+    }
+
+    /// Makes a personal invitation for `name`, whom only the user sees (#95). Emits
+    /// [`CoreEvent::InviteChanged`]. Its link works once and for 7 days: the person who uses it
+    /// lands in a chat with the user, and the user's app opens it without a request.
+    pub async fn create_invite(&self, name: &str) -> Result<SentInvite, CommandError> {
+        let account = self.account()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CommandError::new("Enter a name."));
+        }
+        if name.chars().count() > MAX_NAME_CHARS {
+            return Err(CommandError::new(format!(
+                "A name can have up to {MAX_NAME_CHARS} characters."
+            )));
+        }
+        let record = self
+            .inner
+            .invites
+            .create(name, now_ms())
+            .map_err(|error| failed("keep the invitation", error))?;
+        log::info!("invitation created");
+        let invite = invite_view(&account, &record);
+        self.state().invites.push(invite.clone());
+        self.emit(CoreEvent::InviteChanged {
+            invite: invite.clone(),
+        });
+        Ok(invite)
+    }
+
+    /// Who an invite link is from: the name and photo in their profile, for the screen an
+    /// invited person sees before they have an account (#95). Needs no account.
+    pub async fn preview_invite(&self, invite_link: &str) -> Result<Contact, CommandError> {
+        let invite =
+            invite::parse(invite_link).map_err(|error| CommandError::new(error.to_string()))?;
+        if self
+            .state()
+            .account
+            .as_ref()
+            .is_some_and(|account| account.public_key == invite.public_key_hex)
+        {
+            return Err(CommandError::new("That is your own invite link."));
+        }
+        let profile = self
+            .inner
+            .messaging
+            .fetch_profile(&invite.public_key_hex, &invite.relays)
+            .await
+            .unwrap_or_default();
+        let photo = match &profile.picture {
+            Some(url) => self.avatar_for(url).await,
+            None => None,
+        };
+        Ok(Contact {
+            name: profile
+                .name
+                .unwrap_or_else(|| marmot_app::default_profile_pseudonym(&invite.public_key_hex)),
+            public_key: invite.public_key_hex,
+            photo,
+            meshes: Vec::new(),
+        })
+    }
+
+    /// Takes a token the other person sent in a chat (#95). If it opens one of the user's
+    /// invitations, the invitation is marked as used, and the chat opens if it was still a
+    /// request. A chat the snapshot doesn't have yet is looked at again when it arrives.
+    fn redeem_token(&self, token: &InviteToken) {
+        let (peer, pending) = {
+            let state = self.state();
+            if let Some(invitation) = state.invitations.iter().find(|i| i.id == token.chat_id) {
+                (invitation.from.public_key.clone(), true)
+            } else if let Some(chat) = state.chats.iter().find(|c| c.id == token.chat_id) {
+                (chat.contact.public_key.clone(), false)
+            } else {
+                return;
+            }
+        };
+        let Some(record) = self
+            .inner
+            .invites
+            .redeem(&token.token, &peer, &token.chat_id, now_ms())
+        else {
+            return;
+        };
+        log::info!("an invitation was used");
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        let invite = invite_view(&account, &record);
+        {
+            let mut state = self.state();
+            if let Some(known) = state.invites.iter_mut().find(|known| known.id == invite.id) {
+                *known = invite.clone();
+            }
+        }
+        self.emit(CoreEvent::InviteChanged { invite });
+        if pending {
+            let core = self.clone();
+            let chat_id = token.chat_id.clone();
+            tokio::spawn(async move {
+                if let Err(error) = core.accept_invitation(&chat_id).await {
+                    log::warn!("could not open the chat of a used invitation: {error}");
+                }
+            });
+        }
+    }
+
+    /// Redeems the tokens already in the chat `chat_id`, which came before the snapshot had it.
+    fn redeem_tokens_in(&self, chat_id: &str) {
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        match self
+            .inner
+            .messaging
+            .invite_tokens(&account.public_key, chat_id)
+        {
+            Ok(tokens) => tokens.iter().for_each(|token| self.redeem_token(token)),
+            Err(error) => log::warn!("could not read a chat's invitation tokens: {error}"),
+        }
     }
 
     /// Accepts an invitation to a direct chat (#19). Emits [`CoreEvent::InvitationRemoved`],
@@ -255,16 +669,47 @@ impl Core {
     ///
     /// The message is stored before this returns. While no relay can be reached, MDK keeps it
     /// and tries again, also after a restart; until then it is `waiting`.
+    ///
+    /// Without a reachable relay, but with the contact's radio heard on the same preset, or with
+    /// the switch that forces radio on, the radio carries it too (#40, #45). It is then `radio`,
+    /// and `confirmed` once the other radio confirms it.
     pub async fn send_message(&self, chat_id: &str, text: &str) -> Result<Message, CommandError> {
         let account = self.account()?;
         let text = text.trim();
         if text.is_empty() {
             return Err(CommandError::new("Write a message first."));
         }
-        if self.chat(chat_id).is_none() {
+        let Some(chat) = self.chat(chat_id) else {
             return Err(CommandError::new("This chat no longer exists."));
+        };
+        let forced = self.inner.radio_store.forced();
+        let relays_up = self.reach().reach(chat_id, Instant::now()) == Reach::Internet;
+        let radio = self.contact_radio_reach(&chat.contact.public_key);
+        match route(forced, relays_up, radio) {
+            Route::Internet => self.send_by_internet(&account, chat_id, text).await,
+            Route::Radio => match self.radio_ready(chat_id, text).await {
+                Ok(ready) => self.send_by_radio(&account, chat_id, text, ready).await,
+                // With the switch on, the user wants to know why the radio can't.
+                Err(error) if forced => Err(error),
+                // Chosen by the rules: too long for radio, for example. It waits for the
+                // internet (#46).
+                Err(error) => {
+                    log::info!("a message waits for the internet: {}", error.message);
+                    self.queue_message(chat_id, text)
+                }
+            },
+            // No path: the core keeps it until one returns, and it can be cancelled (#46).
+            Route::Wait => self.queue_message(chat_id, text),
         }
+    }
 
+    /// Hands `text` to MDK, which publishes it to the relays now or once one can be reached.
+    async fn send_by_internet(
+        &self,
+        account: &Account,
+        chat_id: &str,
+        text: &str,
+    ) -> Result<Message, CommandError> {
         let message_id = self
             .inner
             .messaging
@@ -394,6 +839,7 @@ impl Core {
     /// Stops messaging and closes the stores. The core cannot be used afterwards.
     pub async fn close(&self) -> Result<(), MessagingError> {
         self.stop_following();
+        self.stop_radio();
         self.inner.messaging.close().await
     }
 
@@ -437,6 +883,16 @@ impl Core {
         }
         // The relays go into the snapshot now; their watcher keeps them current.
         self.refresh_reach(Instant::now());
+        // An invitation's token that came while the app was closed opens its chat now (#95).
+        let pending: Vec<String> = self
+            .state()
+            .invitations
+            .iter()
+            .map(|invitation| invitation.id.clone())
+            .collect();
+        for chat_id in pending {
+            self.redeem_tokens_in(&chat_id);
+        }
 
         // The watchers hold the core weakly, so dropping the core ends them.
         let core = Arc::downgrade(&self.inner);
@@ -452,16 +908,30 @@ impl Core {
         });
         let core = Arc::downgrade(&self.inner);
         let message_watcher = tokio::spawn(async move {
-            while let Some(message) = messages.next().await {
+            while let Some(item) = messages.next().await {
                 let Some(core) = upgrade(&core) else { return };
-                core.apply_message(&message);
+                match item {
+                    ChatItem::Text(message) => core.apply_message(&message),
+                    ChatItem::InviteToken(token) => core.redeem_token(&token),
+                    ChatItem::RadioAddress(address) => core.radio_address_received(&address),
+                }
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher];
+        let core = Arc::downgrade(&self.inner);
+        let contact_watcher = tokio::spawn(async move {
+            loop {
+                let Some(core) = upgrade(&core) else { return };
+                core.refresh_contacts().await;
+                drop(core);
+                tokio::time::sleep(CONTACT_REFRESH).await;
+            }
+        });
+        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
                 relays,
+                Arc::clone(&self.inner.reach_wake),
             )));
         }
         let previous = std::mem::replace(&mut *self.watchers(), watchers);
@@ -487,6 +957,9 @@ impl Core {
         let name = self.inner.messaging.contact_name(&chat.peer_hex, &[]).await;
         let started = self.started_at(&chat.id);
         self.apply(&chat, name, started);
+        if chat.invitation {
+            self.redeem_tokens_in(&chat.id);
+        }
     }
 
     /// Whether the snapshot shows `chat` as it is already.
@@ -526,9 +999,12 @@ impl Core {
             .invitations
             .iter()
             .position(|invitation| invitation.id == chat.id);
+        // Only a new contact looks for a photo; the refresh keeps it current after that.
         let contact = || Contact {
             public_key: chat.peer_hex.clone(),
             name: contact_name.clone(),
+            photo: self.known_photo(&chat.peer_hex),
+            meshes: self.contact_meshes(&chat.peer_hex),
         };
 
         let mut events = Vec::new();
@@ -568,12 +1044,21 @@ impl Core {
                 contact,
                 messages: self.history(&account_hex, &chat.id),
                 reach: self.reach().reach(&chat.id, Instant::now()),
+                // The radio's part follows right after, from `radio_chat_added`.
+                radio_issue: None,
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
         }
+        let added = events
+            .iter()
+            .any(|event| matches!(event, CoreEvent::ChatAdded { .. }));
         for event in events {
             self.emit(event);
+        }
+        drop(state);
+        if added {
+            self.radio_chat_added(&chat.id);
         }
     }
 
@@ -581,7 +1066,11 @@ impl Core {
     /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
     /// doesn't have yet is in that chat's history when it arrives.
     fn apply_message(&self, message: &TextMessage) {
-        let view = message_view(message);
+        let view = message_view(
+            message,
+            self.inner.radio_store.message(&message.id).as_ref(),
+        );
+        let waits = message.outgoing && self.radio_sending_in(&message.chat_id);
         let mut guard = self.state();
         let state = &mut *guard;
         let messages = if let Some(chat) = state.chats.iter_mut().find(|c| c.id == message.chat_id)
@@ -599,6 +1088,8 @@ impl Core {
         };
 
         let event = match messages.iter_mut().find(|known| known.id == view.id) {
+            // A radio send in the chat adds its own message when it is done, as radio (#40).
+            None if waits => return,
             None => {
                 messages.push(view.clone());
                 CoreEvent::MessageAdded {
@@ -606,16 +1097,16 @@ impl Core {
                     message: view,
                 }
             }
-            // Delivery only moves forward.
+            // Delivery only moves forward: waiting, timed out, sent, confirmed.
             Some(known)
-                if known.delivery == Some(DeliveryState::Waiting)
-                    && view.delivery == Some(DeliveryState::Sent) =>
+                if delivery_rank(view.delivery) > delivery_rank(known.delivery)
+                    && let Some(delivery) = view.delivery =>
             {
                 known.delivery = view.delivery;
                 CoreEvent::DeliveryChanged {
                     chat_id: message.chat_id.clone(),
                     message_id: view.id,
-                    delivery: DeliveryState::Sent,
+                    delivery,
                 }
             }
             Some(_) => return,
@@ -641,36 +1132,119 @@ impl Core {
     /// [`CoreEvent::ReachChanged`] and [`CoreEvent::RelaysChanged`] for what changed. Returns
     /// when a closed connection next makes its relay count as gone.
     fn refresh_reach(&self, now: Instant) -> Option<Instant> {
+        // Without the internet, a chat may be reachable by radio (#44), while its airtime lasts
+        // (#51).
+        let own_radio = self.own_radio_record();
+        let (airtime_left, airtime_frees) = self.airtime_left();
+        let now_epoch_ms = now_ms();
         let mut state = self.state();
         let reachability = self.reach();
+        let heard = self.heard();
         let relays = relay_views(reachability.relays(now), PROJECT_RELAYS);
         if state.account.is_some() && state.relays != relays {
             state.relays = relays.clone();
             self.emit(CoreEvent::RelaysChanged { relays });
         }
         for chat in &mut state.chats {
-            let reach = reachability.reach(&chat.id, now);
-            if chat.reach != reach {
+            let (reach, radio_issue) = match reachability.reach(&chat.id, now) {
+                Reach::Internet => (Reach::Internet, None),
+                _ => {
+                    let contact = self
+                        .inner
+                        .radio_store
+                        .contact_radio(&chat.contact.public_key);
+                    match radio_reach(
+                        own_radio.as_ref(),
+                        contact.as_ref(),
+                        &heard,
+                        airtime_left,
+                        now,
+                    ) {
+                        Ok(()) => (Reach::Radio, None),
+                        Err(issue) => (Reach::Unreachable, Some(issue)),
+                    }
+                }
+            };
+            if chat.reach != reach || chat.radio_issue != radio_issue {
                 chat.reach = reach;
-                log::info!("a chat's reach is now {reach:?}");
+                chat.radio_issue = radio_issue;
+                log::info!("a chat's reach is now {reach:?}, {radio_issue:?}");
                 self.emit(CoreEvent::ReachChanged {
                     chat_id: chat.id.clone(),
                     reach,
+                    radio_issue,
                 });
             }
         }
-        reachability.next_change(now)
+        // Once airtime comes free, radio may carry messages again.
+        let airtime_back = airtime_frees
+            .filter(|_| !airtime_left)
+            .map(|at| now + Duration::from_millis(at.saturating_sub(now_epoch_ms)));
+        let next = [
+            reachability.next_change(now),
+            heard.next_change(now),
+            airtime_back,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        // Waiting messages go where a path is (#46).
+        let with_path: Vec<String> = state
+            .chats
+            .iter()
+            .filter(|chat| chat.reach != Reach::Unreachable)
+            .map(|chat| chat.id.clone())
+            .collect();
+        drop(heard);
+        drop(reachability);
+        drop(state);
+        for chat_id in with_path {
+            self.send_waiting_soon(&chat_id);
+        }
+        next
     }
 
-    /// The latest messages of a chat or invitation.
+    /// Looks at each chat's reach again now, and wakes the relays' watcher to look again when it
+    /// changes next.
+    fn reach_changed(&self) {
+        self.refresh_reach(Instant::now());
+        self.inner.reach_wake.notify_one();
+    }
+
+    /// The latest messages of a chat or invitation, with those that came by radio and whose
+    /// relay copies haven't arrived yet (#40).
     fn history(&self, account_hex: &str, chat_id: &str) -> Vec<Message> {
-        match self.inner.messaging.chat_messages(account_hex, chat_id) {
-            Ok(messages) => messages.iter().map(message_view).collect(),
-            Err(error) => {
-                log::warn!("could not read a chat's messages: {error}");
-                Vec::new()
-            }
+        let store = &self.inner.radio_store;
+        let mut messages: Vec<Message> =
+            match self.inner.messaging.chat_messages(account_hex, chat_id) {
+                Ok(messages) => messages
+                    .iter()
+                    .map(|message| message_view(message, store.message(&message.id).as_ref()))
+                    .collect(),
+                Err(error) => {
+                    log::warn!("could not read a chat's messages: {error}");
+                    Vec::new()
+                }
+            };
+        let kept = store.messages_in(chat_id);
+        let mut more: Vec<Message> = kept
+            .iter()
+            .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
+            .map(radio_view)
+            .collect();
+        // Messages that wait for a path (#46).
+        more.extend(self.queued_messages(chat_id));
+        if !more.is_empty() {
+            messages.extend(more);
+            // Times are whole seconds. Within one, what this phone kept first comes first.
+            let kept_at = |id: &str| {
+                kept.iter()
+                    .find(|radio| radio.id == id)
+                    .map_or(0, |radio| radio.kept_at)
+            };
+            messages.sort_by_key(|message| (message.sent_at, kept_at(&message.id)));
         }
+        messages
     }
 
     fn account(&self) -> Result<Account, CommandError> {
@@ -748,7 +1322,7 @@ fn upgrade(core: &Weak<Inner>) -> Option<Core> {
 
 /// Follows the account's relays, and updates each chat's reach as relays come and go and as
 /// closed connections run out their time.
-async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
+async fn watch_relays(core: Weak<Inner>, relays: RelayLinks, wake: Arc<tokio::sync::Notify>) {
     let mut next = upgrade(&core).and_then(|core| core.refresh_reach(Instant::now()));
     loop {
         let time_is_up = async {
@@ -763,6 +1337,8 @@ async fn watch_relays(core: Weak<Inner>, relays: RelayLinks) {
                 None => return,
             },
             () = time_is_up => None,
+            // A radio was heard, or the radio changed: when the reach changes next may be sooner.
+            () = wake.notified() => None,
         };
         let Some(core) = upgrade(&core) else { return };
         next = match changed {
@@ -791,23 +1367,75 @@ fn relay_views(relays: Vec<(String, RelayStatus)>, project: &[&str]) -> Vec<Rela
     relays
 }
 
+/// An invitation as an interface sees it, with the link to share.
+fn invite_view(account: &Account, record: &InviteRecord) -> SentInvite {
+    SentInvite {
+        id: record.token.clone(),
+        name: record.name.clone(),
+        link: invite::personal_link(&account.invite_link, &record.token),
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+        joined_chat_id: record.joined.as_ref().map(|joined| joined.chat_id.clone()),
+    }
+}
+
+fn invite_views(account: &Account, records: &[InviteRecord]) -> Vec<SentInvite> {
+    records
+        .iter()
+        .map(|record| invite_view(account, record))
+        .collect()
+}
+
+/// A profile name as given, trimmed, or why it can't be one.
+fn checked_name(name: &str) -> Result<&str, CommandError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CommandError::new("Enter a name."));
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(CommandError::new(format!(
+            "Your name can have up to {MAX_NAME_CHARS} characters."
+        )));
+    }
+    Ok(name)
+}
+
 /// The account as an interface sees it. The invite link carries the relays new accounts
 /// publish to as hints (#19).
 fn account_view(
     messaging: &Messaging,
+    avatars: &Avatars,
     public_key_hex: String,
     name: String,
 ) -> Result<Account, MessagingError> {
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
+    let share_link = invite::web_link(&invite_link);
+    let photo = messaging
+        .known_picture(&public_key_hex)
+        .and_then(|url| avatars.get(&url))
+        .map(|avatar| photo::data_url(&avatar));
     Ok(Account {
         name,
+        about: messaging.own_about(&public_key_hex),
+        photo,
         invite_link,
+        share_link,
         public_key: public_key_hex,
     })
 }
 
-/// A message as an interface sees it. Internet only, until the radio (#40).
-fn message_view(message: &TextMessage) -> Message {
+/// A message as an interface sees it. `radio` is the message's record in the radio store, if
+/// it travelled by radio (#40).
+fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message {
+    let delivery = if radio.is_some_and(|radio| radio.confirmed) {
+        DeliveryState::Confirmed
+    } else if message.acknowledged {
+        DeliveryState::Sent
+    } else if radio.is_some_and(|radio| radio.timed_out) {
+        DeliveryState::TimedOut
+    } else {
+        DeliveryState::Waiting
+    };
     Message {
         id: message.id.clone(),
         direction: if message.outgoing {
@@ -817,12 +1445,48 @@ fn message_view(message: &TextMessage) -> Message {
         },
         text: message.text.clone(),
         sent_at: message.sent_at,
-        transport: Transport::Internet,
-        delivery: message.outgoing.then_some(if message.acknowledged {
-            DeliveryState::Sent
+        transport: if radio.is_some() {
+            Transport::Radio
+        } else {
+            Transport::Internet
+        },
+        delivery: message.outgoing.then_some(delivery),
+        cancellable: false,
+    }
+}
+
+/// A message that came by radio, before its relay copy has.
+fn radio_view(radio: &RadioMessage) -> Message {
+    Message {
+        id: radio.id.clone(),
+        direction: if radio.outgoing {
+            Direction::Out
+        } else {
+            Direction::In
+        },
+        text: radio.text.clone(),
+        sent_at: radio.sent_at,
+        transport: Transport::Radio,
+        delivery: radio.outgoing.then_some(if radio.confirmed {
+            DeliveryState::Confirmed
+        } else if radio.timed_out {
+            DeliveryState::TimedOut
         } else {
             DeliveryState::Waiting
         }),
+        cancellable: false,
+    }
+}
+
+/// How far a message's delivery has come. A radio message that timed out has come further
+/// than one still waiting for confirmation, and less far than one a relay acknowledged (#41).
+fn delivery_rank(delivery: Option<DeliveryState>) -> u8 {
+    match delivery {
+        None => 0,
+        Some(DeliveryState::Waiting) => 1,
+        Some(DeliveryState::TimedOut) => 2,
+        Some(DeliveryState::Sent) => 3,
+        Some(DeliveryState::Confirmed) => 4,
     }
 }
 

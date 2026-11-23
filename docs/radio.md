@@ -4,7 +4,31 @@ The core talks to a paired LoRa radio through a radio transport (#60). Each mesh
 different meshes can't talk to each other, and a radio runs one mesh at a time. MeshCore comes first, through
 [meshcore-rs](https://github.com/andrewdavidmackenzie/meshcore-rs). Meshtastic follows after the MVP.
 
-Nothing in the app uses the radio yet. Pairing comes with #24, and radio messages with #36 to #40.
+The core sends and receives chat text through the radio the user paired (#40). It sends by radio when no relay is
+reachable and the contact's radio has been heard (#44, #45), or while the switch that forces radio is on. Computers pair
+a radio over USB ([Pairing](#pairing), #24); phones will over Bluetooth (#23). The path for the packets comes with #36.
+[radio-format-v0.md](radio-format-v0.md#in-the-core) describes how the core sends and receives.
+
+**Addresses.** Each app learns its contacts' radios from their radio address records (#34), with nobody doing
+anything:
+
+- **The record** (`core/src/radio/address.rs`) is small, versioned JSON: the mesh, the radio's public key, its LoRa
+  settings (frequency in kHz, bandwidth in Hz, spreading factor, coding rate) and when it was made, in milliseconds.
+
+  ```json
+  {"v":0,"mesh":"meshcore","key":"…64 hex…","freq":869618,"bw":62500,"sf":8,"cr":8,"at":1795300000000}
+  ```
+
+- **It travels** as an app event of kind 9911 inside the direct chat ([mdk.md](mdk.md#app-events)): never in a group,
+  never published.
+- **Sending.** With a radio, the core sends its record in every direct chat that hasn't had this one: when the radio
+  is attached, when a chat starts, and every minute for chats it couldn't reach. A different radio, or the same one with
+  other settings, makes a new record; the same radio keeps the time of its first record, so it isn't sent again.
+- **Receiving.** The newest record of a chat's contact becomes their radio in `radio.json`. Records that came while the
+  app was closed are read when it starts, and those in a request when it is accepted. A record of another version or
+  mesh, or with a malformed key or settings out of LoRa's range, changes nothing.
+- **What shows.** A contact with a radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under "Your
+  contacts by mesh".
 
 **Keys.** Radio messages are encrypted with keys derived from the chat's MLS state (#37), with one key per direction.
 `core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
@@ -14,6 +38,88 @@ including the rules for epochs and nonces.
 vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements it (#39), and `core/fuzz` fuzzes its
 decoder. `RadioInbox` decides which incoming packets to accept: authentic, new to the replay window, and not known
 already (#42).
+
+**Airtime** (#51, `core/src/radio/airtime.rs`). The core counts the time each packet occupies the channel and keeps
+what the user sends within an hourly budget:
+
+- **Time on air** follows Semtech's LoRa formula for an explicit header and a CRC, with a 16-symbol preamble to err
+  on the long side. A MeshCore text message on air is 6 bytes plus the encrypted timestamp, flags and text in 16-byte
+  blocks. Hardware day checks both against measurements (#36).
+- **In the EU/UK narrow preset** (SF8, 62.5 kHz, 4/8), the longest message the app sends (160 characters of base64)
+  takes about 1.6 seconds, and a short one about 0.6 seconds.
+- **The cap** is 36 seconds an hour (`HOURLY_AIRTIME`): a tenth of the 10% duty cycle that the EU allows in 869.4 to
+  869.65 MHz at 500 mW e.r.p. ([CEPT ERC Recommendation 70-03](https://docdb.cept.org/download/2369), Annex 1; check
+  the current edition's footnotes, which also allow listen-before-talk with adaptive frequency agility instead). The
+  rest is left for the radio's own traffic, its acknowledgements and the shared mesh. That is about 22 of the longest
+  messages an hour, or over 40 short ones.
+- **The core enforces it.** A message that doesn't fit in what is left of the hour waits (#46). Once even the shortest
+  wouldn't fit, the chat is `unreachable` with `radioIssue: airtimeUsed`, and its notice says "Your radio has used its
+  airtime for this hour." When airtime comes free, the waiting messages go.
+
+**The transmission log** (#52). Every packet the app makes the radio send is logged in `radio.json` for two days, with
+its time, size, airtime and reason (`message`: one the user sent, or one that waited; `retry`: one sent again for want
+of a confirmation). `Core::radio_transmissions` returns it. The cap counts it, and the tests compare it with what the
+user sent. The firmware's own adverts and acknowledgements aren't the app's, and aren't in it.
+
+## Confirmation
+
+The other radio confirms a text message on receipt (#41). That means it reached the radio, not that anyone read it,
+and it is all the app claims: a message is `confirmed`, or `timedOut` when no confirmation came, never more.
+
+- **How long the core waits** for each try: the radio's own estimate, which `SENT` carries, plus a second for the
+  confirmation to come over the link from the radio (`CONFIRM_MARGIN`). Companion v1.18.0 estimates 0.5 s plus
+  16 times the packet's airtime for a flood, and for a direct message 0.5 s plus 6 times the airtime and 0.25 s for
+  each link on the path: about 10 s to 27 s for the longest message in the EU/UK narrow preset. Hardware day measures
+  the real times (#36). `Core::set_radio_confirm_wait` replaces the estimate, for tests and tuning.
+- **One retry** (`RADIO_RETRIES`), because each try costs shared airtime. It goes only while the chat is still
+  reachable by radio (the contact's radio heard, the same preset, airtime left), the hour's airtime has room for it,
+  and no relay carries the message instead, unless radio is forced. It is logged with the reason `retry`.
+- **The retry sends the same packet again.** meshcore-rs gives it a new timestamp, so the mesh doesn't drop it as a
+  repeat, and the firmware gives it its own confirmation code; either code confirms the message. If the first try got
+  through after all, the other phone drops the second copy as a replay (#42).
+- **Without a confirmation after the retry**, the message is `timedOut`. Its relay copy still goes once a relay is
+  back, as for every radio message (#47), and then it is `sent`. A confirmation that comes later still counts.
+- **Across a restart**, retries stop. A message whose confirmation was due meanwhile is `timedOut`; one still due is
+  waited for until then.
+- **The radio can confirm before `send_text` returns**, as the mock radios always do. The core keeps such a
+  confirmation until the message it belongs to is kept.
+
+`core/tests/radio_confirmation.rs` checks a confirmed message, a retry that gets through, a message to a radio that is
+switched off, a restart, and the relays' return; and that no retry goes once the contact's radio isn't heard anymore,
+or the hour's airtime has no room for it.
+
+## Pairing
+
+A computer pairs a MeshCore companion radio over USB (#24): the user plugs it in and picks its port in Settings →
+Radio → Pair a radio. The radio's public key becomes the user's address on the mesh, which the core shares with every
+contact as its radio address record (#34). [core-interface.md](core-interface.md#radio) has the commands and what the
+interface shows.
+
+- **The ports** (`RadioPorts` in `core/src/radio/ports.rs`). `SerialPorts` lists the computer's USB serial ports.
+  A Mac lists each one twice, as `/dev/cu.…` and `/dev/tty.…`; only the `cu` one is kept, because the `tty` one waits
+  for a carrier when it is opened. Bluetooth ports and debug consoles are left out. Linux without udev can't say what
+  is behind a port, so its USB serial ports are known by their names (`ttyACM`, `ttyUSB`).
+- **Pairing** opens the radio on the chosen port with `MeshCoreRadio::connect_serial`, reads its key, name and
+  settings, and keeps them in `radio.json` with the port and the USB device's serial number. A device that doesn't
+  answer as a companion radio within meshcore-rs's timeout isn't paired, and its port is let go of at once.
+- **The preset.** The interface shows the radio's frequency, bandwidth, spreading factor and coding rate, and warns
+  when they aren't MeshCore's EU/UK (Narrow) preset: 869.618 MHz, 62.5 kHz, spreading factor 8, coding rate 4/8
+  (`EXPECTED_PRESET`). It compares the same four numbers as reach does (#44).
+- **Read only.** Pairing and opening the radio again send the companion protocol's greeting, the device query and
+  the contact list request, and nothing that changes a setting. Changing the radio's frequency or region is left to
+  the MeshCore app.
+- **Opening it again.** The core opens the paired radio at start, and when its link drops, because the radio restarted
+  or its cable was pulled. It looks on the radio's own port, or on another port with its USB serial number, so it is
+  found when it is plugged in elsewhere. It waits a second before the first look after a drop, then twice as long each
+  time, up to 10 seconds. A look only lists the ports until the radio's port is there, so it costs little. Another
+  radio on that port is let go of again: the radio must have the paired key.
+- **While the app runs it holds the radio's port.** Quit it to use the radio with another app over USB.
+- **Forgetting** closes the link and forgets the radio. Deleting the account forgets it too.
+
+`core/tests/radio_pairing.rs` checks this with mock radios on mock ports (`MockPorts`): listing, pairing, a device that
+isn't a radio, a port that went, the preset and its warning, remembering the radio across a restart, opening it again
+after it restarts or moves to another port, not taking another radio for it, and forgetting it, also with the
+account. Trying it on a real radio waits for hardware day (#12).
 
 ## The interface
 
@@ -35,11 +141,13 @@ already (#42).
 **Implementations:**
 
 - **`MeshCoreRadio`** (`core/src/radio/meshcore.rs`):
-  - `connect_serial(port)` connects over USB serial on desktops.
+  - `connect_serial(port)` connects over USB serial on desktops. A radio that doesn't answer its greeting, or that is
+    dropped, lets go of the port, so that it can be opened again (#24).
   - `over(commands, dispatcher)` works over meshcore-rs's command handler and event dispatcher. That is for a link
     the app runs itself, such as Bluetooth on phones (#23), and for tests.
 - **`MockMesh` and `MockRadio`** (`core/src/radio/mock.rs`): radios on a mesh in memory. They hear each other, confirm
-  delivery, and can be taken out of range. They're for tests and for interface work without hardware.
+  delivery, and can be taken out of range. They're for tests and for interface work without hardware. `MockPorts`
+  plugs them into mock USB ports, for pairing (#24).
 
 **Text** is at most 160 bytes of UTF-8 and has no NUL character. `send_text` refuses anything else before it reaches
 the radio. Shorter limits for the mesh's sake come with #51.
@@ -55,6 +163,9 @@ cargo run -p peoples-chat-core --example radio_info -- /dev/cu.usbmodem1101  # d
 
 It prints the radio's public key, name, LoRa settings, firmware and contacts. It only reads: it changes nothing on the
 radio. Waiting for radios: #12.
+
+In the app on the computer (`pnpm tauri dev`), Settings → Radio → Pair a radio lists the same ports and pairs the
+radio ([Pairing](#pairing)). Quit `radio_info` first: only one program can hold the port.
 
 With two radios, `path_spike` measures the three paths for the app's packets (#36). Steps:
 [radio-paths.md](radio-paths.md#running-the-spike).

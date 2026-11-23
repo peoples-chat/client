@@ -1,4 +1,17 @@
-import type { Account, Chat, Core, CoreEvent, Invitation, Message, Relay, Snapshot } from "../core/types";
+import type {
+  Account,
+  Chat,
+  Contact,
+  Core,
+  CoreEvent,
+  Invitation,
+  Message,
+  RadioPreset,
+  RadioStatus,
+  Relay,
+  SentInvite,
+  Snapshot,
+} from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
 export interface AppState {
@@ -8,11 +21,23 @@ export interface AppState {
   chats: Chat[];
   invitations: Invitation[];
   relays: Relay[];
+  invites: SentInvite[];
+  radio: RadioStatus;
   /** Why loading failed. */
   error?: string;
 }
 
-export const initialState: AppState = { status: "loading", account: null, chats: [], invitations: [], relays: [] };
+const NO_RADIO: RadioStatus = { forced: false };
+
+export const initialState: AppState = {
+  status: "loading",
+  account: null,
+  chats: [],
+  invitations: [],
+  relays: [],
+  invites: [],
+  radio: NO_RADIO,
+};
 
 export function fromSnapshot(snapshot: Snapshot): AppState {
   return {
@@ -21,6 +46,9 @@ export function fromSnapshot(snapshot: Snapshot): AppState {
     chats: snapshot.chats,
     invitations: snapshot.invitations,
     relays: snapshot.relays,
+    invites: snapshot.invites,
+    // Snapshots from before #40 have no radio.
+    radio: snapshot.radio ?? NO_RADIO,
   };
 }
 
@@ -34,7 +62,9 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "accountDeleted":
-      return { ...state, account: null, chats: [], invitations: [], relays: [] };
+      // The core forgets the radio with the account. Whether the device can pair one follows
+      // as `radioChanged` (#24).
+      return { ...state, account: null, chats: [], invitations: [], relays: [], invites: [], radio: NO_RADIO };
 
     case "chatAdded":
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
@@ -57,6 +87,16 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
           : { ...chat, messages: [...chat.messages, event.message] },
       );
 
+    case "messageRemoved": {
+      const without = (messages: Message[]) => messages.filter((m) => m.id !== event.messageId);
+      if (state.chats.some((c) => c.id === event.chatId)) {
+        return updateChat(state, event.chatId, (chat) =>
+          chat.messages.some((m) => m.id === event.messageId) ? { ...chat, messages: without(chat.messages) } : chat,
+        );
+      }
+      return state;
+    }
+
     case "deliveryChanged":
       return updateChat(state, event.chatId, (chat) => {
         const message = chat.messages.find((m) => m.id === event.messageId);
@@ -69,12 +109,80 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
 
     case "reachChanged":
       return updateChat(state, event.chatId, (chat) =>
-        chat.reach === event.reach ? chat : { ...chat, reach: event.reach },
+        chat.reach === event.reach && chat.radioIssue === event.radioIssue
+          ? chat
+          : { ...chat, reach: event.reach, radioIssue: event.radioIssue },
       );
 
     case "relaysChanged":
       return sameRelays(state.relays, event.relays) ? state : { ...state, relays: event.relays };
+
+    case "accountChanged":
+      if (!state.account || sameAccount(state.account, event.account)) return state;
+      return { ...state, account: event.account };
+
+    case "contactChanged":
+      return updateContact(state, event.contact);
+
+    case "radioChanged":
+      return sameRadio(state.radio, event.radio) ? state : { ...state, radio: event.radio };
+
+    case "inviteChanged": {
+      const known = state.invites.find((i) => i.id === event.invite.id);
+      if (known && known.joinedChatId === event.invite.joinedChatId && known.link === event.invite.link) return state;
+      return known
+        ? { ...state, invites: state.invites.map((i) => (i.id === event.invite.id ? event.invite : i)) }
+        : { ...state, invites: [...state.invites, event.invite] };
+    }
   }
+}
+
+function sameAccount(a: Account, b: Account): boolean {
+  return (
+    a.name === b.name &&
+    a.about === b.about &&
+    a.photo === b.photo &&
+    a.publicKey === b.publicKey &&
+    a.inviteLink === b.inviteLink &&
+    a.shareLink === b.shareLink
+  );
+}
+
+/** Gives the contact their new name, photo and meshes in their chats and invitations. */
+function updateContact(state: AppState, contact: Contact): AppState {
+  const outdated = (current: Contact) =>
+    current.publicKey === contact.publicKey &&
+    (current.name !== contact.name ||
+      current.photo !== contact.photo ||
+      (current.meshes ?? []).join() !== (contact.meshes ?? []).join());
+  if (!state.chats.some((c) => outdated(c.contact)) && !state.invitations.some((i) => outdated(i.from))) return state;
+  return {
+    ...state,
+    chats: state.chats.map((c) => (outdated(c.contact) ? { ...c, contact } : c)),
+    invitations: state.invitations.map((i) => (outdated(i.from) ? { ...i, from: contact } : i)),
+  };
+}
+
+function sameRadio(a: RadioStatus, b: RadioStatus): boolean {
+  return (
+    a.forced === b.forced &&
+    (a.canPair ?? false) === (b.canPair ?? false) &&
+    a.paired?.name === b.paired?.name &&
+    a.paired?.publicKey === b.paired?.publicKey &&
+    a.paired?.connection === b.paired?.connection &&
+    a.paired?.port === b.paired?.port &&
+    samePreset(a.paired?.preset, b.paired?.preset)
+  );
+}
+
+function samePreset(a?: RadioPreset, b?: RadioPreset): boolean {
+  return (
+    a?.frequencyKhz === b?.frequencyKhz &&
+    a?.bandwidthHz === b?.bandwidthHz &&
+    a?.spreadingFactor === b?.spreadingFactor &&
+    a?.codingRate === b?.codingRate &&
+    a?.expected === b?.expected
+  );
 }
 
 function sameRelays(a: Relay[], b: Relay[]): boolean {

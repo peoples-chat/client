@@ -2,15 +2,20 @@
   "snapshot": {
     "account": {
       "name": "Emil Dahl",
+      "about": "Aarhus. Usually reachable by radio.",
       "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
-      "inviteLink": "nostr:nprofile1fixtureemildahl"
+      "inviteLink": "nostr:nprofile1fixtureemildahl",
+      "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
     },
     "chats": [
       {
         "id": "chat-1",
         "contact": {
           "publicKey": "3e22bf168fae1e1be96fb407cde13c487568c9bcc716236ee4842dc734ff9df8",
-          "name": "Astrid Holm"
+          "name": "Astrid Holm",
+          "meshes": [
+            "meshCore"
+          ]
         },
         "messages": [
           {
@@ -27,6 +32,14 @@
             "sentAt": 1795300060000,
             "transport": "radio",
             "delivery": "confirmed"
+          },
+          {
+            "id": "msg-5",
+            "direction": "out",
+            "text": "Are you still there?",
+            "sentAt": 1795300090000,
+            "transport": "radio",
+            "delivery": "timedOut"
           }
         ],
         "reach": "radio"
@@ -62,7 +75,33 @@
         "operator": "independent",
         "status": "connecting"
       }
-    ]
+    ],
+    "invites": [
+      {
+        "id": "3f9a0c2e7b5d1a8c4e6f",
+        "name": "Sofie",
+        "link": "https://peoples.chat/i#nprofile1fixtureemildahl/3f9a0c2e7b5d1a8c4e6f",
+        "createdAt": 1795300000000,
+        "expiresAt": 1795904800000
+      }
+    ],
+    "radio": {
+      "paired": {
+        "name": "Emil's radio",
+        "publicKey": "7d1c4a3be0f2a9c85e6b1f40d3a29e7c1b8f05d64e2a97c3b51f80e6d4c2a913",
+        "connection": "connected",
+        "port": "/dev/cu.usbmodem1101",
+        "preset": {
+          "frequencyKhz": 869618,
+          "bandwidthHz": 62500,
+          "spreadingFactor": 8,
+          "codingRate": 8,
+          "expected": true
+        }
+      },
+      "forced": false,
+      "canPair": true
+    }
   },
   "events": [
     {
@@ -96,9 +135,28 @@
       "delivery": "sent"
     },
     {
+      "type": "messageAdded",
+      "chatId": "chat-2",
+      "message": {
+        "id": "queued-3f9a0c4be1d27586",
+        "direction": "out",
+        "text": "Are you safe?",
+        "sentAt": 1795300200000,
+        "transport": "internet",
+        "delivery": "waiting",
+        "cancellable": true
+      }
+    },
+    {
+      "type": "messageRemoved",
+      "chatId": "chat-2",
+      "messageId": "queued-3f9a0c4be1d27586"
+    },
+    {
       "type": "reachChanged",
       "chatId": "chat-2",
-      "reach": "unreachable"
+      "reach": "unreachable",
+      "radioIssue": "notHeard"
     },
     {
       "type": "relaysChanged",
@@ -114,6 +172,36 @@
           "status": "unreachable"
         }
       ]
+    },
+    {
+      "type": "accountChanged",
+      "account": {
+        "name": "Emil D.",
+        "about": "Aarhus, Denmark",
+        "photo": "data:image/jpeg;base64,/9j/2wBDAA==",
+        "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "inviteLink": "nostr:nprofile1fixtureemildahl",
+        "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
+      }
+    },
+    {
+      "type": "contactChanged",
+      "contact": {
+        "publicKey": "4a577124f4d699f2455a80e12b58d41a26465d4c01a65faae29b37189cd08375",
+        "name": "Karen W.",
+        "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+      }
+    },
+    {
+      "type": "inviteChanged",
+      "invite": {
+        "id": "3f9a0c2e7b5d1a8c4e6f",
+        "name": "Sofie",
+        "link": "https://peoples.chat/i#nprofile1fixtureemildahl/3f9a0c2e7b5d1a8c4e6f",
+        "createdAt": 1795300000000,
+        "expiresAt": 1795904800000,
+        "joinedChatId": "chat-1"
+      }
     },
     {
       "type": "invitationReceived",
@@ -138,8 +226,16 @@
       "type": "accountCreated",
       "account": {
         "name": "Emil Dahl",
+        "about": "",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
-        "inviteLink": "nostr:nprofile1fixtureemildahl"
+        "inviteLink": "nostr:nprofile1fixtureemildahl",
+        "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
+      }
+    },
+    {
+      "type": "radioChanged",
+      "radio": {
+        "forced": true
       }
     }
   ],

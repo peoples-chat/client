@@ -22,7 +22,7 @@ const SETTINGS: { icon: IconName; label: string; screen?: Screen }[] = [
   { icon: "bell", label: "Notifications" },
   { icon: "lock", label: "Privacy", screen: { name: "privacy" } },
   { icon: "help", label: "Help" },
-  { icon: "personAdd", label: "Invite friends" },
+  { icon: "personAdd", label: "Invite friends", screen: { name: "invite" } },
 ];
 
 export function Settings() {
@@ -35,7 +35,7 @@ export function Settings() {
       <ScreenHeader title="Settings" onLeading={navigation.back} />
       <main className={layout.scroll}>
         <button type="button" className={styles.profile} onClick={() => navigation.push({ name: "profile" })}>
-          <Avatar name={account?.name ?? ""} size={60} tint="green" />
+          <Avatar name={account?.name ?? ""} size={60} tint="green" photo={account?.photo} />
           <span className={styles.profileText}>
             <span className={styles.name}>{account?.name}</span>
             <span className={styles.subtitle}>Your code and link</span>

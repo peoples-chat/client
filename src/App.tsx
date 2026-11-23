@@ -5,8 +5,12 @@ import { ChatScreen } from "./screens/ChatScreen";
 import { Chats } from "./screens/Chats";
 import { CreateProfile } from "./screens/CreateProfile";
 import { ExportKey } from "./screens/ExportKey";
+import { Invite } from "./screens/Invite";
+import { InvitedStart } from "./screens/InvitedStart";
+import { InviteOne } from "./screens/InviteOne";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
+import { PairRadio } from "./screens/PairRadio";
 import { Privacy } from "./screens/Privacy";
 import { Profile } from "./screens/Profile";
 import { RadioNotice } from "./screens/RadioNotice";
@@ -16,6 +20,7 @@ import { Scan } from "./screens/Scan";
 import { Settings } from "./screens/Settings";
 import { Welcome } from "./screens/Welcome";
 import { useAppState } from "./state";
+import { OpenedLinks } from "./navigation/OpenedLinks";
 import layout from "./ui/layout.module.css";
 import styles from "./App.module.css";
 
@@ -24,7 +29,7 @@ export default function App() {
   return (
     <div className={styles.app}>
       {state.status === "ready" && (
-        <Navigator initial={state.account ? { name: "chats" } : { name: "welcome" }}>
+        <Navigator initial={state.account ? { name: "chats" } : { name: "welcome" }} alongside={<OpenedLinks />}>
           {(screen) => <ScreenView screen={screen} />}
         </Navigator>
       )}
@@ -47,9 +52,9 @@ function ScreenView({ screen }: { screen: Screen }) {
     case "chats":
       return <Chats />;
     case "chat":
-      return <ChatScreen chatId={screen.chatId} />;
+      return <ChatScreen chatId={screen.chatId} invited={screen.invited} />;
     case "newChat":
-      return <NewChat />;
+      return <NewChat link={screen.link} />;
     case "scan":
       return <Scan />;
     case "request":
@@ -62,8 +67,16 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <ExportKey />;
     case "radioSettings":
       return <RadioSettings />;
+    case "pairRadio":
+      return <PairRadio />;
     case "radioNotice":
       return <RadioNotice />;
+    case "invite":
+      return <Invite />;
+    case "inviteOne":
+      return <InviteOne />;
+    case "invitedStart":
+      return <InvitedStart link={screen.link} />;
     case "privacy":
       return <Privacy />;
     case "relays":

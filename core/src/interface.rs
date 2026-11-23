@@ -15,11 +15,20 @@ use serde::{Deserialize, Serialize};
 pub struct Account {
     /// The profile name.
     pub name: String,
+    /// A few words about the user, from the profile. Empty when there are none (#93).
+    #[serde(default)]
+    pub about: String,
+    /// The profile photo, small and square, as a `data:image/jpeg` URL (#94).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
     /// The account's public key, in hex.
     pub public_key: String,
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
     /// NIP-21 `nostr:nprofile1…` URI: the public key and relay hints (#19).
     pub invite_link: String,
+    /// The same as a web link, `https://peoples.chat/i#nprofile1…`, for sharing: tapped on a
+    /// phone, it opens the app (#72).
+    pub share_link: String,
 }
 
 /// Someone the user can chat with.
@@ -28,6 +37,19 @@ pub struct Account {
 pub struct Contact {
     pub public_key: String,
     pub name: String,
+    /// Their profile photo, small and square, as a `data:image/jpeg` URL (#94).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
+    /// The meshes their radios run, from their radio address records (#34).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<Mesh>,
+}
+
+/// A mesh network that radios run (#34).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mesh {
+    MeshCore,
 }
 
 /// How a message travelled.
@@ -42,8 +64,12 @@ pub enum Transport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeliveryState {
-    /// Not sent yet, for example because there is no path.
+    /// Not sent yet, for example because there is no path. A radio message is `waiting` from
+    /// when the radio sends it until the other radio confirms it.
     Waiting,
+    /// The radio sent it, but the other radio didn't confirm it in time, also after a retry
+    /// (#41). It still goes by internet once a relay can be reached. Radio only.
+    TimedOut,
     /// A relay acknowledged it.
     Sent,
     /// The other radio confirmed it. Radio only.
@@ -73,6 +99,11 @@ pub struct Message {
     /// Outgoing messages only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryState>,
+    /// The message waits for a path, and the user can still cancel it (#46). Its id is
+    /// provisional: once it goes, `messageRemoved` takes it away and `messageAdded` brings it
+    /// with MDK's id.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancellable: bool,
 }
 
 /// How a chat's messages can travel now (#43).
@@ -88,6 +119,24 @@ pub enum Reach {
     Unreachable,
 }
 
+/// Why a chat can't be reached by radio, while no relay can reach it either (#44).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RadioIssue {
+    /// The user has no radio, or its link is down.
+    NoRadio,
+    /// The contact hasn't shared a radio.
+    NoContactRadio,
+    /// The contact's radio runs another mesh.
+    OtherMesh,
+    /// The contact's radio uses another region or preset.
+    OtherPreset,
+    /// The contact's radio hasn't been heard lately.
+    NotHeard,
+    /// The user's radio has used the airtime the app allows it for this hour (#51).
+    AirtimeUsed,
+}
+
 /// A direct chat with one contact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +147,9 @@ pub struct Chat {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub reach: Reach,
+    /// Why the chat isn't reachable by radio, when it is `unreachable` (#44).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_issue: Option<RadioIssue>,
 }
 
 /// One of the relays the account's messages travel through (#88).
@@ -144,6 +196,96 @@ pub struct Invitation {
     pub messages: Vec<Message>,
 }
 
+/// An invitation the user sent: a personal link that works once and for 7 days (#95). The
+/// person who uses it lands in a chat with the user without a request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentInvite {
+    /// Identifies the invitation.
+    pub id: String,
+    /// Whom it is for. Only the user sees it.
+    pub name: String,
+    /// The link to share: `https://peoples.chat/i#nprofile1…/<token>`.
+    pub link: String,
+    /// Milliseconds since the Unix epoch.
+    pub created_at: u64,
+    pub expires_at: u64,
+    /// The chat that opened when the person joined, once they have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_chat_id: Option<String>,
+}
+
+/// The radio, as an interface shows it (#40).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioStatus {
+    /// The radio the core uses: the one paired (#24), or one a test handed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<PairedRadio>,
+    /// Every message goes by radio: a switch for testing, until the core chooses the transport
+    /// by itself (#45).
+    #[serde(default)]
+    pub forced: bool,
+    /// This device can pair a radio: over USB on computers (#24). Phones pair over Bluetooth
+    /// later (#23).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_pair: bool,
+}
+
+/// The radio the core uses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedRadio {
+    /// The name the radio announces.
+    pub name: String,
+    /// The radio's public key, in hex: its address on the mesh.
+    pub public_key: String,
+    /// Whether the link to the radio is open (#24).
+    pub connection: RadioConnection,
+    /// Where the radio is plugged in, for one paired over USB (#24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+    /// The radio's LoRa settings, as it reported them last (#24).
+    pub preset: RadioPreset,
+}
+
+/// Whether the link to the paired radio is open (#24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RadioConnection {
+    Connected,
+    /// The core is opening it again: at start, or after the radio restarted or was unplugged.
+    Connecting,
+    Disconnected,
+}
+
+/// A radio's LoRa settings: its region and preset. Radios hear each other only with the same
+/// ones (#24).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioPreset {
+    pub frequency_khz: u32,
+    pub bandwidth_hz: u32,
+    pub spreading_factor: u8,
+    /// The coding rate, as the 8 of 4/8.
+    pub coding_rate: u8,
+    /// MeshCore's EU/UK (Narrow) preset, which the app expects: 869.618 MHz, 62.5 kHz,
+    /// spreading factor 8, coding rate 4/8. Otherwise an interface warns that the radio reaches
+    /// only radios with its own settings.
+    pub expected: bool,
+}
+
+/// A port a radio may be plugged into, for pairing (#24).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioPort {
+    /// `/dev/cu.usbmodem1101` on a Mac, `/dev/ttyACM0` on Linux, `COM3` on Windows.
+    pub path: String,
+    /// What the device on it says it is, such as its USB product name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Everything an interface shows, as the core holds it now. Every later change arrives as a
 /// [`CoreEvent`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +298,11 @@ pub struct Snapshot {
     /// without an account.
     #[serde(default)]
     pub relays: Vec<Relay>,
+    /// The invitations the user sent, oldest first (#95).
+    #[serde(default)]
+    pub invites: Vec<SentInvite>,
+    #[serde(default)]
+    pub radio: RadioStatus,
 }
 
 /// A change in the core. Applying an event twice, or one that a snapshot already contains,
@@ -191,14 +338,42 @@ pub enum CoreEvent {
         message_id: String,
         delivery: DeliveryState,
     },
-    /// How a chat's messages can travel changed: its relays went away or came back.
+    /// A message is gone: the user cancelled it while it waited, or it went, and came back
+    /// under MDK's id (#46).
+    MessageRemoved {
+        chat_id: String,
+        message_id: String,
+    },
+    /// How a chat's messages can travel changed: its relays went away or came back, or the
+    /// contact's radio was heard or not any more (#44).
     ReachChanged {
         chat_id: String,
         reach: Reach,
+        /// Why the chat isn't reachable by radio, when it is `unreachable`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radio_issue: Option<RadioIssue>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {
         relays: Vec<Relay>,
+    },
+    /// The user changed their profile (#93).
+    AccountChanged {
+        account: Account,
+    },
+    /// A contact's profile changed, for example their name. Applies to their chats and
+    /// invitations alike (#93).
+    ContactChanged {
+        contact: Contact,
+    },
+    /// The user sent an invitation, or the person used it (#95).
+    InviteChanged {
+        invite: SentInvite,
+    },
+    /// The radio was paired, connected or disconnected, or the switch that forces it changed
+    /// (#40).
+    RadioChanged {
+        radio: RadioStatus,
     },
 }
 

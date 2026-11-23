@@ -1,17 +1,22 @@
-import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
-import type { DeliveryState, Message } from "../core/types";
+import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { radioBytes } from "../core/radio";
+import { RADIO_TEXT_LIMIT, type DeliveryState, type Message } from "../core/types";
 import { formatDay, formatTime, sameDay } from "./format";
 import { Icon } from "./Icon";
 import styles from "./MessageList.module.css";
 
 interface MessageListProps {
   messages: Message[];
-  /** Shown when there are no messages yet. */
-  empty?: string;
+  /** Shown when there are no messages yet: a line of text, or a whole introduction. */
+  empty?: ReactNode;
+  /** Cancels a message that waits for a path (#46). Without it, there is nothing to cancel. */
+  onCancel?: (messageId: string) => void;
+  /** The chat's messages go by radio, so a waiting one too long for radio says why it waits. */
+  byRadio?: boolean;
 }
 
 /** The messages of a chat, oldest at the top, with a separator for each day. */
-export function MessageList({ messages, empty }: MessageListProps) {
+export function MessageList({ messages, empty, onCancel, byRadio = false }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -43,13 +48,22 @@ export function MessageList({ messages, empty }: MessageListProps) {
   return (
     <div ref={listRef} className={styles.list} role="log" aria-label="Messages">
       <div className={styles.spacer} />
-      {messages.length === 0 && empty && <p className={styles.empty}>{empty}</p>}
+      {messages.length === 0 && (typeof empty === "string" ? <p className={styles.empty}>{empty}</p> : empty)}
       {messages.map((message, index) => (
         <Fragment key={message.id}>
           {(index === 0 || !sameDay(messages[index - 1].sentAt, message.sentAt)) && (
             <div className={styles.day}>{formatDay(message.sentAt, now)}</div>
           )}
           <MessageBubble message={message} />
+          {message.direction === "out" && message.delivery === "timedOut" && (
+            <p className={styles.waiting}>Not confirmed by radio. It goes by internet once a relay is back.</p>
+          )}
+          {message.cancellable && onCancel && (
+            <WaitingNote
+              tooLongForRadio={byRadio && radioBytes(message.text) > RADIO_TEXT_LIMIT}
+              onCancel={() => onCancel(message.id)}
+            />
+          )}
         </Fragment>
       ))}
     </div>
@@ -71,22 +85,48 @@ function MessageBubble({ message }: { message: Message }) {
           </span>
         )}
         <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
-        {outgoing && message.delivery && <Delivery state={message.delivery} />}
+        {outgoing && message.delivery && <Delivery state={message.delivery} radio={radio} />}
       </div>
+    </div>
+  );
+}
+
+/** Under a message that waits for a path: why, if it is too long for radio, and Cancel. */
+function WaitingNote({ tooLongForRadio, onCancel }: { tooLongForRadio: boolean; onCancel: () => void }) {
+  return (
+    <div className={styles.waiting}>
+      {tooLongForRadio && <span>Too long for radio. It waits for the internet.</span>}
+      <button type="button" className={styles.cancel} onClick={onCancel}>
+        Cancel
+      </button>
     </div>
   );
 }
 
 const DELIVERY_LABELS: Record<DeliveryState, string> = {
   waiting: "Waiting to send",
+  timedOut: "Not confirmed by the other radio",
   sent: "Sent",
   confirmed: "Confirmed by the other radio",
 };
 
-function Delivery({ state }: { state: DeliveryState }) {
+const DELIVERY_ICONS: Record<DeliveryState, "clock" | "help" | "check"> = {
+  waiting: "clock",
+  timedOut: "help",
+  sent: "check",
+  confirmed: "check",
+};
+
+/**
+ * What is known about an outgoing message, and nothing more (#41). A radio message waits for the
+ * other radio's confirmation once the radio has sent it.
+ */
+function Delivery({ state, radio }: { state: DeliveryState; radio: boolean }) {
+  const label = state === "waiting" && radio ? "Sent by radio, waiting for the other radio to confirm" : DELIVERY_LABELS[state];
+  const icon = DELIVERY_ICONS[state];
   return (
-    <span role="img" aria-label={DELIVERY_LABELS[state]} className={styles.delivery}>
-      <Icon name={state === "waiting" ? "clock" : "check"} size={15} strokeWidth={state === "waiting" ? 2 : 2.3} />
+    <span role="img" aria-label={label} className={styles.delivery}>
+      <Icon name={icon} size={15} strokeWidth={icon === "check" ? 2.3 : 2} />
     </span>
   );
 }

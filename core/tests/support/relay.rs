@@ -10,7 +10,9 @@
 //! The same pattern as `crates/marmot-app/tests/support/limited_relay.rs` in MDK (MIT).
 //!
 //! The front door can also be shut (#43): it then cuts every connection and refuses new ones, as
-//! when the network is gone, while the relay keeps what it has.
+//! when the network is gone, while the relay keeps what it has. Shut with
+//! [`TestRelay::block_messages`], it still answers NIP-11 requests: then MDK has the relay's
+//! limits when it reconnects, and doesn't hold back what it fetches then (#78).
 //!
 //! `examples/local_relay.rs` runs the same relay on the Mac for the apps on phones.
 
@@ -32,7 +34,17 @@ pub struct TestRelay {
     _relay: LocalRelay,
     door: JoinHandle<()>,
     url: String,
-    blocked: watch::Sender<bool>,
+    blocked: watch::Sender<Shut>,
+}
+
+/// How far the front door is shut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shut {
+    Open,
+    /// Nothing gets through.
+    All,
+    /// Only NIP-11 requests are answered.
+    Messages,
 }
 
 impl Drop for TestRelay {
@@ -58,7 +70,7 @@ impl TestRelay {
             .to_owned();
         let listener = TcpListener::bind(address).await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let (blocked, shut) = watch::channel(false);
+        let (blocked, shut) = watch::channel(Shut::Open);
         let door = tokio::spawn(front_door(listener, inside, shut));
         Self {
             _relay: relay,
@@ -75,18 +87,24 @@ impl TestRelay {
 
     /// Cuts every connection to the relay and refuses new ones, as when the network is gone.
     pub fn block(&self) {
-        self.blocked.send_replace(true);
+        self.blocked.send_replace(Shut::All);
+    }
+
+    /// Cuts every connection to the relay and refuses new ones, but goes on answering NIP-11
+    /// requests. This keeps #78's delay out of a test about something else.
+    pub fn block_messages(&self) {
+        self.blocked.send_replace(Shut::Messages);
     }
 
     /// Lets connections through again.
     pub fn unblock(&self) {
-        self.blocked.send_replace(false);
+        self.blocked.send_replace(Shut::Open);
     }
 }
 
 /// Answers NIP-11 requests itself, and passes every other connection to the relay, unless it is
 /// shut.
-async fn front_door(listener: TcpListener, inside: String, shut: watch::Receiver<bool>) {
+async fn front_door(listener: TcpListener, inside: String, shut: watch::Receiver<Shut>) {
     let information =
         format!(r#"{{"supported_nips":[],"limitation":{{"max_limit":{MAX_LIMIT}}}}}"#);
     let mut connections = JoinSet::new();
@@ -95,7 +113,7 @@ async fn front_door(listener: TcpListener, inside: String, shut: watch::Receiver
             accepted = listener.accept() => {
                 let Ok((client, _)) = accepted else { continue };
                 // Shut: the connection closes at once.
-                if *shut.borrow() {
+                if *shut.borrow() == Shut::All {
                     continue;
                 }
                 connections.spawn(serve(client, inside.clone(), information.clone(), shut.clone()));
@@ -109,7 +127,7 @@ async fn serve(
     mut client: TcpStream,
     inside: String,
     information: String,
-    mut shut: watch::Receiver<bool>,
+    mut shut: watch::Receiver<Shut>,
 ) {
     let mut header = Vec::new();
     let read_header = async {
@@ -137,13 +155,15 @@ async fn serve(
             information.len()
         );
         let _ = client.write_all(reply.as_bytes()).await;
+    } else if *shut.borrow() != Shut::Open {
+        // Shut for messages: only the information gets through.
     } else if let Ok(mut relay) = TcpStream::connect(&inside).await
         && relay.write_all(&header).await.is_ok()
     {
         // Shutting the door closes the connection.
         tokio::select! {
             _ = tokio::io::copy_bidirectional(&mut client, &mut relay) => {}
-            _ = shut.wait_for(|shut| *shut) => {}
+            _ = shut.wait_for(|shut| *shut != Shut::Open) => {}
         }
     }
 }

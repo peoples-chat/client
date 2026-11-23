@@ -29,7 +29,14 @@ describe("mock core", () => {
 
   it("starts without an account", async () => {
     const { core } = setup();
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
+    expect(await core.load()).toEqual({
+      account: null,
+      chats: [],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false, canPair: true },
+    });
   });
 
   it("creates an account with demo chats and a message request", async () => {
@@ -96,9 +103,110 @@ describe("mock core", () => {
     vi.advanceTimersByTime(1500);
     expect(events[2]).toMatchObject({ type: "messageAdded", message: { direction: "in", transport: "radio" } });
 
-    // Radio carries 96 bytes at most; ☔ takes three.
-    await expect(core.sendMessage(chat.id, "☔".repeat(33))).rejects.toThrow("too long for radio");
-    await core.sendMessage(chat.id, "☔".repeat(32));
+    // Radio carries 96 bytes at most; ☔ takes three. Longer text waits for the internet (#46).
+    expect(await core.sendMessage(chat.id, "☔".repeat(33))).toMatchObject({ transport: "internet", cancellable: true });
+    expect((await core.sendMessage(chat.id, "☔".repeat(32))).transport).toBe("radio");
+  });
+
+  it("pairs a radio on a demo USB port, warns about another preset, and forgets it (#24)", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+    expect((await core.radioPorts()).map((p) => p.path)).toEqual([
+      "/dev/cu.usbmodem1101",
+      "/dev/cu.usbmodem2101",
+      "/dev/cu.usbserial-0001",
+    ]);
+
+    // As the core says it: a device that isn't a radio, and a port that went.
+    await expect(core.pairRadio("/dev/cu.usbserial-0001")).rejects.toThrow(
+      "The device on /dev/cu.usbserial-0001 didn't answer.",
+    );
+    await expect(core.pairRadio("/dev/cu.gone")).rejects.toThrow("That port is gone.");
+    expect(events).toEqual([]);
+
+    const status = await core.pairRadio("/dev/cu.usbmodem1101");
+    expect(status.paired).toMatchObject({
+      name: "Your radio",
+      connection: "connected",
+      port: "/dev/cu.usbmodem1101",
+      preset: { frequencyKhz: 869_618, expected: true },
+    });
+    expect(events).toEqual([{ type: "radioChanged", radio: status }]);
+    expect((await core.load()).radio).toEqual(status);
+    // Pairing it again changes nothing.
+    expect(await core.pairRadio("/dev/cu.usbmodem1101")).toEqual(status);
+    expect(events).toHaveLength(1);
+
+    // Another radio takes its place, here one on another preset.
+    const spare = await core.pairRadio("/dev/cu.usbmodem2101");
+    expect(spare.paired).toMatchObject({ name: "Spare radio", preset: { frequencyKhz: 869_525, expected: false } });
+
+    const forgotten = await core.forgetRadio();
+    expect(forgotten).toEqual({ forced: false, canPair: true });
+    expect(events[events.length - 1]).toEqual({ type: "radioChanged", radio: forgotten });
+  });
+
+  it("sends everything by radio with the switch on, as short text the other radio confirms", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const chat = (await core.load()).chats.find((c) => c.reach === "internet")!;
+    events.length = 0;
+
+    expect(await core.setForceRadio(true)).toEqual({ forced: true, canPair: true });
+    expect(events).toEqual([{ type: "radioChanged", radio: { forced: true, canPair: true } }]);
+    expect((await core.load()).radio).toEqual({ forced: true, canPair: true });
+
+    const message = await core.sendMessage(chat.id, "By radio");
+    expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
+    vi.advanceTimersByTime(600);
+    expect(events[2]).toEqual({ type: "deliveryChanged", chatId: chat.id, messageId: message.id, delivery: "confirmed" });
+    await expect(core.sendMessage(chat.id, "x".repeat(97))).rejects.toThrow("too long for radio");
+
+    await core.setForceRadio(false);
+    expect((await core.sendMessage(chat.id, "x".repeat(97))).transport).toBe("internet");
+  });
+
+  it("lets a radio message time out when no radio confirms it", async () => {
+    const { core, events } = setup({ radioConfirms: false });
+    await core.createAccount("Emil");
+    const chat = (await core.load()).chats.find((c) => c.reach === "radio")!;
+    events.length = 0;
+
+    const message = await core.sendMessage(chat.id, "Are you okay?");
+    expect(message).toMatchObject({ transport: "radio", delivery: "waiting" });
+    vi.advanceTimersByTime(11_999);
+    expect(events).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(events[1]).toEqual({ type: "deliveryChanged", chatId: chat.id, messageId: message.id, delivery: "timedOut" });
+
+    // Nobody answers a message that didn't arrive.
+    vi.advanceTimersByTime(5000);
+    expect(events).toHaveLength(2);
+    const messages = (await core.load()).chats.find((c) => c.id === chat.id)!.messages;
+    expect(messages[messages.length - 1]).toMatchObject({ id: message.id, delivery: "timedOut" });
+  });
+
+  it("keeps a message that has no path waiting, and lets the user cancel it", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const radioChat = (await core.load()).chats.find((c) => c.reach === "radio")!;
+    events.length = 0;
+
+    // Too long for the radio that reaches the chat: it waits for the internet.
+    const long = await core.sendMessage(radioChat.id, "x".repeat(97));
+    expect(long).toMatchObject({ transport: "internet", delivery: "waiting", cancellable: true });
+    vi.advanceTimersByTime(5000);
+    expect(events).toEqual([{ type: "messageAdded", chatId: radioChat.id, message: long }]);
+
+    await core.cancelMessage(radioChat.id, long.id);
+    expect(events[1]).toEqual({ type: "messageRemoved", chatId: radioChat.id, messageId: long.id });
+    expect((await core.load()).chats.find((c) => c.id === radioChat.id)!.messages.some((m) => m.id === long.id)).toBe(
+      false,
+    );
+    await expect(core.cancelMessage(radioChat.id, long.id)).rejects.toThrow("no longer exists");
+    const sent = await core.sendMessage(radioChat.id, "Short");
+    await expect(core.cancelMessage(radioChat.id, sent.id)).rejects.toThrow("on its way already");
   });
 
   it("exports a demo copy of the key, protected by a long enough password or plain", async () => {
@@ -110,6 +218,68 @@ describe("mock core", () => {
     );
     expect(await core.exportAccountKey({ kind: "protected", password: "long enough now" })).toMatch(/^ncryptsec1demo/);
     expect(await core.exportAccountKey({ kind: "plain" })).toMatch(/^nsec1demo/);
+  });
+
+  it("changes the profile's name and about, as the core checks them", async () => {
+    const { core, events } = setup();
+    await expect(core.updateProfile("Emil", "")).rejects.toThrow("Create an account first.");
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const account = await core.updateProfile(" Emil D. ", " Aarhus ");
+    expect([account.name, account.about]).toEqual(["Emil D.", "Aarhus"]);
+    expect(events).toEqual([{ type: "accountChanged", account }]);
+    expect((await core.load()).account).toEqual(account);
+    // The same again is no change.
+    await core.updateProfile("Emil D.", "Aarhus");
+    expect(events).toHaveLength(1);
+
+    await expect(core.updateProfile(" ", "")).rejects.toThrow("Enter a name.");
+    await expect(core.updateProfile("n".repeat(65), "")).rejects.toThrow("up to 64 characters");
+    await expect(core.updateProfile("Emil", "æ".repeat(281))).rejects.toThrow("up to 280 characters");
+  });
+
+  it("sets and removes the profile photo", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const account = await core.setProfilePhoto(new Uint8Array([0xff, 0xd8, 0xff]));
+    expect(account.photo).toBe("data:image/jpeg;base64,/9j/");
+    expect(events).toEqual([{ type: "accountChanged", account }]);
+    await expect(core.setProfilePhoto(new Uint8Array())).rejects.toThrow("can't be used");
+
+    const removed = await core.removeProfilePhoto();
+    expect(removed.photo).toBeUndefined();
+    expect((await core.load()).account?.photo).toBeUndefined();
+    // Without a photo, removing it changes nothing.
+    await core.removeProfilePhoto();
+    expect(events).toHaveLength(2);
+  });
+
+  it("makes invitations with links of their own", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const invite = await core.createInvite(" Sofie ");
+    expect(invite.name).toBe("Sofie");
+    expect(invite.link).toMatch(/^https:\/\/peoples\.chat\/i#.+\/[0-9a-f]{20}$/);
+    expect(events).toEqual([{ type: "inviteChanged", invite }]);
+    expect((await core.load()).invites).toEqual([invite]);
+    await expect(core.createInvite(" ")).rejects.toThrow("Enter a name.");
+  });
+
+  it("starts the chat with whoever a previewed invite link is from", async () => {
+    const { core } = setup();
+    const link = "https://peoples.chat/i#nprofile1demo/0123456789abcdef0123";
+    const from = await core.previewInvite(link);
+    expect(from.name).toBe("Emil Dahl");
+    await expect(core.previewInvite("Emil Dahl")).rejects.toThrow("not an invite link");
+
+    await core.createAccount("Sofie");
+    const chat = await core.addContact(link);
+    expect(chat.contact).toEqual(from);
   });
 
   it("refuses an empty message and an unknown chat", async () => {
@@ -166,12 +336,23 @@ describe("mock core", () => {
     events.length = 0;
 
     await core.deleteAccount();
-    expect(events).toEqual([{ type: "accountDeleted" }]);
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
+    // As the core does: the paired radio goes with the account, and pairing stays possible (#24).
+    expect(events).toEqual([
+      { type: "accountDeleted" },
+      { type: "radioChanged", radio: { forced: false, canPair: true } },
+    ]);
+    expect(await core.load()).toEqual({
+      account: null,
+      chats: [],
+      invitations: [],
+      relays: [],
+      invites: [],
+      radio: { forced: false, canPair: true },
+    });
 
     // The pending acknowledgement and reply belonged to the deleted account.
     vi.advanceTimersByTime(5000);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
 
     await core.createAccount("Karen");
     expect((await core.load()).account?.name).toBe("Karen");

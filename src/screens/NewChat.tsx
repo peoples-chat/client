@@ -15,10 +15,10 @@ import styles from "./NewChat.module.css";
  * Start a chat: paste an invite link, scan a QR code, or pick a contact. Groups and finding
  * people by name are in the design but not built yet, so they are disabled.
  */
-export function NewChat() {
+export function NewChat({ link: opened }: { link?: string }) {
   const { chats } = useAppState();
   const navigation = useNavigation();
-  const [link, setLink] = useState("");
+  const [link, setLink] = useState(opened ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLink = link.trim().length > 0;
@@ -83,6 +83,7 @@ export function NewChat() {
                   <ContactRow
                     name={chat.contact.name}
                     tint={tintFor(chat.contact.name)}
+                    photo={chat.contact.photo}
                     onClick={() => navigation.replace({ name: "chat", chatId: chat.id })}
                   />
                 </li>

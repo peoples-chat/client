@@ -21,7 +21,10 @@ lower `marmot-session` crate.
 | `start_direct_chat` | `Directory::fetch_account_relay_list_status_for_account_id` (relay hints), `start_direct_conversation` |
 | `accept_direct_chat` | `accept_group_invite` |
 | `follow_direct_chats` | `subscribe_chats` |
-| `known_name`, `contact_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
+| `known_name`, `contact_name`, `fetch_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
+| `own_about`, `known_picture`, `update_profile`, `set_picture` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
+| `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
+| `send_invite_token`, `invite_tokens`, `follow_messages` (tokens) | `send_custom_event`, `timeline_messages_with_query`, `subscribe_timeline_messages` |
 | `chat_started_at` | `chat_list_row` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
@@ -252,6 +255,48 @@ given, MDK orders by MLS epoch, then by time and id. Its times are whole seconds
 **Messages before accepting.** MDK stores and shows messages that arrive in a chat whose invitation is still pending,
 so the core adds them to the invitation.
 
+## Profiles
+
+**Publishing** (#93). `publish_user_profile_using_account_relays` publishes the account's profile (kind 0).
+
+- MDK merges what it is given with the newest profile it knows. Name, display name, about, picture, NIP-05 and
+  lightning address are replaced, even when they are empty. Banner and other fields are kept unless the update sets them.
+- So `update_profile` starts from the profile as this device has it (`directory_entry_for_account_id`), and changes only
+  the name, display name and about. A photo or a lightning address set by another app stays.
+- MDK publishes at once or fails at once. With no relay connected it fails within milliseconds; nothing is queued.
+
+**Other people's profiles.** MDK fetches them when asked (`fetch_current_user_profile_for_account_id`), keeps what it
+finds, and has no event for changes. The core fetches its contacts' profiles when it starts following the account and
+every 5 minutes after, from our relays.
+
+**Photos** (#94).
+
+- **Uploading:** `upload_profile_image` puts a photo on a Blossom media server (BUD-02: `PUT /upload`, signed with the
+  account key) and returns its address.
+  - The core passes the server: `DEFAULT_MEDIA_SERVER`, blossom.primal.net, unless `MessagingOptions::media_server`
+    names another.
+  - MDK checks only the format and the size (10 MiB). It uploads the bytes as they are, metadata included. So the core
+    saves the photo again first (`core/src/photo.rs`).
+- **Downloading:** `download_profile_image` fetches a contact's photo. It takes public HTTPS addresses only, resolved and
+  pinned, with limits on redirects and size.
+  - With `MessagingOptions::allow_loopback`, a media server on this machine is fetched directly instead. This is for
+    the tests and local development.
+  - The same option lets MDK upload to such a server (`with_allow_loopback_blob_endpoints`), and connect to relays on
+    this machine. It was called `allow_loopback_relays` before.
+
+## App events
+
+**Personal invitations' tokens** (#95) and **radio address records** (#34) travel as app events: `send_custom_event`
+sends an event of a kind the app chooses, inside the chat's encryption.
+
+- MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens and 9911 (`RADIO_ADDRESS_KIND`) for
+  records. Both are provisional: Marmot assigns kinds only to adopted specs.
+- The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
+  notification.
+- It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
+  does text.
+
 ## Relay reachability
 
 Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
@@ -295,6 +340,14 @@ seconds, and in one after 7.6 minutes.
   relay still answering NIP-11 requests while blocked, the message arrived within 5 seconds every time.
 - Whether it shows depends on timing: on whether the sender publishes before the other phone has asked again.
 - MDK has no public call that clears the cache. What to do about it is #78.
+- **Since #46,** a message written during an outage waits in the core and goes only once a relay is connected again,
+  so the other phone has usually asked again by then. `core/tests/after_outage.rs` (ignored; it can take minutes)
+  measured 5.1 seconds from the relay's return to the other phone showing the message, in 4 of 4 runs with the relay
+  fully blocked. Before #46, with MDK holding the message, the same runs took 25 seconds. MDK's full-history repair
+  (`repair_full_history`) on the receiving phone made no difference. Still exposed: messages MDK took in the 10
+  seconds before the outage counted, and the relay copies of radio messages, which the other phone shows already.
+- Tests about something else can keep this out: the test relay's `block_messages` goes on answering NIP-11 requests
+  while it blocks everything else (`core/tests/republish.rs`).
 
 ## Tests
 
@@ -341,6 +394,33 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.
+
+`core/tests/invites.rs` has three phones share one personal invitation (#95):
+
+- the invited person, without an account, sees who invited her, then creates an account and starts the chat;
+- the inviter's core opens the chat without a request and marks the invitation as used;
+- a third person using the same link arrives as an ordinary request;
+- the invitation stays across a restart, and deleting the account deletes it.
+
+The invitation store has unit tests in `core/src/invites.rs`.
+
+`core/tests/photos.rs` has a contact set a photo straight from a camera (#94), through a media server inside the test
+(`core/tests/support/blossom.rs`):
+
+- what reaches the server is a 512-pixel square without the Exif segment;
+- the other phone shows it once its core fetches the profiles again, and both keep it across a restart;
+- removing it reaches the other phone; a file that isn't a photo is refused before any upload;
+- deleting the account deletes the avatars.
+
+The photo handling itself has unit tests in `core/src/photo.rs`: the square, turning a photo upright by its Exif
+orientation, dropping the metadata, transparency and refusals.
+
+`core/tests/profile.rs` has a contact change her profile (#93):
+
+- the new name and about come back as `accountChanged`, and stay across a restart;
+- the other phone shows the new name once its core fetches the profiles again, and a second fetch finds nothing new;
+- without a relay the profile doesn't change, and the error says why;
+- the error messages, and the limits counted in characters.
 
 `core/tests/radio_keys.rs` has two contacts derive their chat's radio keys (#37):
 

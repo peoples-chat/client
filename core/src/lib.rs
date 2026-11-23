@@ -8,15 +8,22 @@
 mod app;
 pub mod interface;
 mod invite;
+mod invites;
 mod messaging;
+mod outbox;
+mod photo;
 pub mod radio;
+mod radio_store;
 mod reach;
+mod transport;
 
-pub use app::{Core, MIN_EXPORT_PASSWORD_CHARS};
+pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};
 pub use messaging::{
-    DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, Messaging, MessagingError,
-    MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, TextMessages,
+    ChatItem, ChatItems, DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, InviteToken,
+    Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RadioAddressItem,
+    RelayLink, RelayLinks, TextMessage,
 };
+pub use radio_store::Transmission;
 pub use reach::DOWN_AFTER;
 
 /// Version of the core, shown by the shell to prove that the core is linked in.

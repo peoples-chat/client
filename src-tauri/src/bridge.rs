@@ -2,7 +2,9 @@
 //! launches, passes every core event to the web view as the Tauri event `core-event`, and turns
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
-use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Message, Snapshot};
+use peoples_chat_core::interface::{
+    Account, Chat, CommandError, Contact, CoreEvent, Message, RadioStatus, SentInvite, Snapshot,
+};
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_biometric::{AuthOptions, BiometricExt};
@@ -27,6 +29,12 @@ const UNLOCK_REASON: &str = "Export your account key";
 /// `RUST_` and `WRY` ones) on to the iOS and Android builds that Xcode and Gradle run.
 const RELAYS: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_RELAYS");
 
+/// The media server for profile photos, taken from the environment when the app is built (#94).
+/// Without it the app uses the core's `DEFAULT_MEDIA_SERVER`. To keep photos on the Mac, run
+/// `core/examples/local_media.rs` and build with
+/// `TAURI_PEOPLES_CHAT_MEDIA_SERVER=http://127.0.0.1:7778`; only debug builds accept it.
+const MEDIA_SERVER: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_MEDIA_SERVER");
+
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
     core: OnceCell<Core>,
@@ -43,6 +51,10 @@ impl CoreSlot {
                     .await
                     .map_err(start_failed)?;
                 forward_events(app.clone(), core.subscribe());
+                // Computers pair radios over USB, and open the paired one again (#24). Phones
+                // will pair over Bluetooth (#23).
+                #[cfg(desktop)]
+                core.use_radio_ports(std::sync::Arc::new(peoples_chat_core::radio::SerialPorts));
                 Ok(core)
             })
             .await
@@ -66,11 +78,18 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
     let relays = relays();
     log::info!("relays for new accounts: {}", relays.join(", "));
+    if let Some(server) = MEDIA_SERVER {
+        log::info!("media server for profile photos: {server}");
+    }
     Ok(MessagingOptions {
         data_dir: app.path().app_data_dir()?.join("core"),
         relays,
         keychain_service: KEYCHAIN_SERVICE.to_owned(),
-        allow_loopback_relays: cfg!(debug_assertions),
+        allow_loopback: cfg!(debug_assertions),
+        media_server: MEDIA_SERVER
+            .map(str::trim)
+            .filter(|server| !server.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -132,6 +151,57 @@ pub async fn create_account<R: Runtime>(
     name: String,
 ) -> Result<Account, CommandError> {
     slot.get(&app).await?.create_account(&name).await
+}
+
+#[tauri::command]
+pub async fn update_profile<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    name: String,
+    about: String,
+) -> Result<Account, CommandError> {
+    slot.get(&app).await?.update_profile(&name, &about).await
+}
+
+/// The photo comes as the request's raw body, not as JSON (#94).
+#[tauri::command]
+pub async fn set_profile_photo<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Account, CommandError> {
+    let tauri::ipc::InvokeBody::Raw(photo) = request.body() else {
+        return Err(CommandError::new(
+            "This photo can't be used. Try another one.",
+        ));
+    };
+    slot.get(&app).await?.set_profile_photo(photo).await
+}
+
+#[tauri::command]
+pub async fn remove_profile_photo<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<Account, CommandError> {
+    slot.get(&app).await?.remove_profile_photo().await
+}
+
+#[tauri::command]
+pub async fn create_invite<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    name: String,
+) -> Result<SentInvite, CommandError> {
+    slot.get(&app).await?.create_invite(&name).await
+}
+
+#[tauri::command]
+pub async fn preview_invite<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    invite_link: String,
+) -> Result<Contact, CommandError> {
+    slot.get(&app).await?.preview_invite(&invite_link).await
 }
 
 #[tauri::command]
@@ -214,4 +284,57 @@ pub async fn send_message<R: Runtime>(
     text: String,
 ) -> Result<Message, CommandError> {
     slot.get(&app).await?.send_message(&chat_id, &text).await
+}
+
+#[tauri::command]
+pub async fn cancel_message<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), CommandError> {
+    slot.get(&app)
+        .await?
+        .cancel_message(&chat_id, &message_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn set_force_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    forced: bool,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.set_force_radio(forced)
+}
+
+/// The USB ports a radio may be plugged into (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn radio_ports<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<Vec<peoples_chat_core::interface::RadioPort>, CommandError> {
+    slot.get(&app).await?.radio_ports().await
+}
+
+/// Pairs the radio on the USB port `port` (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn pair_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    port: String,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.pair_radio(&port).await
+}
+
+/// Forgets the paired radio (#24). Computers only.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn forget_radio<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<RadioStatus, CommandError> {
+    slot.get(&app).await?.forget_radio().await
 }

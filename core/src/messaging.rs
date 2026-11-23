@@ -27,6 +27,8 @@ use marmot_app::{
     UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
+
+use crate::photo::MAX_PHOTO_BYTES;
 use zeroize::Zeroizing;
 
 /// How often [`Messaging::wait_until_published`] checks the account's setup state.
@@ -51,6 +53,13 @@ const SECRET_ATTEMPTS: usize = 5;
 const SECRET_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
+/// The app's own kind for an invitation's token (#95), which the invited person's app sends
+/// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
+/// It isn't text, so White Noise doesn't show it as a message.
+pub const INVITE_TOKEN_KIND: u64 = 9_910;
+/// The app's own kind for a radio address record (#34), which each app sends in its direct
+/// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
+pub const RADIO_ADDRESS_KIND: u64 = 9_911;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -68,6 +77,10 @@ pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.primal.net",
 ];
 
+/// Where profile photos are uploaded (#94): White Noise's server for profile photos, the proof of
+/// concept's choice on 22 November 2026. The project's own media server comes with #11.
+pub const DEFAULT_MEDIA_SERVER: &str = "https://blossom.primal.net";
+
 /// Relays the project runs, which the interface shows as run by peoples.chat (#88). None yet:
 /// who runs the project's relays is decided later (#11).
 pub const PROJECT_RELAYS: &[&str] = &[];
@@ -82,8 +95,19 @@ pub struct MessagingOptions {
     pub relays: Vec<String>,
     /// Keychain service under which account keys are stored, one entry per account.
     pub keychain_service: String,
-    /// Allows `ws://` relays on the loopback interface, for tests and local development.
-    pub allow_loopback_relays: bool,
+    /// Allows relays (`ws://`) and media servers (`http://`) on the loopback interface, for tests
+    /// and local development.
+    pub allow_loopback: bool,
+    /// The media server profile photos go to; `None` for [`DEFAULT_MEDIA_SERVER`] (#94).
+    pub media_server: Option<String>,
+}
+
+/// What another account's profile says about it, as the relays have it now.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContactProfile {
+    pub name: Option<String>,
+    /// The address of the account's photo.
+    pub picture: Option<String>,
 }
 
 /// An account created on this device.
@@ -200,30 +224,80 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
     })
 }
 
-/// The account's text messages in every chat as they are added or change, for example when a
-/// relay acknowledges one of ours.
-pub struct TextMessages {
-    subscription: RuntimeTimelineMessagesSubscription,
-    ready: VecDeque<TextMessage>,
+/// An invitation's token that the other person sent in a chat (#95).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteToken {
+    pub chat_id: String,
+    pub token: String,
 }
 
-impl TextMessages {
-    /// The next message that was added or changed. `None` once messaging has stopped.
-    pub async fn next(&mut self) -> Option<TextMessage> {
+/// The invitation's token in `record`, if it is one the other person sent.
+fn invite_token(record: &TimelineMessageRecord) -> Option<InviteToken> {
+    (record.kind == INVITE_TOKEN_KIND && record.direction == "received" && !record.deleted).then(
+        || InviteToken {
+            chat_id: record.group_id_hex.clone(),
+            token: record.plaintext.trim().to_owned(),
+        },
+    )
+}
+
+/// A radio address record that the other person sent in a chat (#34), as it came: the core
+/// reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RadioAddressItem {
+    pub chat_id: String,
+    pub record: String,
+}
+
+/// The radio address record in `record`, if it is one the other person sent.
+fn radio_address(record: &TimelineMessageRecord) -> Option<RadioAddressItem> {
+    (record.kind == RADIO_ADDRESS_KIND && record.direction == "received" && !record.deleted).then(
+        || RadioAddressItem {
+            chat_id: record.group_id_hex.clone(),
+            record: record.plaintext.clone(),
+        },
+    )
+}
+
+/// What can come in a chat, as the core follows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatItem {
+    Text(TextMessage),
+    InviteToken(InviteToken),
+    RadioAddress(RadioAddressItem),
+}
+
+fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
+    text_message(record)
+        .map(ChatItem::Text)
+        .or_else(|| invite_token(record).map(ChatItem::InviteToken))
+        .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
+}
+
+/// What comes in the account's chats as it is added or changes: text messages, for example
+/// when a relay acknowledges one of ours, and invitations' tokens.
+pub struct ChatItems {
+    subscription: RuntimeTimelineMessagesSubscription,
+    ready: VecDeque<ChatItem>,
+}
+
+impl ChatItems {
+    /// The next item that was added or changed. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<ChatItem> {
         loop {
-            if let Some(message) = self.ready.pop_front() {
-                return Some(message);
+            if let Some(item) = self.ready.pop_front() {
+                return Some(item);
             }
             match self.subscription.recv().await? {
                 // MDK fell behind and sends its latest messages again.
                 RuntimeTimelineMessageUpdate::Page { page } => {
                     self.ready
-                        .extend(page.messages.iter().filter_map(text_message));
+                        .extend(page.messages.iter().filter_map(chat_item));
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
                         if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(text_message(message));
+                            self.ready.extend(chat_item(message));
                         }
                     }
                 }
@@ -327,6 +401,8 @@ pub enum MessagingError {
     InvalidChatId(String),
     #[error("the chat is changing: a change to it waits for the relays")]
     EpochUnsettled,
+    #[error("could not download the photo: {0}")]
+    PhotoDownload(String),
 }
 
 /// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
@@ -366,6 +442,8 @@ pub struct Messaging {
     app: MarmotApp,
     runtime: MarmotAppRuntime,
     relays: Vec<String>,
+    media_server: String,
+    allow_loopback: bool,
 }
 
 impl Messaging {
@@ -375,7 +453,8 @@ impl Messaging {
         let home = AccountHome::open_with_keychain(&options.data_dir, options.keychain_service)
             .map_err(AppError::from)?;
         let config = MarmotAppConfig::default()
-            .with_allow_loopback_relay_endpoints(options.allow_loopback_relays);
+            .with_allow_loopback_relay_endpoints(options.allow_loopback)
+            .with_allow_loopback_blob_endpoints(options.allow_loopback);
         let app = MarmotApp::try_with_relays_and_account_home_and_config(
             &options.data_dir,
             options.relays.clone(),
@@ -388,6 +467,10 @@ impl Messaging {
             app,
             runtime,
             relays: options.relays,
+            media_server: options
+                .media_server
+                .unwrap_or_else(|| DEFAULT_MEDIA_SERVER.to_owned()),
+            allow_loopback: options.allow_loopback,
         })
     }
 
@@ -556,6 +639,24 @@ impl Messaging {
         if let Some(name) = self.known_name(account_hex) {
             return name;
         }
+        match self
+            .fetch_profile(account_hex, relay_hints)
+            .await
+            .and_then(|profile| profile.name)
+        {
+            Some(name) => name,
+            None => marmot_app::default_profile_pseudonym(account_hex),
+        }
+    }
+
+    /// Another account's profile as the relays have it now, from `relay_hints` and our relays.
+    /// MDK keeps what it finds. `None` when there is no profile, or the relays didn't answer in
+    /// time.
+    pub async fn fetch_profile(
+        &self,
+        account_hex: &str,
+        relay_hints: &[String],
+    ) -> Option<ContactProfile> {
         let relays: Vec<String> = relay_hints
             .iter()
             .chain(&self.relays)
@@ -571,15 +672,112 @@ impl Messaging {
         .await;
         match fetched {
             Ok(Ok(Some(profile))) => {
-                if let Some(name) = profile_name(&profile) {
-                    return name;
-                }
+                return Some(ContactProfile {
+                    name: profile_name(&profile),
+                    picture: profile_picture(&profile),
+                });
             }
             Ok(Ok(None)) => log::info!("the contact has no profile on the relays"),
             Ok(Err(error)) => log::info!("could not fetch the contact's profile: {error}"),
             Err(_) => log::info!("fetching the contact's profile timed out"),
         }
-        marmot_app::default_profile_pseudonym(account_hex)
+        None
+    }
+
+    /// What the account's own profile says about it, as this device last saw it (#93).
+    pub fn own_about(&self, account_hex: &str) -> String {
+        self.cached_profile(account_hex)
+            .and_then(|profile| profile.about)
+            .unwrap_or_default()
+    }
+
+    /// The address of an account's photo, as this device last saw its profile (#94).
+    pub fn known_picture(&self, account_hex: &str) -> Option<String> {
+        self.cached_profile(account_hex)
+            .and_then(|profile| profile_picture(&profile))
+    }
+
+    /// Publishes the account's profile with a new name and about (#93).
+    pub async fn update_profile(
+        &self,
+        account_hex: &str,
+        name: &str,
+        about: &str,
+    ) -> Result<(), MessagingError> {
+        self.publish_profile(account_hex, |profile| {
+            profile.name = Some(name.to_owned());
+            profile.display_name = Some(name.to_owned());
+            profile.about = (!about.is_empty()).then(|| about.to_owned());
+        })
+        .await
+    }
+
+    /// Publishes the account's profile with `picture` as its photo's address, or without a photo
+    /// (#94).
+    pub async fn set_picture(
+        &self,
+        account_hex: &str,
+        picture: Option<&str>,
+    ) -> Result<(), MessagingError> {
+        self.publish_profile(account_hex, |profile| {
+            profile.picture = picture.map(str::to_owned);
+        })
+        .await
+    }
+
+    /// Publishes the account's profile with `change` made to it. Everything else in the profile
+    /// stays as it was, including what other apps put there: MDK replaces name, about, picture,
+    /// NIP-05 and lightning address with whatever it is given, so they come from the profile as
+    /// this device has it.
+    async fn publish_profile(
+        &self,
+        account_hex: &str,
+        change: impl FnOnce(&mut UserProfileMetadata),
+    ) -> Result<(), MessagingError> {
+        let mut profile = self.cached_profile(account_hex).unwrap_or_default();
+        change(&mut profile);
+        self.runtime
+            .publish_user_profile_using_account_relays(account_hex, profile)
+            .await?;
+        Ok(())
+    }
+
+    /// Uploads a profile photo to the media server and returns its address (#94). The photo is a
+    /// JPEG the core made, without metadata: MDK uploads what it is given.
+    pub async fn upload_photo(
+        &self,
+        account_hex: &str,
+        jpeg: Vec<u8>,
+    ) -> Result<String, MessagingError> {
+        Ok(self
+            .runtime
+            .upload_profile_image(account_hex, jpeg, "image/jpeg", Some(&self.media_server))
+            .await?)
+    }
+
+    /// Downloads the photo at `url`, up to [`MAX_PHOTO_BYTES`] (#94). MDK's download takes public
+    /// HTTPS addresses only. With loopback allowed, a media server on this machine is fetched
+    /// directly, for tests and local development.
+    pub async fn download_photo(&self, url: &str) -> Result<Vec<u8>, MessagingError> {
+        if self.allow_loopback && is_loopback_http(url) {
+            return fetch_loopback(url).await;
+        }
+        Ok(marmot_app::download_profile_image(url.to_owned(), MAX_PHOTO_BYTES as u64).await?)
+    }
+
+    /// An account's profile as this device last saw it.
+    fn cached_profile(&self, account_hex: &str) -> Option<UserProfileMetadata> {
+        match self
+            .app
+            .directory()
+            .directory_entry_for_account_id(account_hex)
+        {
+            Ok(entry) => entry.and_then(|entry| entry.profile),
+            Err(error) => {
+                log::warn!("could not read a profile from this device: {error}");
+                None
+            }
+        }
     }
 
     /// Sends `text` in the chat `chat_id` and returns the message's id.
@@ -635,6 +833,86 @@ impl Messaging {
         Ok(page.messages.iter().filter_map(text_message).collect())
     }
 
+    /// The invitations' tokens the other person sent in the chat `chat_id` (#95).
+    pub fn invite_tokens(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<InviteToken>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(invite_token).collect())
+    }
+
+    /// The radio address records the other person sent in the chat `chat_id` (#34), oldest
+    /// first.
+    pub fn radio_addresses(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<RadioAddressItem>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(radio_address).collect())
+    }
+
+    /// Sends this phone's radio address record in the chat `chat_id` (#34).
+    pub async fn send_radio_address(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        record: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .send_custom_event(
+                account_hex,
+                &group_id(chat_id)?,
+                RADIO_ADDRESS_KIND,
+                Vec::new(),
+                record.to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
+    /// chat without a request (#95).
+    pub async fn send_invite_token(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        token: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .send_custom_event(
+                account_hex,
+                &group_id(chat_id)?,
+                INVITE_TOKEN_KIND,
+                Vec::new(),
+                token.to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// The message `message_id` in the chat `chat_id`, if MDK has it as a text message.
     pub fn chat_message(
         &self,
@@ -650,12 +928,12 @@ impl Messaging {
     }
 
     /// Follows the account's text messages in all its chats, from now on.
-    pub async fn follow_messages(&self, account_hex: &str) -> Result<TextMessages, MessagingError> {
+    pub async fn follow_messages(&self, account_hex: &str) -> Result<ChatItems, MessagingError> {
         let subscription = self
             .runtime
             .subscribe_timeline_messages(account_hex, TimelineMessageQuery::default())
             .await?;
-        Ok(TextMessages {
+        Ok(ChatItems {
             subscription,
             ready: VecDeque::new(),
         })
@@ -788,6 +1066,47 @@ fn client_token() -> String {
 }
 
 /// The name a profile shows: its display name, else its name.
+fn profile_picture(profile: &UserProfileMetadata) -> Option<String> {
+    profile
+        .picture
+        .as_deref()
+        .map(str::trim)
+        .filter(|picture| !picture.is_empty())
+        .map(str::to_owned)
+}
+
+/// Whether `url` is plain HTTP on this machine.
+fn is_loopback_http(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    url.scheme() == "http"
+        && (host == "localhost"
+            || host
+                .trim_matches(|c| c == '[' || c == ']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback()))
+}
+
+async fn fetch_loopback(url: &str) -> Result<Vec<u8>, MessagingError> {
+    let failed = |error: reqwest::Error| MessagingError::PhotoDownload(error.to_string());
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(PROFILE_TIMEOUT)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(failed)?;
+    let bytes = response.bytes().await.map_err(failed)?;
+    if bytes.len() > MAX_PHOTO_BYTES {
+        return Err(MessagingError::PhotoDownload(
+            "the photo is too large".into(),
+        ));
+    }
+    Ok(bytes.to_vec())
+}
+
 fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
     [&profile.display_name, &profile.name]
         .into_iter()

@@ -4,10 +4,14 @@ import {
   CoreError,
   type Account,
   type Chat,
+  type Contact,
   type Core,
   type CoreEvent,
   type CoreListener,
   type Message,
+  type RadioPort,
+  type RadioStatus,
+  type SentInvite,
   type Snapshot,
 } from "./types";
 
@@ -16,7 +20,7 @@ export const CORE_EVENT = "core-event";
 
 /** The parts of Tauri's IPC that the core needs. Tests pass a fake. */
 export interface Ipc {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  invoke<T>(command: string, args?: Record<string, unknown> | Uint8Array): Promise<T>;
   listen(event: string, handler: (event: { payload: CoreEvent }) => void): Promise<() => void>;
 }
 
@@ -33,7 +37,7 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
   });
   listening.catch(() => undefined); // `load` reports the failure.
 
-  async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  async function call<T>(command: string, args?: Record<string, unknown> | Uint8Array): Promise<T> {
     try {
       return await ipc.invoke<T>(command, args);
     } catch (error) {
@@ -55,10 +59,22 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     },
 
     createAccount: (name) => call<Account>("create_account", { name }),
+    updateProfile: (name, about) => call<Account>("update_profile", { name, about }),
+    // The photo goes as the request's raw body, not as JSON.
+    setProfilePhoto: (photo) => call<Account>("set_profile_photo", photo),
+    removeProfilePhoto: () => call<Account>("remove_profile_photo"),
     deleteAccount: () => call<void>("delete_account"),
     addContact: (inviteLink) => call<Chat>("add_contact", { inviteLink }),
     acceptInvitation: (invitationId) => call<Chat>("accept_invitation", { invitationId }),
+    createInvite: (name) => call<SentInvite>("create_invite", { name }),
+    previewInvite: (inviteLink) => call<Contact>("preview_invite", { inviteLink }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
+    cancelMessage: (chatId, messageId) => call<void>("cancel_message", { chatId, messageId }),
+    setForceRadio: (forced) => call<RadioStatus>("set_force_radio", { forced }),
+    // Computers only: phone builds have no such commands, and say `canPair` is off (#24).
+    radioPorts: () => call<RadioPort[]>("radio_ports"),
+    pairRadio: (port) => call<RadioStatus>("pair_radio", { port }),
+    forgetRadio: () => call<RadioStatus>("forget_radio"),
     // Without a password the core exports the plain key.
     exportAccountKey: (copy) =>
       call<string>("export_account_key", { password: copy.kind === "protected" ? copy.password : null }),

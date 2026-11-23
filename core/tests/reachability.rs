@@ -32,6 +32,7 @@ async fn next_reach(
             Ok(Ok(CoreEvent::ReachChanged {
                 chat_id: changed,
                 reach,
+                ..
             })) if changed == chat_id => return Some(reach),
             Ok(Ok(_)) => {}
             Ok(Err(error)) => panic!("the core stopped sending events: {error}"),
@@ -107,9 +108,10 @@ async fn a_chat_is_unreachable_while_its_relay_is_blocked() {
         Some(Reach::Unreachable)
     );
 
-    // What Ada writes now waits.
+    // What Ada writes now waits, and can still be cancelled (#46).
     let waiting = ada.send_message(&chat_id, "Still there?").await.unwrap();
     assert_eq!(waiting.delivery, Some(DeliveryState::Waiting));
+    assert!(waiting.cancellable);
 
     // Unblocked, the chat is back with MDK's next attempt, and the message goes out.
     relay.unblock();
@@ -126,12 +128,18 @@ async fn a_chat_is_unreachable_while_its_relay_is_blocked() {
         next_reach(&mut bea_events, &chat_id, RETRY + SLACK).await,
         Some(Reach::Internet)
     );
+    // It goes under MDK's id, in place of the waiting one.
     until("the relay's acknowledgement", || {
         let chat = ada.snapshot().chats.into_iter().find(|c| c.id == chat_id)?;
-        let sent = chat.messages.iter().find(|m| m.id == waiting.id)?;
+        let sent = chat
+            .messages
+            .iter()
+            .find(|m| m.text == "Still there?" && m.id != waiting.id)?;
         (sent.delivery == Some(DeliveryState::Sent)).then_some(())
     })
     .await;
+    let chat = ada.snapshot().chats.into_iter().find(|c| c.id == chat_id);
+    assert!(chat.unwrap().messages.iter().all(|m| m.id != waiting.id));
     // Bea can get it later than this test waits: MDK holds what it fetches after reconnecting
     // until it has the relay's NIP-11 limits, and keeps a fetch that failed during the outage for
     // 5 minutes (#78; docs/mdk.md, "After an outage").

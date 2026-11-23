@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use super::format::{self, Header, PacketError};
-use super::keys::RadioKeys;
+use super::keys::{RadioKey, RadioKeys};
 
 /// How many epochs' keys a chat keeps (spike #37).
 pub const KEPT_EPOCHS: usize = 4;
@@ -131,6 +131,18 @@ impl RadioInbox {
         self.chats.get(chat_id).map_or_else(Vec::new, |chat| {
             chat.keys.iter().map(|keys| keys.epoch).collect()
         })
+    }
+
+    /// What a packet in the chat goes out with: its newest kept epoch, and the key this phone
+    /// sends with in it (#40). The format's sender uses the newest epoch it holds keys for.
+    pub fn sending_key(&self, chat_id: &str) -> Option<(u64, RadioKey)> {
+        let keys = self.chats.get(chat_id)?.keys.first()?;
+        Some((keys.epoch, keys.send.clone()))
+    }
+
+    /// Forgets every chat, as when the account is deleted.
+    pub fn clear(&mut self) {
+        self.chats.clear();
     }
 
     /// Checks a packet that arrived over radio, and records it when it passes.
@@ -407,6 +419,17 @@ mod tests {
             restarted.receive(&packet, Some("chat-ada"), known),
             Err(Refusal::Duplicate)
         );
+    }
+
+    #[test]
+    fn sends_with_the_newest_kept_epoch() {
+        let mut inbox = bea_inbox(&[7, 9, 8]);
+        let (epoch, key) = inbox.sending_key("chat-ada").unwrap();
+        assert_eq!(epoch, 9);
+        assert_eq!(*key, *keys(BEA, ADA, 1, 9).send);
+        assert!(inbox.sending_key("chat-cai").is_none());
+        inbox.clear();
+        assert!(inbox.sending_key("chat-ada").is_none());
     }
 
     #[test]

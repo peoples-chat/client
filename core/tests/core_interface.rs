@@ -33,7 +33,7 @@ fn the_shared_json_matches_the_core_types() {
     }
     assert_eq!(
         kinds.len(),
-        9,
+        14,
         "the fixture needs one example of every event"
     );
 
@@ -54,8 +54,13 @@ fn kind(event: &CoreEvent) -> &'static str {
         CoreEvent::InvitationRemoved { .. } => "invitationRemoved",
         CoreEvent::MessageAdded { .. } => "messageAdded",
         CoreEvent::DeliveryChanged { .. } => "deliveryChanged",
+        CoreEvent::MessageRemoved { .. } => "messageRemoved",
         CoreEvent::ReachChanged { .. } => "reachChanged",
         CoreEvent::RelaysChanged { .. } => "relaysChanged",
+        CoreEvent::AccountChanged { .. } => "accountChanged",
+        CoreEvent::ContactChanged { .. } => "contactChanged",
+        CoreEvent::InviteChanged { .. } => "inviteChanged",
+        CoreEvent::RadioChanged { .. } => "radioChanged",
     }
 }
 
@@ -81,7 +86,8 @@ fn options(data_dir: &Path, relays: Vec<String>, keychain_service: &str) -> Mess
         data_dir: data_dir.to_path_buf(),
         relays,
         keychain_service: keychain_service.to_owned(),
-        allow_loopback_relays: true,
+        allow_loopback: true,
+        media_server: None,
     }
 }
 

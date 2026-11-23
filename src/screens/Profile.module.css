@@ -52,3 +52,46 @@
   gap: 8px;
   padding-top: 6px;
 }
+
+/* Under the fields: whether the last change was saved. Takes no room while there is nothing to say. */
+.saveState,
+.saveError {
+  margin: -8px 0 0;
+  font-size: 13.5px;
+}
+
+.saveState {
+  color: var(--color-muted);
+}
+
+.saveState:empty {
+  display: none;
+}
+
+.saveError {
+  color: var(--color-danger);
+}
+
+/* The photo, and under it what is happening to it. */
+.photo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.photo .saveState,
+.photo .saveError {
+  margin: 0;
+}
+
+.removePhoto {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+}

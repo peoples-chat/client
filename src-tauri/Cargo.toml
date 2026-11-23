@@ -19,6 +19,8 @@ peoples-chat-core = { path = "../core" }
 log = "0.4"
 tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
+# generate_context! embeds the plugins' configuration (tauri.conf.json) as JSON values.
+serde_json = "1"
 # The device unlock before the account key is exported (#86). Android, iOS and macOS; elsewhere
 # the export says the device can't be unlocked.
 tauri-plugin-biometric = "2"
@@ -29,3 +31,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tauri-plugin-barcode-scanner = "2"
 # The system share sheet (#66), a plugin of this app.
 tauri-plugin-share-sheet = { path = "plugins/share-sheet" }
+# Opens https://peoples.chat/i links in the app: Android App Links and iOS universal links (#72).
+tauri-plugin-deep-link = "2"

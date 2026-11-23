@@ -36,12 +36,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_biometric::init());
 
-    // Scanning QR codes with the camera, and the system share sheet. Both plugins exist for iOS
-    // and Android only.
+    // Scanning QR codes with the camera, the system share sheet, and opening
+    // https://peoples.chat/i links in the app (#72). All three are for iOS and Android only.
     #[cfg(mobile)]
     let builder = builder
         .plugin(tauri_plugin_barcode_scanner::init())
-        .plugin(tauri_plugin_share_sheet::init());
+        .plugin(tauri_plugin_share_sheet::init())
+        .plugin(tauri_plugin_deep_link::init());
 
     builder
         .setup(|app| {
@@ -53,11 +54,25 @@ pub fn run() {
             core_version,
             bridge::core_snapshot,
             bridge::create_account,
+            bridge::update_profile,
+            bridge::set_profile_photo,
+            bridge::remove_profile_photo,
             bridge::delete_account,
             bridge::add_contact,
+            bridge::create_invite,
+            bridge::preview_invite,
             bridge::accept_invitation,
             bridge::send_message,
-            bridge::export_account_key
+            bridge::set_force_radio,
+            bridge::cancel_message,
+            bridge::export_account_key,
+            // Pairing a radio over USB (#24). Phones will pair over Bluetooth (#23).
+            #[cfg(desktop)]
+            bridge::radio_ports,
+            #[cfg(desktop)]
+            bridge::pair_radio,
+            #[cfg(desktop)]
+            bridge::forget_radio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

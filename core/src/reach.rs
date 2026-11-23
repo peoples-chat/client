@@ -7,17 +7,105 @@
 //!
 //! The phone's own online flag plays no part: a phone can be online while no relay answers, for
 //! example behind a captive portal, and the relays are what carry the messages.
+//!
+//! Without the internet, a chat is reachable by radio while the contact's radio has been heard
+//! lately, on the mesh and preset of the user's radio (#44). The app sends nothing to find out:
+//! it goes by adverts the contact's radio sends anyway, by messages from it and by its
+//! confirmations.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::interface::{Reach, RelayStatus};
+use crate::interface::{RadioIssue, Reach, RelayStatus};
 use crate::messaging::RelayLink;
+use crate::radio::RadioAddress;
 
 /// How long a relay's connection must stay closed before the relay counts as gone.
 pub const DOWN_AFTER: Duration = Duration::from_secs(10);
+
+/// How long a radio counts as heard after the last sign of it: an advert, a message from it or
+/// a confirmation it sent (#44). Provisional: hardware day tunes it against how often real radios
+/// advertise.
+pub const HEARD_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+/// When each radio was last heard.
+#[derive(Debug)]
+pub struct Heard {
+    at: HashMap<String, Instant>,
+    window: Duration,
+}
+
+impl Default for Heard {
+    fn default() -> Self {
+        Self {
+            at: HashMap::new(),
+            window: HEARD_WINDOW,
+        }
+    }
+}
+
+impl Heard {
+    /// The radio with the public key `radio` was heard at `now`.
+    pub fn hear(&mut self, radio: &str, now: Instant) {
+        self.at.insert(radio.to_ascii_lowercase(), now);
+    }
+
+    /// How long a radio counts as heard, in place of [`HEARD_WINDOW`].
+    pub fn set_window(&mut self, window: Duration) {
+        self.window = window;
+    }
+
+    /// Whether the radio `radio` was heard within the window before `now`.
+    pub fn is_heard(&self, radio: &str, now: Instant) -> bool {
+        self.at
+            .get(&radio.to_ascii_lowercase())
+            .is_some_and(|at| now < *at + self.window)
+    }
+
+    /// The soonest moment after `now` at which a radio stops counting as heard.
+    pub fn next_change(&self, now: Instant) -> Option<Instant> {
+        self.at
+            .values()
+            .map(|at| *at + self.window)
+            .filter(|until| *until > now)
+            .min()
+    }
+
+    pub fn clear(&mut self) {
+        self.at.clear();
+    }
+}
+
+/// Whether the radio of a contact, as their `contact` record describes it, can be reached from
+/// the user's radio, as `own` describes it, at `now` (#44). `own` is `None` without a radio, or
+/// while its link is down. Without `airtime_left` for a message this hour, it can't (#51).
+pub fn radio_reach(
+    own: Option<&RadioAddress>,
+    contact: Option<&RadioAddress>,
+    heard: &Heard,
+    airtime_left: bool,
+    now: Instant,
+) -> Result<(), RadioIssue> {
+    let own = own.ok_or(RadioIssue::NoRadio)?;
+    let contact = contact.ok_or(RadioIssue::NoContactRadio)?;
+    if own.mesh != contact.mesh {
+        return Err(RadioIssue::OtherMesh);
+    }
+    // Radios hear each other only on the same frequency, bandwidth, spreading factor and coding
+    // rate: the same region and preset.
+    if own.preset() != contact.preset() {
+        return Err(RadioIssue::OtherPreset);
+    }
+    if !heard.is_heard(&contact.key, now) {
+        return Err(RadioIssue::NotHeard);
+    }
+    if !airtime_left {
+        return Err(RadioIssue::AirtimeUsed);
+    }
+    Ok(())
+}
 
 /// The account's relays, and the relays each chat goes through.
 #[derive(Debug, Default)]
@@ -94,6 +182,25 @@ impl Reachability {
     /// when someone else's app chose them, it follows all of the account's relays: MDK reports
     /// only those.
     pub fn reach(&self, chat_id: &str, now: Instant) -> Reach {
+        let links = self.links(chat_id);
+        // Without any relay to go by there is nothing to report.
+        if links.is_empty() || links.iter().any(|link| link.up(now)) {
+            Reach::Internet
+        } else {
+            Reach::Unreachable
+        }
+    }
+
+    /// Whether one of the chat's relays is connected right now, without the grace that
+    /// [`Self::reach`] gives a relay that is opening or just dropped. Messages that waited for a
+    /// path (#46) go over the internet only then.
+    pub fn connected(&self, chat_id: &str) -> bool {
+        let links = self.links(chat_id);
+        links.is_empty() || links.iter().any(|link| link.connected)
+    }
+
+    /// The links a chat goes by: its own relays where the account has them, else all of them.
+    fn links(&self, chat_id: &str) -> Vec<&Link> {
         let own: Vec<&Link> = self
             .chats
             .get(chat_id)
@@ -101,16 +208,10 @@ impl Reachability {
             .flatten()
             .filter_map(|relay| self.relays.get(relay))
             .collect();
-        let links = if own.is_empty() {
+        if own.is_empty() {
             self.relays.values().collect()
         } else {
             own
-        };
-        // Without any relay to go by there is nothing to report.
-        if links.is_empty() || links.iter().any(|link| link.up(now)) {
-            Reach::Internet
-        } else {
-            Reach::Unreachable
         }
     }
 
@@ -216,6 +317,8 @@ mod tests {
         let start = Instant::now();
         let relays = Reachability::new(&links(&[("wss://a", false)]), start);
         assert_eq!(relays.reach("chat", start), Reach::Internet);
+        // In the meantime, nothing is connected.
+        assert!(!relays.connected("chat"));
         assert_eq!(relays.next_change(start), Some(start + DOWN_AFTER));
         assert_eq!(relays.reach("chat", start + DOWN_AFTER), Reach::Unreachable);
     }
@@ -272,6 +375,77 @@ mod tests {
         let relays = Reachability::default();
         assert_eq!(relays.reach("chat", Instant::now()), Reach::Internet);
         assert_eq!(relays.next_change(Instant::now()), None);
+    }
+
+    fn record(key: &str, sf: u8) -> RadioAddress {
+        RadioAddress::parse(&format!(
+            r#"{{"v":0,"mesh":"meshcore","key":"{key}","freq":869618,"bw":62500,"sf":{sf},"cr":8,"at":1}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_radio_counts_as_heard_for_the_window() {
+        let start = Instant::now();
+        let mut heard = Heard::default();
+        heard.set_window(60 * SECOND);
+        let bea = "be".repeat(32);
+        assert!(!heard.is_heard(&bea, start));
+        assert_eq!(heard.next_change(start), None);
+
+        heard.hear(&bea.to_uppercase(), start);
+        assert!(heard.is_heard(&bea, start + 59 * SECOND));
+        assert!(!heard.is_heard(&bea, start + 60 * SECOND));
+        assert_eq!(heard.next_change(start), Some(start + 60 * SECOND));
+        // Heard again, it counts from then.
+        heard.hear(&bea, start + 30 * SECOND);
+        assert!(heard.is_heard(&bea, start + 89 * SECOND));
+        assert_eq!(
+            heard.next_change(start + 89 * SECOND),
+            Some(start + 90 * SECOND)
+        );
+        assert_eq!(heard.next_change(start + 90 * SECOND), None);
+    }
+
+    #[test]
+    fn a_contact_is_reachable_by_radio_only_when_heard_on_the_same_preset() {
+        let now = Instant::now();
+        let mut heard = Heard::default();
+        let own = record(&"ad".repeat(32), 8);
+        let bea = record(&"be".repeat(32), 8);
+        let reach = |own: Option<&RadioAddress>, contact: Option<&RadioAddress>, heard: &Heard| {
+            radio_reach(own, contact, heard, true, now)
+        };
+
+        assert_eq!(reach(None, Some(&bea), &heard), Err(RadioIssue::NoRadio));
+        assert_eq!(
+            reach(Some(&own), None, &heard),
+            Err(RadioIssue::NoContactRadio)
+        );
+        assert_eq!(
+            reach(Some(&own), Some(&bea), &heard),
+            Err(RadioIssue::NotHeard)
+        );
+        heard.hear(&bea.key, now);
+        assert_eq!(reach(Some(&own), Some(&bea), &heard), Ok(()));
+        // Not once the hour's airtime is used.
+        assert_eq!(
+            radio_reach(Some(&own), Some(&bea), &heard, false, now),
+            Err(RadioIssue::AirtimeUsed)
+        );
+
+        // Another preset can't be heard, even when it was.
+        let other = record(&"be".repeat(32), 7);
+        assert_eq!(
+            reach(Some(&own), Some(&other), &heard),
+            Err(RadioIssue::OtherPreset)
+        );
+        let mut elsewhere = bea.clone();
+        elsewhere.mesh = "meshtastic".to_owned();
+        assert_eq!(
+            reach(Some(&own), Some(&elsewhere), &heard),
+            Err(RadioIssue::OtherMesh)
+        );
     }
 
     #[test]

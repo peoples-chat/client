@@ -7,24 +7,32 @@
 //! work without hardware.
 //!
 //! Connecting is specific to a mesh and a link (USB serial, Bluetooth), so each implementation
-//! has its own constructors; everything after that goes through [`Radio`]. Public keys are hex
-//! strings, as elsewhere in the core. Details: `docs/radio.md`.
+//! has its own constructors; everything after that goes through [`Radio`]. [`RadioPorts`] finds
+//! and opens radios plugged in over USB, for pairing (#24). Public keys are hex strings, as
+//! elsewhere in the core. Details: `docs/radio.md`.
 
+mod address;
+pub mod airtime;
 pub mod format;
 mod inbox;
 mod keys;
 mod meshcore;
 mod mock;
+mod ports;
 
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
+pub use self::address::{AddressError, EXPECTED_PRESET, RADIO_ADDRESS_VERSION, RadioAddress};
 pub use self::inbox::{KEPT_EPOCHS, REPLAY_WINDOW, RadioInbox, ReceivedText, Refusal};
 pub use self::keys::{RADIO_KEY_BYTES, RADIO_KEY_LABEL, RadioKey, RadioKeyError, RadioKeys};
 pub use self::meshcore::{MAX_TEXT_BYTES, MeshCoreRadio};
-pub use self::mock::{MockMesh, MockRadio};
+pub use self::mock::{MOCK_SETTINGS, MockMesh, MockPorts, MockRadio};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use self::ports::SerialPorts;
+pub use self::ports::{Port, RadioPorts};
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 256;

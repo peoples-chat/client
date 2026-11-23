@@ -1,0 +1,98 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 20px;
+}
+
+.intro {
+  margin: 0 0 4px;
+  font-size: 15.5px;
+  color: var(--color-muted);
+}
+
+/* An option: an outlined card with an icon in a soft square. */
+.option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+}
+
+.optionIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--color-green-bg);
+  color: var(--color-green-fg);
+}
+
+.optionText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.optionTitle {
+  font-size: 16.5px;
+  font-weight: 600;
+}
+
+.optionDescription {
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.option:disabled,
+.option:disabled .optionDescription,
+.option:disabled .chevron {
+  color: var(--color-disabled);
+}
+
+.option:disabled .optionIcon {
+  background: var(--color-surface);
+  color: var(--color-disabled);
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--color-surface);
+  font-size: 14.5px;
+}
+
+.note p {
+  margin: 0;
+}
+
+.noteIcon {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px max(24px, var(--safe-bottom));
+}
