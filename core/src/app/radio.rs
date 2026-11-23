@@ -22,12 +22,14 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::task::JoinHandle;
 
 use super::{Core, Inner, failed, now_ms, upgrade};
-use crate::interface::{Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioStatus};
+use crate::interface::{
+    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioIssue, RadioStatus,
+};
 use crate::messaging::{RadioAddressItem, TextMessage};
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
 use crate::radio::{Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, ReceivedText, Refusal};
 use crate::radio_store::RadioMessage;
-use crate::reach::Heard;
+use crate::reach::{Heard, radio_reach};
 
 /// How often the core takes each chat's current radio keys while it has a radio. Keys can't be
 /// had while a chat waits for a relay to confirm a change, so the newest are kept beforehand.
@@ -306,7 +308,48 @@ impl Core {
         account: &Account,
         chat_id: &str,
         text: &str,
+        forced: bool,
     ) -> Result<Message, CommandError> {
+        let (radio, contact_radio, epoch, key) = match self.radio_ready(chat_id, text).await {
+            Ok(ready) => ready,
+            // With the switch on, the user wants to know why the radio can't.
+            Err(error) if forced => return Err(error),
+            // Chosen by the rules (#45): the message waits for the internet instead.
+            Err(error) => {
+                log::info!("a message waits for the internet: {}", error.message);
+                return self.send_by_internet(account, chat_id, text).await;
+            }
+        };
+
+        self.radio_sending().insert(chat_id.to_owned());
+        let sent = self
+            .radio_send(account, chat_id, text, radio, &contact_radio, epoch, &key)
+            .await;
+        self.radio_sending().remove(chat_id);
+        let message = sent?;
+        self.apply_message(&message);
+        // Anything else sent in the chat meanwhile waited; it comes in now.
+        for other in self
+            .inner
+            .messaging
+            .chat_messages(&account.public_key, chat_id)
+            .unwrap_or_default()
+        {
+            if other.outgoing {
+                self.apply_message(&other);
+            }
+        }
+        self.chat(chat_id)
+            .and_then(|chat| chat.messages.into_iter().find(|m| m.id == message.id))
+            .ok_or_else(|| failed("send the message", "the message is missing after sending"))
+    }
+
+    /// What a radio send needs, or why the radio can't take `text` in the chat `chat_id`.
+    async fn radio_ready(
+        &self,
+        chat_id: &str,
+        text: &str,
+    ) -> Result<(Arc<dyn Radio>, RadioAddress, u64, crate::radio::RadioKey), CommandError> {
         if !format::fits(text) {
             return Err(CommandError::new(format!(
                 "That is too long for radio. Keep it to {MAX_RADIO_TEXT_BYTES} bytes."
@@ -335,28 +378,19 @@ impl Core {
                 "Could not send by radio: the chat's keys aren't ready. Try again.",
             ));
         };
+        Ok((radio, contact_radio, epoch, key))
+    }
 
-        self.radio_sending().insert(chat_id.to_owned());
-        let sent = self
-            .radio_send(account, chat_id, text, radio, &contact_radio, epoch, &key)
-            .await;
-        self.radio_sending().remove(chat_id);
-        let message = sent?;
-        self.apply_message(&message);
-        // Anything else sent in the chat meanwhile waited; it comes in now.
-        for other in self
-            .inner
-            .messaging
-            .chat_messages(&account.public_key, chat_id)
-            .unwrap_or_default()
-        {
-            if other.outgoing {
-                self.apply_message(&other);
-            }
-        }
-        self.chat(chat_id)
-            .and_then(|chat| chat.messages.into_iter().find(|m| m.id == message.id))
-            .ok_or_else(|| failed("send the message", "the message is missing after sending"))
+    /// Whether the radio of the contact `contact` can be reached now, or why not (#44).
+    pub(super) fn contact_radio_reach(&self, contact: &str) -> Result<(), RadioIssue> {
+        let own = self.own_radio_record();
+        let contact = self.inner.radio_store.contact_radio(contact);
+        radio_reach(
+            own.as_ref(),
+            contact.as_ref(),
+            &self.heard(),
+            tokio::time::Instant::now(),
+        )
     }
 
     /// Hands `text` to MDK, then to the radio. Returns the message as MDK keeps it.
