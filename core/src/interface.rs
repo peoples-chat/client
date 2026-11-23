@@ -64,8 +64,12 @@ pub enum Transport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeliveryState {
-    /// Not sent yet, for example because there is no path.
+    /// Not sent yet, for example because there is no path. A radio message is `waiting` from
+    /// when the radio sends it until the other radio confirms it.
     Waiting,
+    /// The radio sent it, but the other radio didn't confirm it in time, also after a retry
+    /// (#41). It still goes by internet once a relay can be reached. Radio only.
+    TimedOut,
     /// A relay acknowledged it.
     Sent,
     /// The other radio confirmed it. Radio only.

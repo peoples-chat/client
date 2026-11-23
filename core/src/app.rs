@@ -86,6 +86,11 @@ impl Core {
         let avatars = Avatars::new(&options.data_dir);
         let invites = Invites::open(&options.data_dir);
         let radio_store = RadioStore::open(&options.data_dir);
+        // Before the chats load, so that they show radio messages that timed out meanwhile (#41).
+        let awaited = radio_store.after_restart(now_ms()).unwrap_or_else(|error| {
+            log::warn!("could not check the radio confirmations: {error}");
+            Vec::new()
+        });
         let outbox = Outbox::open(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
@@ -134,6 +139,7 @@ impl Core {
         if let Some(account) = account {
             core.follow(&account.public_key).await;
         }
+        core.await_after_restart(awaited);
         Ok(core)
     }
 
@@ -1090,7 +1096,7 @@ impl Core {
                     message: view,
                 }
             }
-            // Delivery only moves forward: waiting, sent, confirmed.
+            // Delivery only moves forward: waiting, timed out, sent, confirmed.
             Some(known)
                 if delivery_rank(view.delivery) > delivery_rank(known.delivery)
                     && let Some(delivery) = view.delivery =>
@@ -1424,6 +1430,8 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
         DeliveryState::Confirmed
     } else if message.acknowledged {
         DeliveryState::Sent
+    } else if radio.is_some_and(|radio| radio.timed_out) {
+        DeliveryState::TimedOut
     } else {
         DeliveryState::Waiting
     };
@@ -1460,6 +1468,8 @@ fn radio_view(radio: &RadioMessage) -> Message {
         transport: Transport::Radio,
         delivery: radio.outgoing.then_some(if radio.confirmed {
             DeliveryState::Confirmed
+        } else if radio.timed_out {
+            DeliveryState::TimedOut
         } else {
             DeliveryState::Waiting
         }),
@@ -1467,13 +1477,15 @@ fn radio_view(radio: &RadioMessage) -> Message {
     }
 }
 
-/// How far a message's delivery has come.
+/// How far a message's delivery has come. A radio message that timed out has come further
+/// than one still waiting for confirmation, and less far than one a relay acknowledged (#41).
 fn delivery_rank(delivery: Option<DeliveryState>) -> u8 {
     match delivery {
         None => 0,
         Some(DeliveryState::Waiting) => 1,
-        Some(DeliveryState::Sent) => 2,
-        Some(DeliveryState::Confirmed) => 3,
+        Some(DeliveryState::TimedOut) => 2,
+        Some(DeliveryState::Sent) => 3,
+        Some(DeliveryState::Confirmed) => 4,
     }
 }
 

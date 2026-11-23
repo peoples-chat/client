@@ -7,34 +7,47 @@
 //! - **Receiving.** A packet goes through the [`RadioInbox`] (#42). What passes it is kept in the
 //!   radio store and shown, marked as radio. When the relay copy arrives later, the chat keeps one
 //!   message.
-//! - **Confirming.** When the other radio confirms a message, it shows as confirmed.
+//! - **Confirming (#41).** When the other radio confirms a message, it shows as confirmed. With
+//!   no confirmation in time, the message goes once more, while the chat is still reachable by
+//!   radio and the hour's airtime allows; with none after that either, it shows as timed out.
+//!   Its relay copy goes as for any radio message, so it still arrives once a relay is back.
 //! - **Addresses (#34).** With a radio, the core shares its radio address record in each direct
 //!   chat, and keeps the records its contacts share as their radios.
 //!
 //! The core uses the radio only while the switch that forces it is on; choosing the transport
 //! by itself is #45.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use super::{Core, Inner, failed, now_ms, upgrade};
 use crate::interface::{
-    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioIssue, RadioStatus,
+    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioIssue, RadioStatus, Reach,
 };
 use crate::messaging::{RadioAddressItem, TextMessage};
 use crate::radio::airtime;
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
 use crate::radio::{Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, ReceivedText, Refusal};
-use crate::radio_store::{RadioMessage, Transmission};
+use crate::radio_store::{RadioMessage, RadioStore, Transmission};
 use crate::reach::{Heard, radio_reach};
 
 /// How often the core takes each chat's current radio keys while it has a radio. Keys can't be
 /// had while a chat waits for a relay to confirm a change, so the newest are kept beforehand.
 const KEY_REFRESH: Duration = Duration::from_secs(60);
+/// What the core adds to the radio's own estimate of how long a confirmation may take: the
+/// confirmation still has to come over the link from the radio (#41). Provisional, until
+/// hardware day measures it (#36).
+const CONFIRM_MARGIN: Duration = Duration::from_secs(1);
+/// How many times the core sends a radio message again when no confirmation comes: once, as
+/// each try costs shared airtime (#41).
+const RADIO_RETRIES: u32 = 1;
+/// How many confirmations the core keeps for messages it hasn't kept yet.
+const EARLY_CONFIRMATIONS: usize = 16;
 
 /// The radio the core uses, and the watcher that follows its events.
 pub(super) struct Attached {
@@ -74,6 +87,30 @@ pub(super) struct RadioParts {
     pub(super) heard: std::sync::Mutex<Heard>,
     /// The airtime the app may use in an hour, when a test sets it (#51).
     pub(super) airtime_cap: std::sync::Mutex<Option<Duration>>,
+    /// How long to wait for the other radio's confirmation, when a test sets it (#41).
+    pub(super) confirm_wait: std::sync::Mutex<Option<Duration>>,
+    /// Confirmations of no message the store holds: the radio can confirm a message before
+    /// `send_text` returns and the message is kept. Held while keeping a sent message or a
+    /// confirmation, so that each sees the other.
+    pub(super) early_confirmations: std::sync::Mutex<VecDeque<String>>,
+}
+
+/// A radio message whose confirmation the core awaits (#41).
+struct Awaited {
+    id: String,
+    chat_id: String,
+    /// How long until its confirmation is due.
+    wait: Duration,
+    /// What a retry needs. None after a restart: retries don't outlive the app.
+    retry: Option<Retry>,
+}
+
+struct Retry {
+    /// The text message that carried the packet: a retry sends it as it was, so a copy that got
+    /// through already is dropped as a replay on the other phone (#42).
+    text: String,
+    bytes: usize,
+    airtime: Duration,
 }
 
 impl Core {
@@ -423,6 +460,27 @@ impl Core {
             .unwrap_or(airtime::HOURLY_AIRTIME)
     }
 
+    /// How long the core waits for the other radio to confirm each try, in place of the radio's
+    /// own estimate: for tests, and for tuning on hardware day (#41).
+    pub fn set_radio_confirm_wait(&self, wait: Duration) {
+        *self
+            .inner
+            .radio
+            .confirm_wait
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(wait);
+    }
+
+    /// How long to wait for a confirmation the radio estimates may take `estimate`.
+    fn confirm_wait(&self, estimate: Duration) -> Duration {
+        self.inner
+            .radio
+            .confirm_wait
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or(estimate + CONFIRM_MARGIN)
+    }
+
     /// Whether the radio has airtime left this hour for the shortest message, and if not, when
     /// some comes free, in milliseconds since the Unix epoch (#51).
     pub(super) fn airtime_left(&self) -> (bool, Option<u64>) {
@@ -506,44 +564,167 @@ impl Core {
                 return Ok(message);
             }
         };
-        let packet = format::seal_text(&key, epoch, counter, sent_at, text);
-        match radio
-            .send_text(&contact_radio.key, &format::to_text_message(&packet))
-            .await
-        {
+        let packet =
+            format::to_text_message(&format::seal_text(&key, epoch, counter, sent_at, text));
+        match radio.send_text(&contact_radio.key, &packet).await {
             Ok(sent) => {
                 // Logged with its airtime: the hourly cap counts it, and the log shows that only
                 // what the user sent went out (#51, #52).
-                let now = now_ms();
-                let logged = self.inner.radio_store.log_transmission(
-                    Transmission {
-                        at: now,
-                        bytes,
-                        airtime_ms: airtime.as_millis().try_into().unwrap_or(u64::MAX),
-                        reason: "message".to_owned(),
-                    },
-                    now,
-                );
-                if let Err(error) = logged {
-                    log::warn!("could not log a radio transmission: {error}");
-                }
-                let kept = self.inner.radio_store.add_message(RadioMessage {
+                self.log_radio_transmission(bytes, airtime, "message");
+                let wait = self.confirm_wait(sent.timeout);
+                let kept = RadioMessage {
                     chat_id: chat_id.to_owned(),
-                    id: message_id,
+                    id: message_id.clone(),
                     outgoing: true,
                     text: text.to_owned(),
                     sent_at: message.sent_at,
-                    ack: Some(sent.ack),
+                    ack: Some(sent.ack.clone()),
+                    retry_acks: Vec::new(),
                     confirmed: false,
-                    kept_at: super::now_ms(),
+                    confirm_by: Some(due(wait)),
+                    timed_out: false,
+                    kept_at: now_ms(),
+                };
+                self.keep_sent(&sent.ack, |store| store.add_message(kept).map(|_| ()));
+                self.await_confirmation(Awaited {
+                    id: message_id,
+                    chat_id: chat_id.to_owned(),
+                    wait,
+                    retry: Some(Retry {
+                        text: packet,
+                        bytes,
+                        airtime,
+                    }),
                 });
-                if let Err(error) = kept {
-                    log::warn!("could not keep a message sent by radio: {error}");
-                }
             }
             Err(error) => log::warn!("a message waits for the internet: the radio failed: {error}"),
         }
         Ok(message)
+    }
+
+    /// Logs a transmission the app caused (#52), with its airtime for the hourly cap (#51).
+    fn log_radio_transmission(&self, bytes: usize, airtime: Duration, reason: &str) {
+        let now = now_ms();
+        let logged = self.inner.radio_store.log_transmission(
+            Transmission {
+                at: now,
+                bytes,
+                airtime_ms: airtime.as_millis().try_into().unwrap_or(u64::MAX),
+                reason: reason.to_owned(),
+            },
+            now,
+        );
+        if let Err(error) = logged {
+            log::warn!("could not log a radio transmission: {error}");
+        }
+    }
+
+    /// Keeps what was sent with the confirmation code `ack`, by `keep`, then takes a
+    /// confirmation that came for it already.
+    fn keep_sent(&self, ack: &str, keep: impl FnOnce(&RadioStore) -> std::io::Result<()>) {
+        let early = {
+            let mut early = self.early_confirmations();
+            if let Err(error) = keep(&self.inner.radio_store) {
+                log::warn!("could not keep a message sent by radio: {error}");
+            }
+            early
+                .iter()
+                .position(|code| code == ack)
+                .and_then(|at| early.remove(at))
+        };
+        if early.is_some() {
+            self.radio_confirmed(ack);
+        }
+    }
+
+    /// Waits for the confirmation of `awaited` (#41).
+    fn await_confirmation(&self, awaited: Awaited) {
+        tokio::spawn(await_confirmation(Arc::downgrade(&self.inner), awaited));
+    }
+
+    /// After a restart: waits for the confirmations still due, without retries.
+    pub(super) fn await_after_restart(&self, awaited: Vec<RadioMessage>) {
+        let now = now_ms();
+        for message in awaited {
+            let due = message.confirm_by.unwrap_or(now);
+            self.await_confirmation(Awaited {
+                id: message.id,
+                chat_id: message.chat_id,
+                wait: Duration::from_millis(due.saturating_sub(now)),
+                retry: None,
+            });
+        }
+    }
+
+    /// Sends the message of `awaited` again, while the chat is still reachable by radio, the
+    /// internet doesn't carry it instead, and the hour's airtime allows. Returns how long to wait
+    /// for this try's confirmation.
+    async fn retry_by_radio(&self, awaited: &Awaited, retry: &Retry) -> Option<Duration> {
+        let chat = self.chat(&awaited.chat_id)?;
+        if let Err(issue) = self.contact_radio_reach(&chat.contact.public_key) {
+            log::info!("no radio retry: {issue:?}");
+            return None;
+        }
+        // By the rules of #45: once a relay is back, the internet carries the message.
+        let relays_up = self.reach().reach(&awaited.chat_id, Instant::now()) == Reach::Internet;
+        if relays_up && !self.inner.radio_store.forced() {
+            return None;
+        }
+        let (used, _) = self.inner.radio_store.airtime_used(now_ms());
+        if Duration::from_millis(used) + retry.airtime > self.airtime_cap() {
+            log::info!("no radio retry: the hour's airtime is used");
+            return None;
+        }
+        let radio = self
+            .attached()
+            .as_ref()
+            .map(|attached| Arc::clone(&attached.radio))?;
+        let contact_radio = self
+            .inner
+            .radio_store
+            .contact_radio(&chat.contact.public_key)?;
+        let sent = match radio.send_text(&contact_radio.key, &retry.text).await {
+            Ok(sent) => sent,
+            Err(error) => {
+                log::warn!("a radio retry failed: {error}");
+                return None;
+            }
+        };
+        self.log_radio_transmission(retry.bytes, retry.airtime, "retry");
+        let wait = self.confirm_wait(sent.timeout);
+        let ack = sent.ack.clone();
+        self.keep_sent(&sent.ack, |store| {
+            store.retried(&awaited.id, ack, due(wait)).map(|_| ())
+        });
+        Some(wait)
+    }
+
+    /// No confirmation came in time for the message `id`, after any retries.
+    fn radio_timed_out(&self, id: &str) {
+        let timed_out = match self.inner.radio_store.time_out(id) {
+            Ok(Some(message)) => message,
+            Ok(None) => return,
+            Err(error) => {
+                log::warn!("could not note a radio message that timed out: {error}");
+                return;
+            }
+        };
+        log::info!("a radio message timed out");
+        self.show_sent(&timed_out);
+    }
+
+    /// Shows the sent radio message `radio` as the store has it now.
+    fn show_sent(&self, radio: &RadioMessage) {
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        if let Some(message) =
+            self.inner
+                .messaging
+                .chat_message(&account.public_key, &radio.chat_id, &radio.id)
+        {
+            self.apply_message(&message);
+        }
     }
 
     /// Whether a radio send is in flight in the chat `chat_id`.
@@ -643,8 +824,11 @@ impl Core {
             text: message.text.clone(),
             sent_at: message.sent_at,
             ack: None,
+            retry_acks: Vec::new(),
             confirmed: false,
-            kept_at: super::now_ms(),
+            confirm_by: None,
+            timed_out: false,
+            kept_at: now_ms(),
         });
         if let Err(error) = kept {
             // Shown anyway; after a restart it is gone until its relay copy arrives.
@@ -673,26 +857,28 @@ impl Core {
         self.inbox().receive(packet, from_chat, known)
     }
 
-    /// The other radio confirmed the message sent with `ack`.
+    /// The other radio confirmed the message sent with `ack`: its first try or a retry, also
+    /// after it timed out.
     fn radio_confirmed(&self, ack: &str) {
-        let confirmed = match self.inner.radio_store.confirm(ack) {
-            Ok(Some(message)) => message,
-            Ok(None) => return,
-            Err(error) => {
-                log::warn!("could not keep a radio confirmation: {error}");
-                return;
+        let confirmed = {
+            let mut early = self.early_confirmations();
+            match self.inner.radio_store.confirm(ack) {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    // The radio may confirm before the message is kept: `keep_sent` looks here.
+                    if early.len() >= EARLY_CONFIRMATIONS {
+                        early.pop_front();
+                    }
+                    early.push_back(ack.to_owned());
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("could not keep a radio confirmation: {error}");
+                    return;
+                }
             }
         };
-        let Some(account) = self.state().account.clone() else {
-            return;
-        };
-        if let Some(message) = self.inner.messaging.chat_message(
-            &account.public_key,
-            &confirmed.chat_id,
-            &confirmed.id,
-        ) {
-            self.apply_message(&message);
-        }
+        self.show_sent(&confirmed);
         // The contact's radio confirmed it, so it was heard.
         let radio = self.chat(&confirmed.chat_id).and_then(|chat| {
             self.inner
@@ -714,6 +900,7 @@ impl Core {
         self.stop_radio();
         self.inbox().clear();
         self.heard().clear();
+        self.early_confirmations().clear();
         if let Err(error) = self.inner.radio_store.clear() {
             log::warn!("could not remove the radio store: {error}");
         }
@@ -749,6 +936,48 @@ impl Core {
             .sending
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn early_confirmations(&self) -> MutexGuard<'_, VecDeque<String>> {
+        self.inner
+            .radio
+            .early_confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// When a confirmation awaited for `wait` from now is due, in milliseconds since the Unix epoch.
+fn due(wait: Duration) -> u64 {
+    now_ms().saturating_add(wait.as_millis().try_into().unwrap_or(u64::MAX))
+}
+
+/// Waits for the confirmation of `awaited`. Without one in time, sends the message again, up
+/// to [`RADIO_RETRIES`] times while it may, then marks it timed out (#41).
+async fn await_confirmation(core: Weak<Inner>, awaited: Awaited) {
+    let mut wait = awaited.wait;
+    let mut retries = 0;
+    loop {
+        tokio::time::sleep(wait).await;
+        let Some(core) = upgrade(&core) else { return };
+        let awaiting = core
+            .inner
+            .radio_store
+            .message(&awaited.id)
+            .is_some_and(|message| !message.confirmed && !message.timed_out);
+        if !awaiting {
+            return;
+        }
+        if retries < RADIO_RETRIES
+            && let Some(retry) = &awaited.retry
+            && let Some(next) = core.retry_by_radio(&awaited, retry).await
+        {
+            retries += 1;
+            wait = next;
+            continue;
+        }
+        core.radio_timed_out(&awaited.id);
+        return;
     }
 }
 
