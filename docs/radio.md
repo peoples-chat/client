@@ -4,9 +4,9 @@ The core talks to a paired LoRa radio through a radio transport (#60). Each mesh
 different meshes can't talk to each other, and a radio runs one mesh at a time. MeshCore comes first, through
 [meshcore-rs](https://github.com/andrewdavidmackenzie/meshcore-rs). Meshtastic follows after the MVP.
 
-The core sends and receives chat text through a radio it is handed (#40). It sends by radio when no relay is reachable
-and the contact's radio has been heard (#44, #45), or while the switch that forces radio is on.
-Pairing a real radio comes with #24, and the path for the packets with #36; until then the tests use mock radios.
+The core sends and receives chat text through the radio the user paired (#40). It sends by radio when no relay is
+reachable and the contact's radio has been heard (#44, #45), or while the switch that forces radio is on. Computers pair
+a radio over USB ([Pairing](#pairing), #24); phones will over Bluetooth (#23). The path for the packets comes with #36.
 [radio-format-v0.md](radio-format-v0.md#in-the-core) describes how the core sends and receives.
 
 **Addresses.** Each app learns its contacts' radios from their radio address records (#34), with nobody doing
@@ -88,6 +88,39 @@ and it is all the app claims: a message is `confirmed`, or `timedOut` when no co
 switched off, a restart, and the relays' return; and that no retry goes once the contact's radio isn't heard anymore,
 or the hour's airtime has no room for it.
 
+## Pairing
+
+A computer pairs a MeshCore companion radio over USB (#24): the user plugs it in and picks its port in Settings →
+Radio → Pair a radio. The radio's public key becomes the user's address on the mesh, which the core shares with every
+contact as its radio address record (#34). [core-interface.md](core-interface.md#radio) has the commands and what the
+interface shows.
+
+- **The ports** (`RadioPorts` in `core/src/radio/ports.rs`). `SerialPorts` lists the computer's USB serial ports.
+  A Mac lists each one twice, as `/dev/cu.…` and `/dev/tty.…`; only the `cu` one is kept, because the `tty` one waits
+  for a carrier when it is opened. Bluetooth ports and debug consoles are left out. Linux without udev can't say what
+  is behind a port, so its USB serial ports are known by their names (`ttyACM`, `ttyUSB`).
+- **Pairing** opens the radio on the chosen port with `MeshCoreRadio::connect_serial`, reads its key, name and
+  settings, and keeps them in `radio.json` with the port and the USB device's serial number. A device that doesn't
+  answer as a companion radio within meshcore-rs's timeout isn't paired, and its port is let go of at once.
+- **The preset.** The interface shows the radio's frequency, bandwidth, spreading factor and coding rate, and warns
+  when they aren't MeshCore's EU/UK (Narrow) preset: 869.618 MHz, 62.5 kHz, spreading factor 8, coding rate 4/8
+  (`EXPECTED_PRESET`). It compares the same four numbers as reach does (#44).
+- **Read only.** Pairing and opening the radio again send the companion protocol's greeting, the device query and
+  the contact list request, and nothing that changes a setting. Changing the radio's frequency or region is left to
+  the MeshCore app.
+- **Opening it again.** The core opens the paired radio at start, and when its link drops, because the radio restarted
+  or its cable was pulled. It looks on the radio's own port, or on another port with its USB serial number, so it is
+  found when it is plugged in elsewhere. It waits a second before the first look after a drop, then twice as long each
+  time, up to 10 seconds. A look only lists the ports until the radio's port is there, so it costs little. Another
+  radio on that port is let go of again: the radio must have the paired key.
+- **While the app runs it holds the radio's port.** Quit it to use the radio with another app over USB.
+- **Forgetting** closes the link and forgets the radio. Deleting the account forgets it too.
+
+`core/tests/radio_pairing.rs` checks this with mock radios on mock ports (`MockPorts`): listing, pairing, a device that
+isn't a radio, a port that went, the preset and its warning, remembering the radio across a restart, opening it again
+after it restarts or moves to another port, not taking another radio for it, and forgetting it, also with the
+account. Trying it on a real radio waits for hardware day (#12).
+
 ## The interface
 
 `Radio` in `core/src/radio/mod.rs`:
@@ -108,11 +141,13 @@ or the hour's airtime has no room for it.
 **Implementations:**
 
 - **`MeshCoreRadio`** (`core/src/radio/meshcore.rs`):
-  - `connect_serial(port)` connects over USB serial on desktops.
+  - `connect_serial(port)` connects over USB serial on desktops. A radio that doesn't answer its greeting, or that is
+    dropped, lets go of the port, so that it can be opened again (#24).
   - `over(commands, dispatcher)` works over meshcore-rs's command handler and event dispatcher. That is for a link
     the app runs itself, such as Bluetooth on phones (#23), and for tests.
 - **`MockMesh` and `MockRadio`** (`core/src/radio/mock.rs`): radios on a mesh in memory. They hear each other, confirm
-  delivery, and can be taken out of range. They're for tests and for interface work without hardware.
+  delivery, and can be taken out of range. They're for tests and for interface work without hardware. `MockPorts`
+  plugs them into mock USB ports, for pairing (#24).
 
 **Text** is at most 160 bytes of UTF-8 and has no NUL character. `send_text` refuses anything else before it reaches
 the radio. Shorter limits for the mesh's sake come with #51.
@@ -128,6 +163,9 @@ cargo run -p peoples-chat-core --example radio_info -- /dev/cu.usbmodem1101  # d
 
 It prints the radio's public key, name, LoRa settings, firmware and contacts. It only reads: it changes nothing on the
 radio. Waiting for radios: #12.
+
+In the app on the computer (`pnpm tauri dev`), Settings → Radio → Pair a radio lists the same ports and pairs the
+radio ([Pairing](#pairing)). Quit `radio_info` first: only one program can hold the port.
 
 ## meshcore-rs
 
