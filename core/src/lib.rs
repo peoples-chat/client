@@ -10,6 +10,7 @@ pub mod interface;
 mod invite;
 mod invites;
 mod messaging;
+mod outbox;
 mod photo;
 pub mod radio;
 mod radio_store;

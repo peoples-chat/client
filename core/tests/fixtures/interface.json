@@ -118,6 +118,24 @@
       "delivery": "sent"
     },
     {
+      "type": "messageAdded",
+      "chatId": "chat-2",
+      "message": {
+        "id": "queued-3f9a0c4be1d27586",
+        "direction": "out",
+        "text": "Are you safe?",
+        "sentAt": 1795300200000,
+        "transport": "internet",
+        "delivery": "waiting",
+        "cancellable": true
+      }
+    },
+    {
+      "type": "messageRemoved",
+      "chatId": "chat-2",
+      "messageId": "queued-3f9a0c4be1d27586"
+    },
+    {
       "type": "reachChanged",
       "chatId": "chat-2",
       "reach": "unreachable",

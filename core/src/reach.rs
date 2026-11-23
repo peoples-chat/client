@@ -178,6 +178,25 @@ impl Reachability {
     /// when someone else's app chose them, it follows all of the account's relays: MDK reports
     /// only those.
     pub fn reach(&self, chat_id: &str, now: Instant) -> Reach {
+        let links = self.links(chat_id);
+        // Without any relay to go by there is nothing to report.
+        if links.is_empty() || links.iter().any(|link| link.up(now)) {
+            Reach::Internet
+        } else {
+            Reach::Unreachable
+        }
+    }
+
+    /// Whether one of the chat's relays is connected right now, without the grace that
+    /// [`Self::reach`] gives a relay that is opening or just dropped. Messages that waited for a
+    /// path (#46) go over the internet only then.
+    pub fn connected(&self, chat_id: &str) -> bool {
+        let links = self.links(chat_id);
+        links.is_empty() || links.iter().any(|link| link.connected)
+    }
+
+    /// The links a chat goes by: its own relays where the account has them, else all of them.
+    fn links(&self, chat_id: &str) -> Vec<&Link> {
         let own: Vec<&Link> = self
             .chats
             .get(chat_id)
@@ -185,16 +204,10 @@ impl Reachability {
             .flatten()
             .filter_map(|relay| self.relays.get(relay))
             .collect();
-        let links = if own.is_empty() {
+        if own.is_empty() {
             self.relays.values().collect()
         } else {
             own
-        };
-        // Without any relay to go by there is nothing to report.
-        if links.is_empty() || links.iter().any(|link| link.up(now)) {
-            Reach::Internet
-        } else {
-            Reach::Unreachable
         }
     }
 
@@ -300,6 +313,8 @@ mod tests {
         let start = Instant::now();
         let relays = Reachability::new(&links(&[("wss://a", false)]), start);
         assert_eq!(relays.reach("chat", start), Reach::Internet);
+        // In the meantime, nothing is connected.
+        assert!(!relays.connected("chat"));
         assert_eq!(relays.next_change(start), Some(start + DOWN_AFTER));
         assert_eq!(relays.reach("chat", start + DOWN_AFTER), Reach::Unreachable);
     }

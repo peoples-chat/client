@@ -283,6 +283,19 @@ pub async fn send_message<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn cancel_message<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), CommandError> {
+    slot.get(&app)
+        .await?
+        .cancel_message(&chat_id, &message_id)
+        .await
+}
+
+#[tauri::command]
 pub async fn set_force_radio<R: Runtime>(
     app: AppHandle<R>,
     slot: State<'_, CoreSlot>,

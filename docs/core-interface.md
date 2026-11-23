@@ -54,6 +54,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `createInvite(name)` | `create_invite` | `SentInvite` | `inviteChanged` | Done (#95) |
 | `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
 | `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40, #45) |
+| `cancelMessage(chatId, messageId)` | `cancel_message` | | `messageRemoved` | Done (#46) |
 | `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
@@ -69,6 +70,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
@@ -85,7 +87,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -323,8 +325,9 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
   back", with the reason radio can't help, such as "Astrid's radio uses another preset." It opens Radio and privacy,
   which says what radio protects and what it doesn't.
 - **Each radio message** is marked "Radio", in the radio colour, next to its time and delivery.
-- **In radio mode, the field** takes short text only. A counter shows UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in
-  `src/core/types.ts`), and Send stays off past it.
+- **In radio mode, the field** counts UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in `src/core/types.ts`). Past it,
+  the counter says "Waits for internet" and Send sends the message to wait (#46); with radio forced, Send stays off.
+- **A waiting message** has Cancel under it, and "Too long for radio. It waits for the internet." when that's why.
 
 The core marks a chat `radio` when the contact's radio has been heard (#44), and sends there by radio by itself (#45).
 The mock's demo has a chat reached by radio.
@@ -343,10 +346,20 @@ The snapshot's `radio` says which radio the core uses, and `radioChanged` carrie
 1. the internet while one of the chat's relays is reachable;
 2. otherwise radio, when the contact's radio has been heard on the mesh and preset of the user's radio (the chat's
    `reach` is `radio`);
-3. otherwise the message waits, and goes out when a relay is back.
+3. otherwise the message waits (#46).
 
 The switch sends by radio before any rule, for testing. `core/src/transport.rs` holds the rules, with a table of every
 combination in its tests.
+
+**Waiting messages** (#46). A message with no path, or too long for the only path (radio), waits in the core
+(`core/src/outbox.rs`, `outbox.json`), not in MDK, so that it can still be cancelled:
+
+- It is `waiting` and `cancellable`, under a provisional id. `cancelMessage` takes it away with `messageRemoved`; a
+  message MDK has gives "This message is on its way already."
+- It stays across a restart, in the order it was written.
+- **When a path returns,** the chat's waiting messages go in that order, by the rules above: over the internet once a
+  relay is connected, else by radio. One too long for radio keeps waiting for the internet, while shorter ones after it
+  go by radio. Each comes back under the core's id with `messageAdded`, and `messageRemoved` takes the waiting one away.
 
 **Sending by radio.** `sendMessage` checks first. With the switch on, it says why it can't send; chosen by the rules,
 a message the radio can't take waits for the internet instead:

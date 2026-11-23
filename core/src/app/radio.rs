@@ -49,6 +49,14 @@ impl Drop for Attached {
     }
 }
 
+/// What a radio send needs: the radio, the contact's radio, and the chat's newest keys.
+pub(super) struct RadioReady {
+    radio: Arc<dyn Radio>,
+    contact_radio: RadioAddress,
+    epoch: u64,
+    key: crate::radio::RadioKey,
+}
+
 /// The radio parts of the core's state.
 #[derive(Default)]
 pub(super) struct RadioParts {
@@ -308,19 +316,14 @@ impl Core {
         account: &Account,
         chat_id: &str,
         text: &str,
-        forced: bool,
+        ready: RadioReady,
     ) -> Result<Message, CommandError> {
-        let (radio, contact_radio, epoch, key) = match self.radio_ready(chat_id, text).await {
-            Ok(ready) => ready,
-            // With the switch on, the user wants to know why the radio can't.
-            Err(error) if forced => return Err(error),
-            // Chosen by the rules (#45): the message waits for the internet instead.
-            Err(error) => {
-                log::info!("a message waits for the internet: {}", error.message);
-                return self.send_by_internet(account, chat_id, text).await;
-            }
-        };
-
+        let RadioReady {
+            radio,
+            contact_radio,
+            epoch,
+            key,
+        } = ready;
         self.radio_sending().insert(chat_id.to_owned());
         let sent = self
             .radio_send(account, chat_id, text, radio, &contact_radio, epoch, &key)
@@ -345,11 +348,11 @@ impl Core {
     }
 
     /// What a radio send needs, or why the radio can't take `text` in the chat `chat_id`.
-    async fn radio_ready(
+    pub(super) async fn radio_ready(
         &self,
         chat_id: &str,
         text: &str,
-    ) -> Result<(Arc<dyn Radio>, RadioAddress, u64, crate::radio::RadioKey), CommandError> {
+    ) -> Result<RadioReady, CommandError> {
         if !format::fits(text) {
             return Err(CommandError::new(format!(
                 "That is too long for radio. Keep it to {MAX_RADIO_TEXT_BYTES} bytes."
@@ -378,7 +381,12 @@ impl Core {
                 "Could not send by radio: the chat's keys aren't ready. Try again.",
             ));
         };
-        Ok((radio, contact_radio, epoch, key))
+        Ok(RadioReady {
+            radio,
+            contact_radio,
+            epoch,
+            key,
+        })
     }
 
     /// Whether the radio of the contact `contact` can be reached now, or why not (#44).

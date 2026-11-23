@@ -53,6 +53,15 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
     }
   }
 
+  async function cancel(messageId: string) {
+    setError(null);
+    try {
+      await core.cancelMessage(chatId, messageId);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
   async function sendSuggestion(text: string) {
     setSending(true);
     try {
@@ -81,6 +90,8 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
       />
       <MessageList
         messages={chat.messages}
+        onCancel={cancel}
+        byRadio={byRadio}
         empty={
           <ChatIntro
             contact={chat.contact}
@@ -134,7 +145,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           ))}
         </div>
       )}
-      <Composer onSend={send} mode={byRadio ? "radio" : "internet"} />
+      <Composer onSend={send} mode={byRadio ? "radio" : "internet"} longWaits={!radio.forced} />
     </div>
   );
 }

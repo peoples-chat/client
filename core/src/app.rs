@@ -24,6 +24,7 @@ use crate::messaging::{
     ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
     PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
+use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
 use crate::radio_store::{RadioMessage, RadioStore};
@@ -31,6 +32,7 @@ use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
 
 mod radio;
+mod waiting;
 
 /// How many events a listener may fall behind before it misses some.
 const EVENT_BUFFER: usize = 64;
@@ -70,6 +72,10 @@ struct Inner {
     radio_store: RadioStore,
     /// The radio the core uses, and the chats' radio keys.
     radio: radio::RadioParts,
+    /// Messages waiting for a path (#46).
+    outbox: Outbox,
+    /// Chats whose waiting messages are being sent.
+    flushing: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Core {
@@ -80,6 +86,7 @@ impl Core {
         let avatars = Avatars::new(&options.data_dir);
         let invites = Invites::open(&options.data_dir);
         let radio_store = RadioStore::open(&options.data_dir);
+        let outbox = Outbox::open(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
@@ -120,6 +127,8 @@ impl Core {
                 invites,
                 radio_store,
                 radio: radio::RadioParts::default(),
+                outbox,
+                flushing: Mutex::new(std::collections::HashSet::new()),
             }),
         };
         if let Some(account) = account {
@@ -429,6 +438,9 @@ impl Core {
             log::warn!("could not remove the invitations: {error}");
         }
         self.forget_radio();
+        if let Err(error) = self.inner.outbox.clear() {
+            log::warn!("could not remove the waiting messages: {error}");
+        }
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
     }
@@ -667,9 +679,20 @@ impl Core {
         let relays_up = self.reach().reach(chat_id, Instant::now()) == Reach::Internet;
         let radio = self.contact_radio_reach(&chat.contact.public_key);
         match route(forced, relays_up, radio) {
-            Route::Radio => self.send_by_radio(&account, chat_id, text, forced).await,
-            // Waiting, MDK keeps the message and sends it once a relay is back.
-            Route::Internet | Route::Wait => self.send_by_internet(&account, chat_id, text).await,
+            Route::Internet => self.send_by_internet(&account, chat_id, text).await,
+            Route::Radio => match self.radio_ready(chat_id, text).await {
+                Ok(ready) => self.send_by_radio(&account, chat_id, text, ready).await,
+                // With the switch on, the user wants to know why the radio can't.
+                Err(error) if forced => Err(error),
+                // Chosen by the rules: too long for radio, for example. It waits for the
+                // internet (#46).
+                Err(error) => {
+                    log::info!("a message waits for the internet: {}", error.message);
+                    self.queue_message(chat_id, text)
+                }
+            },
+            // No path: the core keeps it until one returns, and it can be cancelled (#46).
+            Route::Wait => self.queue_message(chat_id, text),
         }
     }
 
@@ -1137,10 +1160,24 @@ impl Core {
                 });
             }
         }
-        [reachability.next_change(now), heard.next_change(now)]
+        let next = [reachability.next_change(now), heard.next_change(now)]
             .into_iter()
             .flatten()
-            .min()
+            .min();
+        // Waiting messages go where a path is (#46).
+        let with_path: Vec<String> = state
+            .chats
+            .iter()
+            .filter(|chat| chat.reach != Reach::Unreachable)
+            .map(|chat| chat.id.clone())
+            .collect();
+        drop(heard);
+        drop(reachability);
+        drop(state);
+        for chat_id in with_path {
+            self.send_waiting_soon(&chat_id);
+        }
+        next
     }
 
     /// Looks at each chat's reach again now, and wakes the relays' watcher to look again when it
@@ -1166,13 +1203,15 @@ impl Core {
                 }
             };
         let kept = store.messages_in(chat_id);
-        let radio_only: Vec<Message> = kept
+        let mut more: Vec<Message> = kept
             .iter()
             .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
             .map(radio_view)
             .collect();
-        if !radio_only.is_empty() {
-            messages.extend(radio_only);
+        // Messages that wait for a path (#46).
+        more.extend(self.queued_messages(chat_id));
+        if !more.is_empty() {
+            messages.extend(more);
             // Times are whole seconds. Within one, what this phone kept first comes first.
             let kept_at = |id: &str| {
                 kept.iter()
@@ -1386,6 +1425,7 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
             Transport::Internet
         },
         delivery: message.outgoing.then_some(delivery),
+        cancellable: false,
     }
 }
 
@@ -1406,6 +1446,7 @@ fn radio_view(radio: &RadioMessage) -> Message {
         } else {
             DeliveryState::Waiting
         }),
+        cancellable: false,
     }
 }
 

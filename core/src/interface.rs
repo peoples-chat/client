@@ -95,6 +95,11 @@ pub struct Message {
     /// Outgoing messages only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryState>,
+    /// The message waits for a path, and the user can still cancel it (#46). Its id is
+    /// provisional: once it goes, `messageRemoved` takes it away and `messageAdded` brings it
+    /// with MDK's id.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancellable: bool,
 }
 
 /// How a chat's messages can travel now (#43).
@@ -280,6 +285,12 @@ pub enum CoreEvent {
         chat_id: String,
         message_id: String,
         delivery: DeliveryState,
+    },
+    /// A message is gone: the user cancelled it while it waited, or it went, and came back
+    /// under MDK's id (#46).
+    MessageRemoved {
+        chat_id: String,
+        message_id: String,
     },
     /// How a chat's messages can travel changed: its relays went away or came back, or the
     /// contact's radio was heard or not any more (#44).

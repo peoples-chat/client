@@ -277,23 +277,27 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
 
-      // As the core does: radio carries short text, also when it is forced (#40), and a chat
-      // that can't be reached keeps it.
-      const radio = chat.reach === "radio" || state.forceRadio;
-      if (radio && radioBytes(body) > RADIO_TEXT_LIMIT) {
+      // As the core does: radio carries short text, also when it is forced (#40). With the
+      // switch on, longer text is refused; otherwise it waits for the internet (#46), as
+      // everything does in a chat that can't be reached.
+      const tooLong = radioBytes(body) > RADIO_TEXT_LIMIT;
+      if (state.forceRadio && tooLong) {
         throw new CoreError(`That is too long for radio. Keep it to ${RADIO_TEXT_LIMIT} bytes.`);
       }
+      const radio = state.forceRadio || (chat.reach === "radio" && !tooLong);
+      const waits = !radio && chat.reach !== "internet";
       const message: Message = {
-        id: randomHex(8),
+        id: waits ? `queued-${randomHex(8)}` : randomHex(8),
         direction: "out",
         text: body,
         sentAt: now(),
         transport: radio ? "radio" : "internet",
         delivery: "waiting",
+        ...(waits ? { cancellable: true } : {}),
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
-      if (chat.reach === "unreachable" && !radio) return structuredClone(message);
+      if (waits) return structuredClone(message);
 
       later(delays.sent, () => {
         // On radio, the other radio confirms; on the internet, a relay acknowledges.
@@ -303,6 +307,16 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         scheduleReply(chatId);
       });
       return structuredClone(message);
+    },
+
+    async cancelMessage(chatId, messageId) {
+      requireAccount();
+      const chat = chatById(chatId);
+      const message = chat.messages.find((m) => m.id === messageId);
+      if (!message) throw new CoreError("This message no longer exists.");
+      if (!message.cancellable) throw new CoreError("This message is on its way already.");
+      chat.messages = chat.messages.filter((m) => m.id !== messageId);
+      emit({ type: "messageRemoved", chatId, messageId });
     },
 
     // The demo's radio reaches every contact, so the switch is all it takes.

@@ -142,14 +142,18 @@ async fn each_message_takes_the_path_there_is() {
     let waiting = ada.send_message(&chat_id, "Waiting").await.unwrap();
     assert_eq!(waiting.transport, Transport::Internet);
     assert_eq!(waiting.delivery, Some(DeliveryState::Waiting));
+    assert!(waiting.cancellable);
 
     // The relay is back: the waiting message goes, and so does the next, over the relay.
     relay.unblock();
     reach_becomes(&ada, &chat_id, Reach::Internet).await;
+    // It went under MDK's id, in place of the waiting one (#46).
     until("the waiting message to be sent", || {
         messages(&ada, &chat_id)
             .iter()
-            .any(|m| m.id == waiting.id && m.delivery == Some(DeliveryState::Sent))
+            .any(|m| {
+                m.text == "Waiting" && m.id != waiting.id && m.delivery == Some(DeliveryState::Sent)
+            })
             .then_some(())
     })
     .await;
