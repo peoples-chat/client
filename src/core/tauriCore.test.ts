@@ -70,6 +70,8 @@ describe("Tauri core", () => {
     const answers: Record<string, unknown> = {
       create_account: account,
       update_profile: account,
+      set_profile_photo: account,
+      remove_profile_photo: account,
       add_contact: chat,
       accept_invitation: chat,
       send_message: message,
@@ -80,6 +82,8 @@ describe("Tauri core", () => {
 
     expect(await core.createAccount("Emil Dahl")).toEqual(account);
     expect(await core.updateProfile("Emil Dahl", "Aarhus")).toEqual(account);
+    expect(await core.setProfilePhoto(new Uint8Array([0xff, 0xd8]))).toEqual(account);
+    expect(await core.removeProfilePhoto()).toEqual(account);
     expect(await core.addContact("nostr:nprofile1abc")).toEqual(chat);
     expect(await core.acceptInvitation("inv-1")).toEqual(chat);
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
@@ -89,6 +93,8 @@ describe("Tauri core", () => {
     expect(calls.slice(1)).toEqual([
       'create_account {"name":"Emil Dahl"}',
       'update_profile {"name":"Emil Dahl","about":"Aarhus"}',
+      'set_profile_photo {"0":255,"1":216}',
+      "remove_profile_photo",
       'add_contact {"inviteLink":"nostr:nprofile1abc"}',
       'accept_invitation {"invitationId":"inv-1"}',
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
@@ -133,8 +139,17 @@ describe("the JSON shared with the Rust core", () => {
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
       reachChanged: (next) => expect(next.chats.map((c) => c.reach)).toEqual(["radio", "unreachable"]),
       relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
-      accountChanged: (next) => expect([next.account?.name, next.account?.about]).toEqual(["Emil D.", "Aarhus, Denmark"]),
-      contactChanged: (next) => expect(next.invitations[0].from.name).toBe("Karen W."),
+      accountChanged: (next) =>
+        expect([next.account?.name, next.account?.about, next.account?.photo?.slice(0, 23)]).toEqual([
+          "Emil D.",
+          "Aarhus, Denmark",
+          "data:image/jpeg;base64,",
+        ]),
+      contactChanged: (next) =>
+        expect([next.invitations[0].from.name, next.invitations[0].from.photo?.slice(0, 23)]).toEqual([
+          "Karen W.",
+          "data:image/jpeg;base64,",
+        ]),
       invitationReceived: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1", "inv-2"]),
       invitationRemoved: (next) => expect(next.invitations.map((i) => i.id)).toEqual(["inv-1"]),
       accountDeleted: (next) => expect(next).toMatchObject({ account: null, chats: [], invitations: [], relays: [] }),

@@ -80,22 +80,29 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return { ...state, account: event.account };
 
     case "contactChanged":
-      return renameContact(state, event.contact);
+      return updateContact(state, event.contact);
   }
 }
 
 function sameAccount(a: Account, b: Account): boolean {
-  return a.name === b.name && a.about === b.about && a.publicKey === b.publicKey && a.inviteLink === b.inviteLink;
+  return (
+    a.name === b.name &&
+    a.about === b.about &&
+    a.photo === b.photo &&
+    a.publicKey === b.publicKey &&
+    a.inviteLink === b.inviteLink
+  );
 }
 
-/** Gives the contact a new name in their chats and invitations. */
-function renameContact(state: AppState, contact: Contact): AppState {
-  const renamed = (current: Contact) => current.publicKey === contact.publicKey && current.name !== contact.name;
-  if (!state.chats.some((c) => renamed(c.contact)) && !state.invitations.some((i) => renamed(i.from))) return state;
+/** Gives the contact their new name and photo in their chats and invitations. */
+function updateContact(state: AppState, contact: Contact): AppState {
+  const outdated = (current: Contact) =>
+    current.publicKey === contact.publicKey && (current.name !== contact.name || current.photo !== contact.photo);
+  if (!state.chats.some((c) => outdated(c.contact)) && !state.invitations.some((i) => outdated(i.from))) return state;
   return {
     ...state,
-    chats: state.chats.map((c) => (renamed(c.contact) ? { ...c, contact: { ...c.contact, name: contact.name } } : c)),
-    invitations: state.invitations.map((i) => (renamed(i.from) ? { ...i, from: { ...i.from, name: contact.name } } : i)),
+    chats: state.chats.map((c) => (outdated(c.contact) ? { ...c, contact } : c)),
+    invitations: state.invitations.map((i) => (outdated(i.from) ? { ...i, from: contact } : i)),
   };
 }
 

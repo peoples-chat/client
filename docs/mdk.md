@@ -22,7 +22,8 @@ lower `marmot-session` crate.
 | `accept_direct_chat` | `accept_group_invite` |
 | `follow_direct_chats` | `subscribe_chats` |
 | `known_name`, `contact_name`, `fetch_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
-| `own_about`, `update_profile` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
+| `own_about`, `known_picture`, `update_profile`, `set_picture` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
+| `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
 | `chat_started_at` | `chat_list_row` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
@@ -267,6 +268,21 @@ so the core adds them to the invitation.
 finds, and has no event for changes. The core fetches its contacts' profiles when it starts following the account and
 every 5 minutes after, from our relays.
 
+**Photos** (#94).
+
+- **Uploading:** `upload_profile_image` puts a photo on a Blossom media server (BUD-02: `PUT /upload`, signed with the
+  account key) and returns its address.
+  - The core passes the server: `DEFAULT_MEDIA_SERVER`, blossom.primal.net, unless `MessagingOptions::media_server`
+    names another.
+  - MDK checks only the format and the size (10 MiB). It uploads the bytes as they are, metadata included. So the core
+    saves the photo again first (`core/src/photo.rs`).
+- **Downloading:** `download_profile_image` fetches a contact's photo. It takes public HTTPS addresses only, resolved and
+  pinned, with limits on redirects and size.
+  - With `MessagingOptions::allow_loopback`, a media server on this machine is fetched directly instead. This is for
+    the tests and local development.
+  - The same option lets MDK upload to such a server (`with_allow_loopback_blob_endpoints`), and connect to relays on
+    this machine. It was called `allow_loopback_relays` before.
+
 ## Relay reachability
 
 Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
@@ -356,6 +372,17 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.
+
+`core/tests/photos.rs` has a contact set a photo straight from a camera (#94), through a media server inside the test
+(`core/tests/support/blossom.rs`):
+
+- what reaches the server is a 512-pixel square without the Exif segment;
+- the other phone shows it once its core fetches the profiles again, and both keep it across a restart;
+- removing it reaches the other phone; a file that isn't a photo is refused before any upload;
+- deleting the account deletes the avatars.
+
+The photo handling itself has unit tests in `core/src/photo.rs`: the square, turning a photo upright by its Exif
+orientation, dropping the metadata, transparency and refusals.
 
 `core/tests/profile.rs` has a contact change her profile (#93):
 

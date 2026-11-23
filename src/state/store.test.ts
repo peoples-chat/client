@@ -95,6 +95,17 @@ describe("applyEvent", () => {
     expect(applyEvent(state, { type: "contactChanged", contact: { publicKey: "x", name: "Nobody" } })).toBe(state);
   });
 
+  it("takes a contact's new photo, and drops it again", () => {
+    const state = ready([chat("b")]);
+    const withPhoto = { publicKey: "key-b", name: "Contact b", photo: "data:image/jpeg;base64,AA==" };
+    const next = applyEvent(state, { type: "contactChanged", contact: withPhoto });
+
+    expect(next.chats[0].contact.photo).toBe(withPhoto.photo);
+    expect(applyEvent(next, { type: "contactChanged", contact: { ...withPhoto } })).toBe(next);
+    const without = applyEvent(next, { type: "contactChanged", contact: { publicKey: "key-b", name: "Contact b" } });
+    expect(without.chats[0].contact.photo).toBeUndefined();
+  });
+
   it("ignores events for chats and messages it does not know", () => {
     const state = ready([chat("a")]);
     expect(applyEvent(state, { type: "messageAdded", chatId: "x", message: message("m1", 1) })).toBe(state);

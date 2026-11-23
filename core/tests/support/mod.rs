@@ -4,6 +4,7 @@
 // Each test file uses its own part of this.
 #![allow(dead_code)]
 
+mod blossom;
 mod relay;
 
 use std::path::Path;
@@ -14,6 +15,9 @@ use peoples_chat_core::{Core, MessagingOptions};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
+// Only the photo tests use it.
+#[allow(unused_imports)]
+pub use blossom::TestBlossom;
 pub use relay::TestRelay;
 
 /// How long a test waits for the relay and the other core. Each step takes well under a second.
@@ -38,7 +42,8 @@ pub fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> Messagin
         data_dir: data_dir.to_path_buf(),
         relays: vec![relay.to_owned()],
         keychain_service: keychain_service.to_owned(),
-        allow_loopback_relays: true,
+        allow_loopback: true,
+        media_server: None,
     }
 }
 
@@ -47,6 +52,7 @@ pub struct Phone {
     data: TempDir,
     keychain_service: String,
     relay: String,
+    media_server: Option<String>,
 }
 
 impl Phone {
@@ -57,15 +63,26 @@ impl Phone {
             data: tempfile::tempdir().unwrap(),
             keychain_service: format!("chat.peoples.client.test-{name}"),
             relay: relay.to_owned(),
+            media_server: None,
         }
     }
 
+    /// The phone uploads profile photos to `media_server`.
+    pub fn with_media_server(mut self, media_server: &str) -> Self {
+        self.media_server = Some(media_server.to_owned());
+        self
+    }
+
+    /// The phone's data folder.
+    pub fn data_dir(&self) -> &Path {
+        self.data.path()
+    }
+
     pub async fn start(&self) -> Core {
-        Core::start(options(
-            self.data.path(),
-            &self.relay,
-            &self.keychain_service,
-        ))
+        Core::start(MessagingOptions {
+            media_server: self.media_server.clone(),
+            ..options(self.data.path(), &self.relay, &self.keychain_service)
+        })
         .await
         .unwrap()
     }

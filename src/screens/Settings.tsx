@@ -35,7 +35,7 @@ export function Settings() {
       <ScreenHeader title="Settings" onLeading={navigation.back} />
       <main className={layout.scroll}>
         <button type="button" className={styles.profile} onClick={() => navigation.push({ name: "profile" })}>
-          <Avatar name={account?.name ?? ""} size={60} tint="green" />
+          <Avatar name={account?.name ?? ""} size={60} tint="green" photo={account?.photo} />
           <span className={styles.profileText}>
             <span className={styles.name}>{account?.name}</span>
             <span className={styles.subtitle}>Your code and link</span>

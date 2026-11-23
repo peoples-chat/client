@@ -83,7 +83,8 @@ fn options(data_dir: &Path, relays: Vec<String>, keychain_service: &str) -> Mess
         data_dir: data_dir.to_path_buf(),
         relays,
         keychain_service: keychain_service.to_owned(),
-        allow_loopback_relays: true,
+        allow_loopback: true,
+        media_server: None,
     }
 }
 

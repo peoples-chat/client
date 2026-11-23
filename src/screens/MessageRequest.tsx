@@ -43,7 +43,7 @@ export function MessageRequest({ invitationId }: { invitationId: string }) {
       <ScreenHeader
         title={name}
         subtitle="Not in your contacts"
-        avatar={{ name, tint: tintFor(name) }}
+        avatar={{ name, tint: tintFor(name), photo: invitation.from.photo }}
         bordered
         onLeading={navigation.back}
         actions={<IconButton label="About this request" icon="info" disabled />}

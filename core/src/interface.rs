@@ -18,6 +18,9 @@ pub struct Account {
     /// A few words about the user, from the profile. Empty when there are none (#93).
     #[serde(default)]
     pub about: String,
+    /// The profile photo, small and square, as a `data:image/jpeg` URL (#94).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
     /// The account's public key, in hex.
     pub public_key: String,
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
@@ -31,6 +34,9 @@ pub struct Account {
 pub struct Contact {
     pub public_key: String,
     pub name: String,
+    /// Their profile photo, small and square, as a `data:image/jpeg` URL (#94).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
 }
 
 /// How a message travelled.

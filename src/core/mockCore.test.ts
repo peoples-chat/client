@@ -131,6 +131,24 @@ describe("mock core", () => {
     await expect(core.updateProfile("Emil", "æ".repeat(281))).rejects.toThrow("up to 280 characters");
   });
 
+  it("sets and removes the profile photo", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const account = await core.setProfilePhoto(new Uint8Array([0xff, 0xd8, 0xff]));
+    expect(account.photo).toBe("data:image/jpeg;base64,/9j/");
+    expect(events).toEqual([{ type: "accountChanged", account }]);
+    await expect(core.setProfilePhoto(new Uint8Array())).rejects.toThrow("can't be used");
+
+    const removed = await core.removeProfilePhoto();
+    expect(removed.photo).toBeUndefined();
+    expect((await core.load()).account?.photo).toBeUndefined();
+    // Without a photo, removing it changes nothing.
+    await core.removeProfilePhoto();
+    expect(events).toHaveLength(2);
+  });
+
   it("refuses an empty message and an unknown chat", async () => {
     const { core } = setup();
     await core.createAccount("Emil");

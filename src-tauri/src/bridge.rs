@@ -27,6 +27,12 @@ const UNLOCK_REASON: &str = "Export your account key";
 /// `RUST_` and `WRY` ones) on to the iOS and Android builds that Xcode and Gradle run.
 const RELAYS: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_RELAYS");
 
+/// The media server for profile photos, taken from the environment when the app is built (#94).
+/// Without it the app uses the core's `DEFAULT_MEDIA_SERVER`. To keep photos on the Mac, run
+/// `core/examples/local_media.rs` and build with
+/// `TAURI_PEOPLES_CHAT_MEDIA_SERVER=http://127.0.0.1:7778`; only debug builds accept it.
+const MEDIA_SERVER: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_MEDIA_SERVER");
+
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
     core: OnceCell<Core>,
@@ -66,11 +72,18 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
     let relays = relays();
     log::info!("relays for new accounts: {}", relays.join(", "));
+    if let Some(server) = MEDIA_SERVER {
+        log::info!("media server for profile photos: {server}");
+    }
     Ok(MessagingOptions {
         data_dir: app.path().app_data_dir()?.join("core"),
         relays,
         keychain_service: KEYCHAIN_SERVICE.to_owned(),
-        allow_loopback_relays: cfg!(debug_assertions),
+        allow_loopback: cfg!(debug_assertions),
+        media_server: MEDIA_SERVER
+            .map(str::trim)
+            .filter(|server| !server.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -142,6 +155,29 @@ pub async fn update_profile<R: Runtime>(
     about: String,
 ) -> Result<Account, CommandError> {
     slot.get(&app).await?.update_profile(&name, &about).await
+}
+
+/// The photo comes as the request's raw body, not as JSON (#94).
+#[tauri::command]
+pub async fn set_profile_photo<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Account, CommandError> {
+    let tauri::ipc::InvokeBody::Raw(photo) = request.body() else {
+        return Err(CommandError::new(
+            "This photo can't be used. Try another one.",
+        ));
+    };
+    slot.get(&app).await?.set_profile_photo(photo).await
+}
+
+#[tauri::command]
+pub async fn remove_profile_photo<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+) -> Result<Account, CommandError> {
+    slot.get(&app).await?.remove_profile_photo().await
 }
 
 #[tauri::command]

@@ -47,7 +47,7 @@ export function ChatScreen({ chatId }: { chatId: string }) {
       <ScreenHeader
         title={name}
         subtitle={reach === "internet" ? undefined : <ReachLine reach={reach} />}
-        avatar={{ name, tint: tintFor(name) }}
+        avatar={{ name, tint: tintFor(name), photo: chat.contact.photo }}
         bordered
         onLeading={navigation.back}
         actions={

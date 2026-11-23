@@ -54,6 +54,8 @@ pub fn run() {
             bridge::core_snapshot,
             bridge::create_account,
             bridge::update_profile,
+            bridge::set_profile_photo,
+            bridge::remove_profile_photo,
             bridge::delete_account,
             bridge::add_contact,
             bridge::accept_invitation,

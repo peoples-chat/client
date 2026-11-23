@@ -121,6 +121,7 @@
       "account": {
         "name": "Emil D.",
         "about": "Aarhus, Denmark",
+        "photo": "data:image/jpeg;base64,/9j/2wBDAA==",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
         "inviteLink": "nostr:nprofile1fixtureemildahl"
       }
@@ -129,7 +130,8 @@
       "type": "contactChanged",
       "contact": {
         "publicKey": "4a577124f4d699f2455a80e12b58d41a26465d4c01a65faae29b37189cd08375",
-        "name": "Karen W."
+        "name": "Karen W.",
+        "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
       }
     },
     {
