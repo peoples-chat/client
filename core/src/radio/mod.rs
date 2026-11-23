@@ -11,6 +11,7 @@
 //! strings, as elsewhere in the core. Details: `docs/radio.md`.
 
 mod address;
+pub mod airtime;
 pub mod format;
 mod inbox;
 mod keys;

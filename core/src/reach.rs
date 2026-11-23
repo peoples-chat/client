@@ -80,11 +80,12 @@ impl Heard {
 
 /// Whether the radio of a contact, as their `contact` record describes it, can be reached from
 /// the user's radio, as `own` describes it, at `now` (#44). `own` is `None` without a radio, or
-/// while its link is down.
+/// while its link is down. Without `airtime_left` for a message this hour, it can't (#51).
 pub fn radio_reach(
     own: Option<&RadioAddress>,
     contact: Option<&RadioAddress>,
     heard: &Heard,
+    airtime_left: bool,
     now: Instant,
 ) -> Result<(), RadioIssue> {
     let own = own.ok_or(RadioIssue::NoRadio)?;
@@ -99,6 +100,9 @@ pub fn radio_reach(
     }
     if !heard.is_heard(&contact.key, now) {
         return Err(RadioIssue::NotHeard);
+    }
+    if !airtime_left {
+        return Err(RadioIssue::AirtimeUsed);
     }
     Ok(())
 }
@@ -410,7 +414,7 @@ mod tests {
         let own = record(&"ad".repeat(32), 8);
         let bea = record(&"be".repeat(32), 8);
         let reach = |own: Option<&RadioAddress>, contact: Option<&RadioAddress>, heard: &Heard| {
-            radio_reach(own, contact, heard, now)
+            radio_reach(own, contact, heard, true, now)
         };
 
         assert_eq!(reach(None, Some(&bea), &heard), Err(RadioIssue::NoRadio));
@@ -424,6 +428,11 @@ mod tests {
         );
         heard.hear(&bea.key, now);
         assert_eq!(reach(Some(&own), Some(&bea), &heard), Ok(()));
+        // Not once the hour's airtime is used.
+        assert_eq!(
+            radio_reach(Some(&own), Some(&bea), &heard, false, now),
+            Err(RadioIssue::AirtimeUsed)
+        );
 
         // Another preset can't be heard, even when it was.
         let other = record(&"be".repeat(32), 7);

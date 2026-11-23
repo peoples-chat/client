@@ -1125,8 +1125,11 @@ impl Core {
     /// [`CoreEvent::ReachChanged`] and [`CoreEvent::RelaysChanged`] for what changed. Returns
     /// when a closed connection next makes its relay count as gone.
     fn refresh_reach(&self, now: Instant) -> Option<Instant> {
-        // Without the internet, a chat may be reachable by radio (#44).
+        // Without the internet, a chat may be reachable by radio (#44), while its airtime lasts
+        // (#51).
         let own_radio = self.own_radio_record();
+        let (airtime_left, airtime_frees) = self.airtime_left();
+        let now_epoch_ms = now_ms();
         let mut state = self.state();
         let reachability = self.reach();
         let heard = self.heard();
@@ -1143,7 +1146,13 @@ impl Core {
                         .inner
                         .radio_store
                         .contact_radio(&chat.contact.public_key);
-                    match radio_reach(own_radio.as_ref(), contact.as_ref(), &heard, now) {
+                    match radio_reach(
+                        own_radio.as_ref(),
+                        contact.as_ref(),
+                        &heard,
+                        airtime_left,
+                        now,
+                    ) {
                         Ok(()) => (Reach::Radio, None),
                         Err(issue) => (Reach::Unreachable, Some(issue)),
                     }
@@ -1160,10 +1169,18 @@ impl Core {
                 });
             }
         }
-        let next = [reachability.next_change(now), heard.next_change(now)]
-            .into_iter()
-            .flatten()
-            .min();
+        // Once airtime comes free, radio may carry messages again.
+        let airtime_back = airtime_frees
+            .filter(|_| !airtime_left)
+            .map(|at| now + Duration::from_millis(at.saturating_sub(now_epoch_ms)));
+        let next = [
+            reachability.next_change(now),
+            heard.next_change(now),
+            airtime_back,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         // Waiting messages go where a path is (#46).
         let with_path: Vec<String> = state
             .chats

@@ -129,6 +129,8 @@ pub enum RadioIssue {
     OtherPreset,
     /// The contact's radio hasn't been heard lately.
     NotHeard,
+    /// The user's radio has used the airtime the app allows it for this hour (#51).
+    AirtimeUsed,
 }
 
 /// A direct chat with one contact.

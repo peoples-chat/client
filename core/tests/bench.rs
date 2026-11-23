@@ -9,7 +9,7 @@
 //! 4. Ada switches her radio off and writes a message: it waits.
 //! 5. The internet is back: the waiting message goes, and the radio messages are republished.
 //! 6. Both histories are identical, with no duplicates, each message marked with how it
-//!    travelled, also after both restart.
+//!    travelled, also after both restart. Each radio sent only its user's ten messages (#52).
 //!
 //! The relay keeps answering NIP-11 requests while it is cut, which keeps #78's delay out.
 
@@ -197,6 +197,14 @@ async fn one_chat_survives_an_outage() {
             Transport::Internet
         };
         assert_eq!(*transport, expected, "{text}");
+    }
+
+    // Only what the users sent went by radio (#52): ten messages each, and nothing else, such as
+    // the radio address records, which travel in the chat.
+    for core in [&ada, &bea] {
+        let log = core.radio_transmissions();
+        assert_eq!(log.len(), 10);
+        assert!(log.iter().all(|sent| sent.reason == "message"));
     }
 
     // Also after both restart.

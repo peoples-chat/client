@@ -9,6 +9,9 @@
 //! - **Every message that travelled by radio,** sent or received, with its id. A received one is
 //!   in no other store until its relay copy arrives, and the ids catch a replayed packet after a
 //!   restart (#42).
+//! - **Every transmission the app caused** in the last two days, with its airtime and reason: the
+//!   hourly airtime cap counts them (#51), and they show that the app sends nothing by itself
+//!   (#52).
 //!
 //! The file is small, and written whole on every change.
 
@@ -41,6 +44,24 @@ pub struct RadioMessage {
     #[serde(default)]
     pub kept_at: u64,
 }
+
+/// A transmission the app caused (#52).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transmission {
+    /// Milliseconds since the Unix epoch.
+    pub at: u64,
+    /// The packet's size on air, in bytes.
+    pub bytes: usize,
+    /// Its time on air, in milliseconds.
+    pub airtime_ms: u64,
+    /// Why the app sent it: `message` for a message the user sent, or one that waited.
+    pub reason: String,
+}
+
+/// How long the transmission log keeps an entry: long enough for a 24-hour idle run (#52).
+const KEEP_TRANSMISSIONS_MS: u64 = 48 * 60 * 60 * 1000;
+/// The window the airtime cap counts over (#51).
+pub const AIRTIME_WINDOW_MS: u64 = 60 * 60 * 1000;
 
 /// Why no counter can be had.
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +100,9 @@ struct Data {
     /// Oldest first.
     #[serde(default)]
     messages: Vec<RadioMessage>,
+    /// Oldest first, for the last two days.
+    #[serde(default)]
+    transmissions: Vec<Transmission>,
 }
 
 pub struct RadioStore {
@@ -269,6 +293,44 @@ impl RadioStore {
         Ok(Some(confirmed))
     }
 
+    /// Logs a transmission the app caused at `now_ms`, and forgets those older than two days.
+    pub fn log_transmission(&self, transmission: Transmission, now_ms: u64) -> std::io::Result<()> {
+        let mut data = self.lock();
+        data.transmissions
+            .retain(|known| known.at + KEEP_TRANSMISSIONS_MS > now_ms);
+        data.transmissions.push(transmission);
+        self.save(&data)
+    }
+
+    /// The transmissions the app caused since `since_ms`, oldest first.
+    pub fn transmissions_since(&self, since_ms: u64) -> Vec<Transmission> {
+        self.lock()
+            .transmissions
+            .iter()
+            .filter(|transmission| transmission.at >= since_ms)
+            .cloned()
+            .collect()
+    }
+
+    /// The airtime the app used in the hour before `now_ms`, in milliseconds, and when the
+    /// oldest of it drops out of the hour.
+    pub fn airtime_used(&self, now_ms: u64) -> (u64, Option<u64>) {
+        let data = self.lock();
+        let in_hour: Vec<&Transmission> = data
+            .transmissions
+            .iter()
+            .filter(|transmission| transmission.at + AIRTIME_WINDOW_MS > now_ms)
+            .collect();
+        let used = in_hour
+            .iter()
+            .map(|transmission| transmission.airtime_ms)
+            .sum();
+        let frees_at = in_hour
+            .first()
+            .map(|transmission| transmission.at + AIRTIME_WINDOW_MS);
+        (used, frees_at)
+    }
+
     /// Forgets everything, as when the account is deleted.
     pub fn clear(&self) -> std::io::Result<()> {
         *self.lock() = Data::default();
@@ -457,5 +519,39 @@ mod tests {
         let changed = store.own_record(&info, 300).unwrap();
         assert_eq!(changed.at, 300);
         assert!(!store.is_shared("chat", &changed));
+    }
+
+    #[test]
+    fn logs_transmissions_and_counts_the_last_hour_of_airtime() {
+        const HOUR: u64 = 60 * 60 * 1000;
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let sent = |at: u64, airtime_ms: u64| Transmission {
+            at,
+            bytes: 70,
+            airtime_ms,
+            reason: "message".to_owned(),
+        };
+        assert_eq!(store.airtime_used(HOUR), (0, None));
+        store.log_transmission(sent(HOUR, 700), HOUR).unwrap();
+        store
+            .log_transmission(sent(HOUR + 1_000, 1_600), HOUR + 1_000)
+            .unwrap();
+        assert_eq!(store.airtime_used(HOUR + 2_000), (2_300, Some(2 * HOUR)));
+        // An hour on, the first drops out of the count, and frees its airtime.
+        assert_eq!(
+            store.airtime_used(2 * HOUR),
+            (1_600, Some(2 * HOUR + 1_000))
+        );
+        assert_eq!(store.airtime_used(2 * HOUR + 1_000), (0, None));
+
+        // The log stays across a restart, for two days.
+        let reopened = RadioStore::open(data.path());
+        assert_eq!(reopened.transmissions_since(0).len(), 2);
+        assert_eq!(reopened.transmissions_since(HOUR + 1).len(), 1);
+        reopened
+            .log_transmission(sent(50 * HOUR, 700), 50 * HOUR)
+            .unwrap();
+        assert_eq!(reopened.transmissions_since(0), vec![sent(50 * HOUR, 700)]);
     }
 }
