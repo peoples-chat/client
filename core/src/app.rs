@@ -547,6 +547,7 @@ impl Core {
                 .unwrap_or_else(|| marmot_app::default_profile_pseudonym(&invite.public_key_hex)),
             public_key: invite.public_key_hex,
             photo,
+            meshes: Vec::new(),
         })
     }
 
@@ -863,6 +864,7 @@ impl Core {
                 match item {
                     ChatItem::Text(message) => core.apply_message(&message),
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
+                    ChatItem::RadioAddress(address) => core.radio_address_received(&address),
                 }
             }
         });
@@ -952,6 +954,7 @@ impl Core {
             public_key: chat.peer_hex.clone(),
             name: contact_name.clone(),
             photo: self.known_photo(&chat.peer_hex),
+            meshes: self.contact_meshes(&chat.peer_hex),
         };
 
         let mut events = Vec::new();
@@ -995,8 +998,15 @@ impl Core {
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
         }
+        let added = events
+            .iter()
+            .any(|event| matches!(event, CoreEvent::ChatAdded { .. }));
         for event in events {
             self.emit(event);
+        }
+        drop(state);
+        if added {
+            self.radio_chat_added(&chat.id);
         }
     }
 

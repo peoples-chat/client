@@ -40,6 +40,16 @@ pub struct Contact {
     /// Their profile photo, small and square, as a `data:image/jpeg` URL (#94).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub photo: Option<String>,
+    /// The meshes their radios run, from their radio address records (#34).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<Mesh>,
+}
+
+/// A mesh network that radios run (#34).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mesh {
+    MeshCore,
 }
 
 /// How a message travelled.

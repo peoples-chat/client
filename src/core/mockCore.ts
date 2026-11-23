@@ -374,7 +374,7 @@ function demoChat(now: number): Chat {
 function demoRadioChat(now: number): Chat {
   return {
     id: randomHex(8),
-    contact: { publicKey: randomHex(32), name: "Hanne Vang" },
+    contact: { publicKey: randomHex(32), name: "Hanne Vang", meshes: ["meshCore"] },
     messages: [
       {
         id: randomHex(8),

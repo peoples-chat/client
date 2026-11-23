@@ -107,6 +107,15 @@ describe("applyEvent", () => {
     expect(without.chats[0].contact.photo).toBeUndefined();
   });
 
+  it("takes the mesh of a contact's radio", () => {
+    const state = ready([chat("b")]);
+    const withRadio = { publicKey: "key-b", name: "Contact b", meshes: ["meshCore" as const] };
+    const next = applyEvent(state, { type: "contactChanged", contact: withRadio });
+
+    expect(next.chats[0].contact.meshes).toEqual(["meshCore"]);
+    expect(applyEvent(next, { type: "contactChanged", contact: { ...withRadio, meshes: ["meshCore"] } })).toBe(next);
+  });
+
   it("adds a sent invitation, and marks it used once, when the person joins", () => {
     const invite = { id: "t1", name: "Sofie", link: "https://peoples.chat/i#x/t1", createdAt: 1, expiresAt: 2 };
     const added = applyEvent(ready(), { type: "inviteChanged", invite });

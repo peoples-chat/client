@@ -36,7 +36,12 @@ export interface Contact {
   name: string;
   /** Their profile photo, small and square, as a `data:image/jpeg` URL (#94). */
   photo?: string;
+  /** The meshes their radios run, from their radio address records (#34). */
+  meshes?: Mesh[];
 }
+
+/** A mesh network that radios run. */
+export type Mesh = "meshCore";
 
 /** How a message travelled. */
 export type Transport = "internet" | "radio";

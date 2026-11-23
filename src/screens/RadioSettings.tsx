@@ -10,13 +10,15 @@ import { errorText } from "./shared";
 import styles from "./RadioSettings.module.css";
 
 /**
- * Radio, reached from Settings: the radio the core uses, and the switch that sends everything by
- * radio, for testing until the app chooses by itself (#40). Pairing comes with #24; the design's
- * contacts-by-mesh summary, heard radios and mesh channels need a paired radio first.
+ * Radio, reached from Settings: the radio the core uses, how many contacts have a radio on each
+ * mesh (#34), and the switch that sends everything by radio, for testing until the app chooses by
+ * itself (#40). Pairing comes with #24; the design's heard radios (#44) and mesh channels come
+ * later.
  */
 export function RadioSettings() {
   const navigation = useNavigation();
-  const { radio } = useAppState();
+  const { radio, chats } = useAppState();
+  const onMeshCore = chats.filter((chat) => chat.contact.meshes?.includes("meshCore")).length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,6 +56,8 @@ export function RadioSettings() {
         </section>
         {/* Pairing is not built yet (#24). */}
         <ActionRow icon="plus" label="Pair a radio" accent chevron={false} disabled />
+        <SectionTitle>Your contacts by mesh</SectionTitle>
+        <MeshRow name="MeshCore" count={onMeshCore} of={chats.length} />
         <SectionTitle>Testing</SectionTitle>
         <SwitchRow
           icon="radio"
@@ -69,6 +73,21 @@ export function RadioSettings() {
           </p>
         )}
       </main>
+    </div>
+  );
+}
+
+/** How many of `of` contacts have a radio on the mesh, as a bar and a number. */
+function MeshRow({ name, count, of }: { name: string; count: number; of: number }) {
+  return (
+    <div className={styles.meshRow}>
+      <span className={styles.meshName}>{name}</span>
+      <span className={styles.meshBar} aria-hidden="true">
+        <span style={{ width: `${of === 0 ? 0 : (100 * count) / of}%` }} />
+      </span>
+      <span className={styles.meshCount} aria-label={`${count} of ${of} contacts`}>
+        {count}
+      </span>
     </div>
   );
 }

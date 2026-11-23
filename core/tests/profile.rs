@@ -53,6 +53,7 @@ async fn a_new_name_reaches_a_contact_and_the_profile_stays() {
                 public_key: account.public_key.clone(),
                 name: "Ada L.".to_owned(),
                 photo: None,
+                meshes: Vec::new(),
             }
         }
     );

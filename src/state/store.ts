@@ -134,10 +134,13 @@ function sameAccount(a: Account, b: Account): boolean {
   );
 }
 
-/** Gives the contact their new name and photo in their chats and invitations. */
+/** Gives the contact their new name, photo and meshes in their chats and invitations. */
 function updateContact(state: AppState, contact: Contact): AppState {
   const outdated = (current: Contact) =>
-    current.publicKey === contact.publicKey && (current.name !== contact.name || current.photo !== contact.photo);
+    current.publicKey === contact.publicKey &&
+    (current.name !== contact.name ||
+      current.photo !== contact.photo ||
+      (current.meshes ?? []).join() !== (contact.meshes ?? []).join());
   if (!state.chats.some((c) => outdated(c.contact)) && !state.invitations.some((i) => outdated(i.from))) return state;
   return {
     ...state,

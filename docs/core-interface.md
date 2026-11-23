@@ -72,7 +72,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `reachChanged` | `chatId`, `reach` | A chat's relays went away or came back | Done (#43) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
-| `contactChanged` | `contact` | A contact's name or photo changed | Done (#93, #94) |
+| `contactChanged` | `contact` | A contact's name, photo or radio changed | Done (#93, #94, #34) |
 | `inviteChanged` | `invite` | The user sent an invitation, or the person used it | Done (#95) |
 | `radioChanged` | `radio` | The radio was paired, connected or disconnected, or the switch that forces it changed | Done (#40) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
@@ -83,7 +83,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
-| `Contact` | `publicKey`, `name`, `photo` (optional) |
+| `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
@@ -328,7 +328,8 @@ The snapshot's `radio` says which radio the core uses, and `radioChanged` carrie
 
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
-- "Bea Holm's radio isn't known yet.": the contact's radio comes with their radio address record (#34).
+- "Bea Holm's radio isn't known yet.": the contact's app hasn't sent a radio address record (#34); see
+  [radio.md](radio.md).
 - "Could not send by radio: the chat's keys aren't ready. Try again."
 
 Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and
@@ -339,8 +340,8 @@ one copy. If the radio fails after the checks, the message waits for the interne
 arrives as `radio` too, and its relay copy later changes nothing. Messages that came by radio stay across a restart,
 also before their relay copies arrive. The radio parts are in [radio-format-v0.md](radio-format-v0.md#in-the-core).
 
-**What the interface shows.** Settings → Radio shows the paired radio, or "No radio paired", and the switch "Send
-everything by radio" under Testing. With it on, a chat on the internet says "Testing: every message goes by radio."
+**What the interface shows.** Settings → Radio shows the paired radio, or "No radio paired"; how many contacts have
+a MeshCore radio, under "Your contacts by mesh"; and the switch "Send everything by radio" under Testing. With it on, a chat on the internet says "Testing: every message goes by radio."
 above the field, which opens Radio, and the field takes short text as in radio mode.
 
 ## Relays

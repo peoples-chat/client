@@ -57,6 +57,9 @@ const CHAT_KIND: u64 = 9;
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
 /// It isn't text, so White Noise doesn't show it as a message.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
+/// The app's own kind for a radio address record (#34), which each app sends in its direct
+/// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
+pub const RADIO_ADDRESS_KIND: u64 = 9_911;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -238,17 +241,37 @@ fn invite_token(record: &TimelineMessageRecord) -> Option<InviteToken> {
     )
 }
 
+/// A radio address record that the other person sent in a chat (#34), as it came: the core
+/// reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RadioAddressItem {
+    pub chat_id: String,
+    pub record: String,
+}
+
+/// The radio address record in `record`, if it is one the other person sent.
+fn radio_address(record: &TimelineMessageRecord) -> Option<RadioAddressItem> {
+    (record.kind == RADIO_ADDRESS_KIND && record.direction == "received" && !record.deleted).then(
+        || RadioAddressItem {
+            chat_id: record.group_id_hex.clone(),
+            record: record.plaintext.clone(),
+        },
+    )
+}
+
 /// What can come in a chat, as the core follows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
+    RadioAddress(RadioAddressItem),
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
     text_message(record)
         .map(ChatItem::Text)
         .or_else(|| invite_token(record).map(ChatItem::InviteToken))
+        .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
 }
 
 /// What comes in the account's chats as it is added or changes: text messages, for example
@@ -828,6 +851,46 @@ impl Messaging {
             },
         )?;
         Ok(page.messages.iter().filter_map(invite_token).collect())
+    }
+
+    /// The radio address records the other person sent in the chat `chat_id` (#34), oldest
+    /// first.
+    pub fn radio_addresses(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<RadioAddressItem>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(radio_address).collect())
+    }
+
+    /// Sends this phone's radio address record in the chat `chat_id` (#34).
+    pub async fn send_radio_address(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        record: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .send_custom_event(
+                account_hex,
+                &group_id(chat_id)?,
+                RADIO_ADDRESS_KIND,
+                Vec::new(),
+                record.to_owned(),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
