@@ -54,11 +54,14 @@ export const RADIO_TEXT_LIMIT = 96;
 
 /**
  * Delivery of an outgoing message.
- * - `waiting`: not sent yet, for example because there is no path.
+ * - `waiting`: not sent yet, for example because there is no path. A radio message is `waiting`
+ *   from when the radio sends it until the other radio confirms it.
+ * - `timedOut`: the radio sent it, but the other radio didn't confirm it in time, also after a
+ *   retry (#41). It still goes by internet once a relay is back. Radio only.
  * - `sent`: a relay acknowledged it.
  * - `confirmed`: the other radio confirmed it. Radio only.
  */
-export type DeliveryState = "waiting" | "sent" | "confirmed";
+export type DeliveryState = "waiting" | "timedOut" | "sent" | "confirmed";
 
 export interface Message {
   /** Stable identifier from the core. Duplicates are dropped by it after an outage. */

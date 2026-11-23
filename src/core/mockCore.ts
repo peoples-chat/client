@@ -40,8 +40,13 @@ export interface MockCoreOptions {
   /** Keeps the demo state between reloads. `null` keeps it in memory. Defaults to `localStorage`. */
   storage?: StorageLike | null;
   now?: () => number;
-  /** Milliseconds until a relay "acknowledges" a message, and until the contact replies after that. */
-  delays?: { sent: number; reply: number };
+  /**
+   * Milliseconds until a relay "acknowledges" a message, and until the contact replies after that;
+   * and until a radio message that no radio confirms times out.
+   */
+  delays?: { sent: number; reply: number; timedOut?: number };
+  /** Whether the contacts' radios confirm radio messages. Without, they time out (#41). Default true. */
+  radioConfirms?: boolean;
 }
 
 interface MockState {
@@ -61,6 +66,9 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const storage = options.storage === undefined ? browserStorage() : options.storage;
   const now = options.now ?? Date.now;
   const delays = options.delays ?? { sent: 600, reply: 1500 };
+  // The core waits for the radio's estimate and a margin, then once more after a retry.
+  const timedOutDelay = delays.timedOut ?? 12_000;
+  const radioConfirms = options.radioConfirms ?? true;
   const listeners = new Set<CoreListener>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const replyTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -299,6 +307,14 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       emit({ type: "messageAdded", chatId, message });
       if (waits) return structuredClone(message);
 
+      if (radio && !radioConfirms) {
+        // No radio answers, also not to the retry: the message times out, and nobody replies.
+        later(timedOutDelay, () => {
+          message.delivery = "timedOut";
+          emit({ type: "deliveryChanged", chatId, messageId: message.id, delivery: "timedOut" });
+        });
+        return structuredClone(message);
+      }
       later(delays.sent, () => {
         // On radio, the other radio confirms; on the internet, a relay acknowledges.
         const delivery = radio ? "confirmed" : "sent";

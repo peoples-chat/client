@@ -43,6 +43,15 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "deliveryChanged", chatId: "a", messageId: "m2", delivery: "sent" })).toBe(next);
   });
 
+  it("shows a radio message as timed out, and confirmed when a late confirmation comes (#41)", () => {
+    const state = ready([chat("a", [message("m1", 1, { transport: "radio" })])]);
+    const timedOut = applyEvent(state, { type: "deliveryChanged", chatId: "a", messageId: "m1", delivery: "timedOut" });
+    expect(timedOut.chats[0].messages[0]).toMatchObject({ transport: "radio", delivery: "timedOut" });
+
+    const confirmed = applyEvent(timedOut, { type: "deliveryChanged", chatId: "a", messageId: "m1", delivery: "confirmed" });
+    expect(confirmed.chats[0].messages[0].delivery).toBe("confirmed");
+  });
+
   it("adds a message to the invitation with that id, before it is accepted", () => {
     const invitation = { id: "i1", from: { publicKey: "k", name: "Karen" }, receivedAt: 5, messages: [] };
     const state = { ...ready([chat("a")]), invitations: [invitation] };

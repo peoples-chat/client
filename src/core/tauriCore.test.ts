@@ -135,6 +135,7 @@ describe("the JSON shared with the Rust core", () => {
     let state: AppState = fromSnapshot(shared.snapshot);
     expect(state.account?.name).toBe("Emil Dahl");
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
+    expect(state.chats[0].messages[2].delivery).toBe("timedOut");
     expect(state.invitations[0].from.name).toBe("Karen Winther");
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);

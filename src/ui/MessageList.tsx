@@ -55,6 +55,9 @@ export function MessageList({ messages, empty, onCancel, byRadio = false }: Mess
             <div className={styles.day}>{formatDay(message.sentAt, now)}</div>
           )}
           <MessageBubble message={message} />
+          {message.direction === "out" && message.delivery === "timedOut" && (
+            <p className={styles.waiting}>Not confirmed by radio. It goes by internet once a relay is back.</p>
+          )}
           {message.cancellable && onCancel && (
             <WaitingNote
               tooLongForRadio={byRadio && radioBytes(message.text) > RADIO_TEXT_LIMIT}
@@ -82,7 +85,7 @@ function MessageBubble({ message }: { message: Message }) {
           </span>
         )}
         <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
-        {outgoing && message.delivery && <Delivery state={message.delivery} />}
+        {outgoing && message.delivery && <Delivery state={message.delivery} radio={radio} />}
       </div>
     </div>
   );
@@ -102,14 +105,28 @@ function WaitingNote({ tooLongForRadio, onCancel }: { tooLongForRadio: boolean; 
 
 const DELIVERY_LABELS: Record<DeliveryState, string> = {
   waiting: "Waiting to send",
+  timedOut: "Not confirmed by the other radio",
   sent: "Sent",
   confirmed: "Confirmed by the other radio",
 };
 
-function Delivery({ state }: { state: DeliveryState }) {
+const DELIVERY_ICONS: Record<DeliveryState, "clock" | "help" | "check"> = {
+  waiting: "clock",
+  timedOut: "help",
+  sent: "check",
+  confirmed: "check",
+};
+
+/**
+ * What is known about an outgoing message, and nothing more (#41). A radio message waits for the
+ * other radio's confirmation once the radio has sent it.
+ */
+function Delivery({ state, radio }: { state: DeliveryState; radio: boolean }) {
+  const label = state === "waiting" && radio ? "Sent by radio, waiting for the other radio to confirm" : DELIVERY_LABELS[state];
+  const icon = DELIVERY_ICONS[state];
   return (
-    <span role="img" aria-label={DELIVERY_LABELS[state]} className={styles.delivery}>
-      <Icon name={state === "waiting" ? "clock" : "check"} size={15} strokeWidth={state === "waiting" ? 2 : 2.3} />
+    <span role="img" aria-label={label} className={styles.delivery}>
+      <Icon name={icon} size={15} strokeWidth={icon === "check" ? 2.3 : 2} />
     </span>
   );
 }
