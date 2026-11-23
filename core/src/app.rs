@@ -16,12 +16,13 @@ use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Relay, RelayOperator, RelayStatus, Snapshot, Transport,
+    Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
 };
 use crate::invite;
+use crate::invites::{InviteRecord, Invites};
 use crate::messaging::{
-    DirectChat, Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink,
-    RelayLinks, TextMessage, canonical_relay,
+    ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
+    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
 use crate::radio::RadioKeys;
@@ -56,6 +57,8 @@ struct Inner {
     reach: Mutex<Reachability>,
     /// Avatars made from profile photos (#94).
     avatars: Avatars,
+    /// The invitations the user sent (#95).
+    invites: Invites,
 }
 
 impl Core {
@@ -64,6 +67,7 @@ impl Core {
     /// contacts' names aren't known yet follow as events. Must run inside a Tokio runtime.
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
         let avatars = Avatars::new(&options.data_dir);
+        let invites = Invites::open(&options.data_dir);
         let messaging = Messaging::open(options).await?;
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
@@ -84,6 +88,10 @@ impl Core {
             inner: Arc::new(Inner {
                 messaging,
                 state: Mutex::new(Snapshot {
+                    invites: account
+                        .as_ref()
+                        .map(|account| invite_views(account, &invites.all()))
+                        .unwrap_or_default(),
                     account: account.clone(),
                     ..Snapshot::default()
                 }),
@@ -92,6 +100,7 @@ impl Core {
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
                 avatars,
+                invites,
             }),
         };
         if let Some(account) = account {
@@ -397,6 +406,9 @@ impl Core {
         if let Err(error) = self.inner.avatars.clear() {
             log::warn!("could not remove the avatars: {error}");
         }
+        if let Err(error) = self.inner.invites.clear() {
+            log::warn!("could not remove the invitations: {error}");
+        }
         self.emit(CoreEvent::AccountDeleted);
         Ok(())
     }
@@ -448,8 +460,138 @@ impl Core {
             relays: Vec::new(),
         };
         self.apply(&started, name, now_ms());
+        // A personal invitation's token goes back to the inviter, whose app then opens the chat
+        // without a request (#95). Without it, the chat still works: as a request.
+        if let Some(token) = &invite.token
+            && let Err(error) = self
+                .inner
+                .messaging
+                .send_invite_token(&account.public_key, &started.id, token)
+                .await
+        {
+            log::warn!("could not send the invitation's token: {error}");
+        }
         self.chat(&started.id)
             .ok_or_else(|| failed("start the chat", "the chat is missing after starting it"))
+    }
+
+    /// Makes a personal invitation for `name`, whom only the user sees (#95). Emits
+    /// [`CoreEvent::InviteChanged`]. Its link works once and for 7 days: the person who uses it
+    /// lands in a chat with the user, and the user's app opens it without a request.
+    pub async fn create_invite(&self, name: &str) -> Result<SentInvite, CommandError> {
+        let account = self.account()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CommandError::new("Enter a name."));
+        }
+        if name.chars().count() > MAX_NAME_CHARS {
+            return Err(CommandError::new(format!(
+                "A name can have up to {MAX_NAME_CHARS} characters."
+            )));
+        }
+        let record = self
+            .inner
+            .invites
+            .create(name, now_ms())
+            .map_err(|error| failed("keep the invitation", error))?;
+        log::info!("invitation created");
+        let invite = invite_view(&account, &record);
+        self.state().invites.push(invite.clone());
+        self.emit(CoreEvent::InviteChanged {
+            invite: invite.clone(),
+        });
+        Ok(invite)
+    }
+
+    /// Who an invite link is from: the name and photo in their profile, for the screen an
+    /// invited person sees before they have an account (#95). Needs no account.
+    pub async fn preview_invite(&self, invite_link: &str) -> Result<Contact, CommandError> {
+        let invite =
+            invite::parse(invite_link).map_err(|error| CommandError::new(error.to_string()))?;
+        if self
+            .state()
+            .account
+            .as_ref()
+            .is_some_and(|account| account.public_key == invite.public_key_hex)
+        {
+            return Err(CommandError::new("That is your own invite link."));
+        }
+        let profile = self
+            .inner
+            .messaging
+            .fetch_profile(&invite.public_key_hex, &invite.relays)
+            .await
+            .unwrap_or_default();
+        let photo = match &profile.picture {
+            Some(url) => self.avatar_for(url).await,
+            None => None,
+        };
+        Ok(Contact {
+            name: profile
+                .name
+                .unwrap_or_else(|| marmot_app::default_profile_pseudonym(&invite.public_key_hex)),
+            public_key: invite.public_key_hex,
+            photo,
+        })
+    }
+
+    /// Takes a token the other person sent in a chat (#95). If it opens one of the user's
+    /// invitations, the invitation is marked as used, and the chat opens if it was still a
+    /// request. A chat the snapshot doesn't have yet is looked at again when it arrives.
+    fn redeem_token(&self, token: &InviteToken) {
+        let (peer, pending) = {
+            let state = self.state();
+            if let Some(invitation) = state.invitations.iter().find(|i| i.id == token.chat_id) {
+                (invitation.from.public_key.clone(), true)
+            } else if let Some(chat) = state.chats.iter().find(|c| c.id == token.chat_id) {
+                (chat.contact.public_key.clone(), false)
+            } else {
+                return;
+            }
+        };
+        let Some(record) = self
+            .inner
+            .invites
+            .redeem(&token.token, &peer, &token.chat_id, now_ms())
+        else {
+            return;
+        };
+        log::info!("an invitation was used");
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        let invite = invite_view(&account, &record);
+        {
+            let mut state = self.state();
+            if let Some(known) = state.invites.iter_mut().find(|known| known.id == invite.id) {
+                *known = invite.clone();
+            }
+        }
+        self.emit(CoreEvent::InviteChanged { invite });
+        if pending {
+            let core = self.clone();
+            let chat_id = token.chat_id.clone();
+            tokio::spawn(async move {
+                if let Err(error) = core.accept_invitation(&chat_id).await {
+                    log::warn!("could not open the chat of a used invitation: {error}");
+                }
+            });
+        }
+    }
+
+    /// Redeems the tokens already in the chat `chat_id`, which came before the snapshot had it.
+    fn redeem_tokens_in(&self, chat_id: &str) {
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        match self
+            .inner
+            .messaging
+            .invite_tokens(&account.public_key, chat_id)
+        {
+            Ok(tokens) => tokens.iter().for_each(|token| self.redeem_token(token)),
+            Err(error) => log::warn!("could not read a chat's invitation tokens: {error}"),
+        }
     }
 
     /// Accepts an invitation to a direct chat (#19). Emits [`CoreEvent::InvitationRemoved`],
@@ -669,6 +811,16 @@ impl Core {
         }
         // The relays go into the snapshot now; their watcher keeps them current.
         self.refresh_reach(Instant::now());
+        // An invitation's token that came while the app was closed opens its chat now (#95).
+        let pending: Vec<String> = self
+            .state()
+            .invitations
+            .iter()
+            .map(|invitation| invitation.id.clone())
+            .collect();
+        for chat_id in pending {
+            self.redeem_tokens_in(&chat_id);
+        }
 
         // The watchers hold the core weakly, so dropping the core ends them.
         let core = Arc::downgrade(&self.inner);
@@ -684,9 +836,12 @@ impl Core {
         });
         let core = Arc::downgrade(&self.inner);
         let message_watcher = tokio::spawn(async move {
-            while let Some(message) = messages.next().await {
+            while let Some(item) = messages.next().await {
                 let Some(core) = upgrade(&core) else { return };
-                core.apply_message(&message);
+                match item {
+                    ChatItem::Text(message) => core.apply_message(&message),
+                    ChatItem::InviteToken(token) => core.redeem_token(&token),
+                }
             }
         });
         let core = Arc::downgrade(&self.inner);
@@ -728,6 +883,9 @@ impl Core {
         let name = self.inner.messaging.contact_name(&chat.peer_hex, &[]).await;
         let started = self.started_at(&chat.id);
         self.apply(&chat, name, started);
+        if chat.invitation {
+            self.redeem_tokens_in(&chat.id);
+        }
     }
 
     /// Whether the snapshot shows `chat` as it is already.
@@ -1032,6 +1190,25 @@ fn relay_views(relays: Vec<(String, RelayStatus)>, project: &[&str]) -> Vec<Rela
         .collect();
     relays.sort_by_key(|relay| relay.operator != RelayOperator::PeoplesChat);
     relays
+}
+
+/// An invitation as an interface sees it, with the link to share.
+fn invite_view(account: &Account, record: &InviteRecord) -> SentInvite {
+    SentInvite {
+        id: record.token.clone(),
+        name: record.name.clone(),
+        link: invite::personal_link(&account.invite_link, &record.token),
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+        joined_chat_id: record.joined.as_ref().map(|joined| joined.chat_id.clone()),
+    }
+}
+
+fn invite_views(account: &Account, records: &[InviteRecord]) -> Vec<SentInvite> {
+    records
+        .iter()
+        .map(|record| invite_view(account, record))
+        .collect()
 }
 
 /// A profile name as given, trimmed, or why it can't be one.

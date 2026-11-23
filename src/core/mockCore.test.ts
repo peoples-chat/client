@@ -29,7 +29,7 @@ describe("mock core", () => {
 
   it("starts without an account", async () => {
     const { core } = setup();
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
+    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [], invites: [] });
   });
 
   it("creates an account with demo chats and a message request", async () => {
@@ -149,6 +149,31 @@ describe("mock core", () => {
     expect(events).toHaveLength(2);
   });
 
+  it("makes invitations with links of their own", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const invite = await core.createInvite(" Sofie ");
+    expect(invite.name).toBe("Sofie");
+    expect(invite.link).toMatch(/^https:\/\/peoples\.chat\/i#.+\/[0-9a-f]{20}$/);
+    expect(events).toEqual([{ type: "inviteChanged", invite }]);
+    expect((await core.load()).invites).toEqual([invite]);
+    await expect(core.createInvite(" ")).rejects.toThrow("Enter a name.");
+  });
+
+  it("starts the chat with whoever a previewed invite link is from", async () => {
+    const { core } = setup();
+    const link = "https://peoples.chat/i#nprofile1demo/0123456789abcdef0123";
+    const from = await core.previewInvite(link);
+    expect(from.name).toBe("Emil Dahl");
+    await expect(core.previewInvite("Emil Dahl")).rejects.toThrow("not an invite link");
+
+    await core.createAccount("Sofie");
+    const chat = await core.addContact(link);
+    expect(chat.contact).toEqual(from);
+  });
+
   it("refuses an empty message and an unknown chat", async () => {
     const { core } = setup();
     await core.createAccount("Emil");
@@ -204,7 +229,7 @@ describe("mock core", () => {
 
     await core.deleteAccount();
     expect(events).toEqual([{ type: "accountDeleted" }]);
-    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [] });
+    expect(await core.load()).toEqual({ account: null, chats: [], invitations: [], relays: [], invites: [] });
 
     // The pending acknowledgement and reply belonged to the deleted account.
     vi.advanceTimersByTime(5000);

@@ -30,6 +30,11 @@
   color: var(--color-text);
 }
 
+.quiet {
+  background: transparent;
+  color: var(--color-accent);
+}
+
 .danger {
   background: transparent;
   color: var(--color-danger);

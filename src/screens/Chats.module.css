@@ -3,3 +3,78 @@
   padding: 4px 8px;
   list-style: none;
 }
+
+/* Bring your people: on the first days, until everyone invited has joined (#95). */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 16px 6px;
+  padding: 14px 14px 14px 16px;
+  border-radius: 18px;
+  background: var(--color-green-bg);
+  color: var(--color-text);
+}
+
+.bannerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bannerTitle {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 700;
+}
+
+.bannerLine {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* An invitation still out: a dashed circle where the photo will be. */
+.pending {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 0 8px 12px;
+}
+
+.pendingAvatar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border: 1.5px dashed var(--color-disabled);
+  border-radius: 50%;
+  color: var(--color-muted);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pendingText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pendingName {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pendingWhen {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14.5px;
+  color: var(--color-muted);
+}

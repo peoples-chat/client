@@ -59,6 +59,8 @@ pub fn run() {
             bridge::remove_profile_photo,
             bridge::delete_account,
             bridge::add_contact,
+            bridge::create_invite,
+            bridge::preview_invite,
             bridge::accept_invitation,
             bridge::send_message,
             bridge::export_account_key

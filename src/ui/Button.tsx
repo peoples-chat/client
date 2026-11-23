@@ -3,8 +3,11 @@ import { Icon, type IconName } from "./Icon";
 import styles from "./Button.module.css";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** `danger` is red text, as Block; `dangerSolid` confirms an action that cannot be undone. */
-  variant?: "primary" | "secondary" | "danger" | "dangerSolid";
+  /**
+   * `danger` is red text, as Block; `dangerSolid` confirms an action that cannot be undone;
+   * `quiet` is green text, for a way out such as "I will do this later".
+   */
+  variant?: "primary" | "secondary" | "quiet" | "danger" | "dangerSolid";
   size?: "large" | "small";
 }
 

@@ -29,6 +29,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # goes through MDK's own safe download. MDK already builds this version.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 zeroize = "1"
+# The invitations the user sent (#95): random tokens, kept as JSON in the data folder. MDK's
+# dependencies already bring in these versions.
+rand = "0.8"
+serde_json = "1"
 log = "0.4"
 # Reads the relay hints in invite links (NIP-19 nprofile), and the tests read exported keys back
 # (NIP-49). The same fork, revision and features MDK uses, so it adds nothing to the build.

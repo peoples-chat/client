@@ -2,7 +2,9 @@
 //! launches, passes every core event to the web view as the Tauri event `core-event`, and turns
 //! the web view's commands into calls on the core. The contract: `docs/core-interface.md`.
 
-use peoples_chat_core::interface::{Account, Chat, CommandError, CoreEvent, Message, Snapshot};
+use peoples_chat_core::interface::{
+    Account, Chat, CommandError, Contact, CoreEvent, Message, SentInvite, Snapshot,
+};
 use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_biometric::{AuthOptions, BiometricExt};
@@ -178,6 +180,24 @@ pub async fn remove_profile_photo<R: Runtime>(
     slot: State<'_, CoreSlot>,
 ) -> Result<Account, CommandError> {
     slot.get(&app).await?.remove_profile_photo().await
+}
+
+#[tauri::command]
+pub async fn create_invite<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    name: String,
+) -> Result<SentInvite, CommandError> {
+    slot.get(&app).await?.create_invite(&name).await
+}
+
+#[tauri::command]
+pub async fn preview_invite<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    invite_link: String,
+) -> Result<Contact, CommandError> {
+    slot.get(&app).await?.preview_invite(&invite_link).await
 }
 
 #[tauri::command]

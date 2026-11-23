@@ -5,6 +5,9 @@ import { ChatScreen } from "./screens/ChatScreen";
 import { Chats } from "./screens/Chats";
 import { CreateProfile } from "./screens/CreateProfile";
 import { ExportKey } from "./screens/ExportKey";
+import { Invite } from "./screens/Invite";
+import { InvitedStart } from "./screens/InvitedStart";
+import { InviteOne } from "./screens/InviteOne";
 import { MessageRequest } from "./screens/MessageRequest";
 import { NewChat } from "./screens/NewChat";
 import { Privacy } from "./screens/Privacy";
@@ -48,7 +51,7 @@ function ScreenView({ screen }: { screen: Screen }) {
     case "chats":
       return <Chats />;
     case "chat":
-      return <ChatScreen chatId={screen.chatId} />;
+      return <ChatScreen chatId={screen.chatId} invited={screen.invited} />;
     case "newChat":
       return <NewChat link={screen.link} />;
     case "scan":
@@ -65,6 +68,12 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <RadioSettings />;
     case "radioNotice":
       return <RadioNotice />;
+    case "invite":
+      return <Invite />;
+    case "inviteOne":
+      return <InviteOne />;
+    case "invitedStart":
+      return <InvitedStart link={screen.link} />;
     case "privacy":
       return <Privacy />;
     case "relays":

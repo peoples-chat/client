@@ -4,10 +4,12 @@ import {
   CoreError,
   type Account,
   type Chat,
+  type Contact,
   type Core,
   type CoreEvent,
   type CoreListener,
   type Message,
+  type SentInvite,
   type Snapshot,
 } from "./types";
 
@@ -62,6 +64,8 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     deleteAccount: () => call<void>("delete_account"),
     addContact: (inviteLink) => call<Chat>("add_contact", { inviteLink }),
     acceptInvitation: (invitationId) => call<Chat>("accept_invitation", { invitationId }),
+    createInvite: (name) => call<SentInvite>("create_invite", { name }),
+    previewInvite: (inviteLink) => call<Contact>("preview_invite", { inviteLink }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
     // Without a password the core exports the plain key.
     exportAccountKey: (copy) =>

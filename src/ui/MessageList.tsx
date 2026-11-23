@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { DeliveryState, Message } from "../core/types";
 import { formatDay, formatTime, sameDay } from "./format";
 import { Icon } from "./Icon";
@@ -6,8 +6,8 @@ import styles from "./MessageList.module.css";
 
 interface MessageListProps {
   messages: Message[];
-  /** Shown when there are no messages yet. */
-  empty?: string;
+  /** Shown when there are no messages yet: a line of text, or a whole introduction. */
+  empty?: ReactNode;
 }
 
 /** The messages of a chat, oldest at the top, with a separator for each day. */
@@ -43,7 +43,7 @@ export function MessageList({ messages, empty }: MessageListProps) {
   return (
     <div ref={listRef} className={styles.list} role="log" aria-label="Messages">
       <div className={styles.spacer} />
-      {messages.length === 0 && empty && <p className={styles.empty}>{empty}</p>}
+      {messages.length === 0 && (typeof empty === "string" ? <p className={styles.empty}>{empty}</p> : empty)}
       {messages.map((message, index) => (
         <Fragment key={message.id}>
           {(index === 0 || !sameDay(messages[index - 1].sentAt, message.sentAt)) && (

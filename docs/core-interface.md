@@ -51,6 +51,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `deleteAccount()` | `delete_account` | | `accountDeleted` | Done (#16) |
 | `addContact(inviteLink)` | `add_contact` | `Chat` | `chatAdded` | Done (#19) |
 | `acceptInvitation(invitationId)` | `accept_invitation` | `Chat` | `invitationRemoved`, `chatAdded` | Done (#19) |
+| `createInvite(name)` | `create_invite` | `SentInvite` | `inviteChanged` | Done (#95) |
+| `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
 | `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `pairRadio` | | | `radioChanged` | Planned (#24) |
@@ -70,6 +72,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
 | `contactChanged` | `contact` | A contact's name or photo changed | Done (#93, #94) |
+| `inviteChanged` | `invite` | The user sent an invitation, or the person used it | Done (#95) |
 | `transportChanged` | | Whether the internet or the radio can carry messages now | Planned (#48) |
 | `radioChanged` | | The paired radio's state | Planned (#24, #48) |
 
@@ -77,12 +80,13 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 
 | Type | Fields |
 | --- | --- |
-| `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays` |
+| `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
+| `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
 
 - A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
@@ -209,7 +213,45 @@ Noise's scanners read.
   - Until the site serves the Android file, an emulator can approve the domain by hand: `adb shell pm
     set-app-links-user-selection --user cur --package chat.peoples.client true peoples.chat`.
   - `adb shell am start -a android.intent.action.VIEW -d 'https://peoples.chat/i#…'` then opens a link as a tap would.
-- **After the `#`, the key may be followed by `/` and more.** That is room for #95's invitations.
+- **After the `#`, the key may be followed by `/` and a token:** a personal invitation's
+  ([Personal invitations](#personal-invitations)).
+
+## Personal invitations
+
+**How they work** (#95). A personal invitation lands the person in a chat with the user, without a request, and needs
+no server.
+
+1. `createInvite(name)` makes one: `https://peoples.chat/i#nprofile1…/<token>`, with a random token. `name` is whom it
+   is for, and only the user sees it. The core keeps it in `invites.json` in the data folder; nothing else knows of it.
+2. Someone without an account opens the link. `previewInvite(link)` gives the inviter's name and photo from their
+   profile; it needs no account.
+3. They create an account, and `addContact(link)` starts the chat. Their core then sends the token in the chat, as an
+   app event of the app's own kind (9910). It isn't text, so White Noise doesn't show it.
+4. The inviter's core gets the token while the chat is still a request. If the token is the user's, unused and less
+   than 7 days old, the core marks the invitation as used (`inviteChanged`, with `joinedChatId`) and accepts the chat
+   (`invitationRemoved`, then `chatAdded`). A token that came while the app was closed counts when it starts.
+
+**The limits are the inviter's app's.** A token that was used, has expired or isn't the user's opens nothing: that
+chat stays an ordinary request. Anyone can still send a request with the key in the link, as with the QR code.
+
+**What the interface shows:**
+
+- **Bring your people** (Settings → Invite friends, or the chat list's banner): Invite one person, and Meet in person
+  (the QR code on Profile). Bring a whole group waits for group chats.
+- **Invite one person:** whom it is for, the message, and the link shared with it or shown as a QR code. The
+  invitation is made when it is first shared or shown. Asking the person to be a guardian waits for recovery.
+- **The chat list in the first days,** until there are five chats or while invitations are out: the Bring your people
+  banner with how many have joined, and each invitation still out with Remind, which shares the link again. A chat from
+  an invitation reads "Joined from your invite. Say hi." until the first message.
+- **The invited person:** a link that opens the app without an account shows "Emil Dahl invited you". A name, and
+  Start chatting, make the account and open the chat. "This invitation is not for me" goes to Welcome.
+
+**Not built yet:** group invitations; guardians; the invited chat's suggested first messages and its "Emil invited you
+to peoples.chat" header.
+
+**Trying it:** `cargo run -p peoples-chat-core --example invite_partner` runs an inviter on the Mac against the local
+relay. It prints an invitation's link and then what happens to it. A phone without an account opens the link: on the
+Android emulator, `adb shell am start -a android.intent.action.VIEW -d '<link>'`.
 
 ## Messages
 

@@ -156,6 +156,25 @@ pub struct Invitation {
     pub messages: Vec<Message>,
 }
 
+/// An invitation the user sent: a personal link that works once and for 7 days (#95). The
+/// person who uses it lands in a chat with the user without a request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentInvite {
+    /// Identifies the invitation.
+    pub id: String,
+    /// Whom it is for. Only the user sees it.
+    pub name: String,
+    /// The link to share: `https://peoples.chat/i#nprofile1…/<token>`.
+    pub link: String,
+    /// Milliseconds since the Unix epoch.
+    pub created_at: u64,
+    pub expires_at: u64,
+    /// The chat that opened when the person joined, once they have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_chat_id: Option<String>,
+}
+
 /// Everything an interface shows, as the core holds it now. Every later change arrives as a
 /// [`CoreEvent`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +187,9 @@ pub struct Snapshot {
     /// without an account.
     #[serde(default)]
     pub relays: Vec<Relay>,
+    /// The invitations the user sent, oldest first (#95).
+    #[serde(default)]
+    pub invites: Vec<SentInvite>,
 }
 
 /// A change in the core. Applying an event twice, or one that a snapshot already contains,
@@ -220,6 +242,10 @@ pub enum CoreEvent {
     /// invitations alike (#93).
     ContactChanged {
         contact: Contact,
+    },
+    /// The user sent an invitation, or the person used it (#95).
+    InviteChanged {
+        invite: SentInvite,
     },
 }
 

@@ -7,12 +7,14 @@ import {
   RADIO_TEXT_LIMIT,
   type Account,
   type Chat,
+  type Contact,
   type Core,
   type CoreEvent,
   type CoreListener,
   type Invitation,
   type Message,
   type Relay,
+  type SentInvite,
 } from "./types";
 
 // A stand-in for the Rust core with demo data: in the browser preview, and in the app when it is
@@ -46,6 +48,7 @@ interface MockState {
   account: Account | null;
   chats: Chat[];
   invitations: Invitation[];
+  invites: SentInvite[];
   /** Invite links already used, and the chat each one opened. */
   links: Record<string, string>;
   demoContactsAdded: number;
@@ -60,6 +63,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const replyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const state = restore(storage) ?? emptyState();
+  // Who each previewed invite link is from, so the chat it starts is with that person (#95).
+  const previewed = new Map<string, Contact>();
 
   // Runs `task` later, unless the account is deleted first.
   function later(ms: number, task: () => void) {
@@ -122,6 +127,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         chats: state.chats,
         invitations: state.invitations,
         relays: state.account ? demoRelays() : [],
+        invites: state.invites,
       });
     },
 
@@ -211,19 +217,44 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const known = state.chats.find((c) => c.id === state.links[link]);
       if (known) return structuredClone(known);
 
-      const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
-      const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
-      const chat: Chat = {
-        id: randomHex(8),
-        contact: { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` },
-        messages: [],
-        reach: "internet",
-      };
-      state.demoContactsAdded += 1;
+      let contact = previewed.get(link);
+      if (!contact) {
+        const round = Math.floor(state.demoContactsAdded / DEMO_CONTACTS.length);
+        const baseName = DEMO_CONTACTS[state.demoContactsAdded % DEMO_CONTACTS.length];
+        contact = { publicKey: randomHex(32), name: round === 0 ? baseName : `${baseName} ${round + 1}` };
+        state.demoContactsAdded += 1;
+      }
+      const chat: Chat = { id: randomHex(8), contact, messages: [], reach: "internet" };
       state.chats.push(chat);
       state.links[link] = chat.id;
       emit({ type: "chatAdded", chat });
       return structuredClone(chat);
+    },
+
+    // The demo's links open nothing; the real core's are https://peoples.chat/i links (#95).
+    async createInvite(name) {
+      const account = requireAccount();
+      const trimmed = name.trim();
+      if (!trimmed) throw new CoreError("Enter a name.");
+      const id = randomHex(10);
+      const invite = {
+        id,
+        name: trimmed,
+        link: `${account.shareLink}/${id}`,
+        createdAt: now(),
+        expiresAt: now() + 7 * 24 * 60 * MINUTE,
+      };
+      state.invites.push(invite);
+      emit({ type: "inviteChanged", invite });
+      return structuredClone(invite);
+    },
+
+    async previewInvite(inviteLink) {
+      const link = inviteLink.trim();
+      if (!LINK_PATTERN.test(link)) throw new CoreError("That is not an invite link.");
+      const contact = previewed.get(link) ?? { publicKey: randomHex(32), name: "Emil Dahl" };
+      previewed.set(link, contact);
+      return structuredClone(contact);
     },
 
     async acceptInvitation(invitationId) {
@@ -372,7 +403,7 @@ function demoInvitation(now: number, firstName: string): Invitation {
 }
 
 function emptyState(): MockState {
-  return { account: null, chats: [], invitations: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
+  return { account: null, chats: [], invitations: [], invites: [], links: {}, demoContactsAdded: 0, repliesSent: 0 };
 }
 
 function browserStorage(): StorageLike | null {

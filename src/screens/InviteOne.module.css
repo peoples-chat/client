@@ -1,0 +1,74 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 8px 24px;
+}
+
+/* The guardian row runs edge to edge, as rows do. */
+.main > button {
+  margin: 0 -24px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+.textarea {
+  min-height: 124px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 15.5px;
+  line-height: 1.4;
+  resize: none;
+  outline: 0;
+}
+
+.textarea:focus-visible {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.helper,
+.note {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--color-muted);
+}
+
+.note {
+  font-size: 14.5px;
+}
+
+.error {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-danger);
+}
+
+.qr {
+  align-self: center;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--color-qr-bg);
+  color: var(--color-qr-fg);
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px max(24px, var(--safe-bottom));
+}
