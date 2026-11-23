@@ -57,9 +57,36 @@ what the user sends within an hourly budget:
   airtime for this hour." When airtime comes free, the waiting messages go.
 
 **The transmission log** (#52). Every packet the app makes the radio send is logged in `radio.json` for two days, with
-its time, size, airtime and reason (`message`: one the user sent, or one that waited). `Core::radio_transmissions`
-returns it. The cap counts it, and the tests compare it with what the user sent. The firmware's own adverts and
-acknowledgements aren't the app's, and aren't in it.
+its time, size, airtime and reason (`message`: one the user sent, or one that waited; `retry`: one sent again for want
+of a confirmation). `Core::radio_transmissions` returns it. The cap counts it, and the tests compare it with what the
+user sent. The firmware's own adverts and acknowledgements aren't the app's, and aren't in it.
+
+## Confirmation
+
+The other radio confirms a text message on receipt (#41). That means it reached the radio, not that anyone read it,
+and it is all the app claims: a message is `confirmed`, or `timedOut` when no confirmation came, never more.
+
+- **How long the core waits** for each try: the radio's own estimate, which `SENT` carries, plus a second for the
+  confirmation to come over the link from the radio (`CONFIRM_MARGIN`). Companion v1.18.0 estimates 0.5 s plus
+  16 times the packet's airtime for a flood, and for a direct message 0.5 s plus 6 times the airtime and 0.25 s for
+  each link on the path: about 10 s to 27 s for the longest message in the EU/UK narrow preset. Hardware day measures
+  the real times (#36). `Core::set_radio_confirm_wait` replaces the estimate, for tests and tuning.
+- **One retry** (`RADIO_RETRIES`), because each try costs shared airtime. It goes only while the chat is still
+  reachable by radio (the contact's radio heard, the same preset, airtime left), the hour's airtime has room for it,
+  and no relay carries the message instead, unless radio is forced. It is logged with the reason `retry`.
+- **The retry sends the same packet again.** meshcore-rs gives it a new timestamp, so the mesh doesn't drop it as a
+  repeat, and the firmware gives it its own confirmation code; either code confirms the message. If the first try got
+  through after all, the other phone drops the second copy as a replay (#42).
+- **Without a confirmation after the retry**, the message is `timedOut`. Its relay copy still goes once a relay is
+  back, as for every radio message (#47), and then it is `sent`. A confirmation that comes later still counts.
+- **Across a restart**, retries stop. A message whose confirmation was due meanwhile is `timedOut`; one still due is
+  waited for until then.
+- **The radio can confirm before `send_text` returns**, as the mock radios always do. The core keeps such a
+  confirmation until the message it belongs to is kept.
+
+`core/tests/radio_confirmation.rs` checks a confirmed message, a retry that gets through, a message to a radio that is
+switched off, a restart, and the relays' return; and that no retry goes once the contact's radio isn't heard anymore,
+or the hour's airtime has no room for it.
 
 ## The interface
 

@@ -69,7 +69,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationReceived` | `invitation` | Someone who is not a contact invites the user | Done (#19) |
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
-| `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20) |
+| `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
 | `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
@@ -95,8 +95,11 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 
 - A message's `id` is stable: both phones know the message by it, across restarts. The core drops duplicates by it after
   an outage.
-- `delivery` is set on outgoing messages only:
-  - `waiting`: not sent yet, for example because there is no path.
+- `delivery` is set on outgoing messages only. It only moves forward, in this order:
+  - `waiting`: not sent yet, for example because there is no path. A radio message is `waiting` from when the radio
+    sends it until the other radio confirms it.
+  - `timedOut`: the radio sent it, but the other radio didn't confirm it in time, also after a retry (#41). It still
+    goes by internet once a relay is back. Radio only.
   - `sent`: a relay acknowledged it.
   - `confirmed`: the other radio confirmed it. Radio only.
 - `reach` says how the chat's messages can travel now; see [Reach](#reach).
@@ -331,6 +334,10 @@ Wi-Fi and mobile data works too. Airplane mode may also turn off Bluetooth, whic
 - **In radio mode, the field** counts UTF-8 bytes against `RADIO_TEXT_LIMIT` (96, in `src/core/types.ts`). Past it,
   the counter says "Waits for internet" and Send sends the message to wait (#46); with radio forced, Send stays off.
 - **A waiting message** has Cancel under it, and "Too long for radio. It waits for the internet." when that's why.
+- **Delivery** shows as a clock while a message waits, or waits for the other radio to confirm it; a check once a relay
+  acknowledged it or the other radio confirmed it; and a question mark when the other radio didn't confirm it in time,
+  with "Not confirmed by radio. It goes by internet once a relay is back." under it (#41). The labels for screen
+  readers say which.
 
 The core marks a chat `radio` when the contact's radio has been heard (#44), and sends there by radio by itself (#45).
 The mock's demo has a chat reached by radio.
@@ -378,9 +385,15 @@ that copy is the permanent record (#47). With the switch on and the relays up, t
 other phone keeps one copy. So does a message whose radio send is still going when the relays come back: it stays
 `radio`, the way it went first. If the radio fails after the checks, the message waits for the internet.
 
-**What arrives.** The message is `radio`, and `confirmed` once the other radio confirms it. On the other phone it
-arrives as `radio` too, and its relay copy later changes nothing. Messages that came by radio stay across a restart,
-also before their relay copies arrive. The radio parts are in [radio-format-v0.md](radio-format-v0.md#in-the-core).
+**Confirmation** (#41). The message is `radio`, and `confirmed` once the other radio confirms it. Without a
+confirmation in time, the core sends it once more, while the chat is still reachable by radio and the hour's airtime
+allows. Without one after that either, it is `timedOut`, and stays so across a restart. A confirmation that comes
+later still makes it `confirmed`, and a relay acknowledging its copy makes it `sent`. The details are in
+[radio.md](radio.md#confirmation).
+
+**What arrives.** On the other phone the message arrives as `radio` too, once, also when a retry got through as
+well; its relay copy later changes nothing. Messages that came by radio stay across a restart, also before their
+relay copies arrive. The radio parts are in [radio-format-v0.md](radio-format-v0.md#in-the-core).
 
 **After the outage** (#47). MDK publishes each radio message once a relay is back, and the waiting messages go. Both
 phones then have the same history: each message once, where it was, the radio ones still `radio`.
