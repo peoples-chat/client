@@ -325,6 +325,11 @@ sends an event of a kind the app chooses, inside the chat's encryption.
 - It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
   does text.
 
+**App state in a chat** (#117). MDK also lets an app keep state of its own in a chat: an MLS app component, under an id
+from `0xf000` up, read with `group_app_component` and replaced by an admin's commit with `update_app_component`. It
+isn't a message: no row, unread count or notification, in our app or White Noise's MDK 0.17. The spike that found it a
+fit for the radio address record: [spikes/117-chat-state.md](spikes/117-chat-state.md).
+
 ## Relay reachability
 
 Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
@@ -455,6 +460,14 @@ orientation, dropping the metadata, transparency and refusals.
 - what one sends with, the other receives with, and a restart keeps the keys;
 - a slow test, ignored unless asked for (`--include-ignored`), checks that both move to new keys after MDK's
   post-join key update and after one asked for. Each took about 100 seconds.
+
+`core/tests/chat_state_spike.rs` drives MDK directly to try app state in a direct chat (#117):
+
+- each side's record reaches the other within about a second, leaves no trace in either chat, and stays across a
+  restart;
+- a write without a relay waits, and MDK sends it once the relay is back;
+- both sides writing at once keep both records with a component each, and lose one with a single shared component;
+- an ignored test writes the record in a chat with another client, as for the check against White Noise's MDK 0.17.
 
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.

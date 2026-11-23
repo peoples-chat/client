@@ -20,7 +20,8 @@ anything:
   ```
 
 - **It travels** as an app event of kind 9911 inside the direct chat ([mdk.md](mdk.md#app-events)): never in a group,
-  never published.
+  never published. White Noise on Android shows that event as a bubble of raw data. The chat's state is a better home
+  for the record, out of sight in both apps ([spike #117](spikes/117-chat-state.md)).
 - **Sending.** With a radio, the core sends its record in every direct chat that hasn't had this one: when the radio
   is attached, when a chat starts, and every minute for chats it couldn't reach. A different radio, or the same one with
   other settings, makes a new record; the same radio keeps the time of its first record, so it isn't sent again.
