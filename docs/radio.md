@@ -56,6 +56,9 @@ cargo run -p peoples-chat-core --example radio_info -- /dev/cu.usbmodem1101  # d
 It prints the radio's public key, name, LoRa settings, firmware and contacts. It only reads: it changes nothing on the
 radio. Waiting for radios: #12.
 
+With two radios, `path_spike` measures the three paths for the app's packets (#36). Steps:
+[radio-paths.md](radio-paths.md#running-the-spike).
+
 ## meshcore-rs
 
 **Version and licence.**
@@ -142,8 +145,11 @@ These come from the firmware source at `companion-v1.18.0`.
 | Option | Encrypted | Confirmed | Limit | Notes |
 | --- | --- | --- | --- | --- |
 | Text-encoded data in a plain message | Yes | Yes | 160 bytes, no NUL | Works with meshcore-rs today |
-| `SEND_RAW_DATA` | No | No | About 170 bytes | Direct or one hop only; reaches only an app that is connected at the time |
+| `SEND_RAW_DATA` | No | No | 172 bytes | Along a path the app gives, never a flood; reaches only an app that is connected at the time |
 | Channel data on a private channel (62) | By the channel key | No | 165 bytes | No sender identity; not in meshcore-rs 0.2.0 |
+
+[radio-paths.md](radio-paths.md) compares the three in detail, from the firmware source. The `path_spike` example
+measures them between two radios.
 
 ## Tests
 
