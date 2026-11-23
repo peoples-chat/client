@@ -25,6 +25,11 @@ export interface Account {
    * real core it is a `nostr:nprofile1…` URI; to the interface it is opaque.
    */
   inviteLink: string;
+  /**
+   * The same as a web link, `https://peoples.chat/i#nprofile1…`, for sharing: tapped on a phone,
+   * it opens the app (#72). Opaque to the interface.
+   */
+  shareLink: string;
 }
 
 export interface Contact {

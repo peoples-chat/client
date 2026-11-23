@@ -7,6 +7,11 @@
 //!
 //! We also read the links other Marmot apps hand out: White Noise's `marmot://profile/<npub>`,
 //! and plain `npub`, `nprofile` or hex keys, with or without `nostr:`.
+//!
+//! The link people share is a web link, `https://peoples.chat/i#nprofile1…` (#72). Tapped on a
+//! phone with the app, it opens the app; without the app, it opens a page on peoples.chat. The
+//! key is in the fragment, which browsers don't send, so the website never sees it. The QR code
+//! keeps the `nostr:` form, which White Noise's scanners read.
 
 use marmot_app::AppError;
 use nostr::nips::nip19::{FromBech32, Nip19Profile};
@@ -18,6 +23,17 @@ const MAX_RELAY_HINTS_READ: usize = 5;
 /// Profile links of White Noise and other Marmot apps, matched without regard to case. The
 /// key follows the prefix; a query (`?from=qr`) or fragment after it is ignored.
 const PROFILE_LINK_PREFIXES: &[&str] = &["marmot://profile/", "whitenoise://profile/"];
+/// Our web links. The key follows the `#`; what follows a `/` after it is left for the
+/// invitations of #95.
+const WEB_LINK: &str = "https://peoples.chat/i#";
+const WEB_LINK_PREFIXES: &[&str] = &[
+    "https://peoples.chat/i#",
+    "https://peoples.chat/i/#",
+    "http://peoples.chat/i#",
+    "http://peoples.chat/i/#",
+    "peoples.chat/i#",
+    "peoples.chat/i/#",
+];
 
 /// What an invite link says: whom to invite, and where to look for them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +62,12 @@ pub fn invite_link(public_key_hex: &str, relays: &[String]) -> Result<String, Ap
     let hints = &relays[..relays.len().min(MAX_RELAY_HINTS)];
     let nprofile = marmot_app::nprofile_for_account_id(public_key_hex, hints)?;
     Ok(format!("nostr:{nprofile}"))
+}
+
+/// The web link for sharing: the invite link's key and hints after `https://peoples.chat/i#`.
+pub fn web_link(invite_link: &str) -> String {
+    let reference = strip_prefix_ignoring_case(invite_link, "nostr:").unwrap_or(invite_link);
+    format!("{WEB_LINK}{reference}")
 }
 
 /// Reads an invite link, a scanned QR code or a pasted key.
@@ -85,12 +107,18 @@ pub fn parse(text: &str) -> Result<Invite, InviteError> {
     }
 }
 
-/// The key in a `marmot://profile/…` link, or the text as it is.
+/// The key in a `marmot://profile/…` link or one of our web links, or the text as it is.
 fn without_profile_link(text: &str) -> &str {
     for prefix in PROFILE_LINK_PREFIXES {
         if let Some(rest) = strip_prefix_ignoring_case(text, prefix) {
             let end = rest.find(['?', '#']).unwrap_or(rest.len());
             return rest[..end].trim_end_matches('/');
+        }
+    }
+    for prefix in WEB_LINK_PREFIXES {
+        if let Some(rest) = strip_prefix_ignoring_case(text, prefix) {
+            let end = rest.find(['/', '?', '&']).unwrap_or(rest.len());
+            return &rest[..end];
         }
     }
     text
@@ -159,6 +187,44 @@ mod tests {
                 "wss://three.example"
             ])
         );
+    }
+
+    #[test]
+    fn our_web_link_carries_the_same_key_and_relays() {
+        let key = new_key();
+        let link = invite_link(
+            &key.hex,
+            &relays(&["wss://one.example", "wss://two.example"]),
+        )
+        .unwrap();
+        let web = web_link(&link);
+        assert_eq!(
+            web,
+            link.replace("nostr:", "https://peoples.chat/i#"),
+            "{web}"
+        );
+        assert_eq!(parse(&web).unwrap(), parse(&link).unwrap());
+
+        // As messengers and people pass it on, and with what #95 may add after the key.
+        let nprofile = link.trim_start_matches("nostr:");
+        for form in [
+            format!("http://peoples.chat/i#{nprofile}"),
+            format!("https://peoples.chat/i/#{nprofile}"),
+            format!("HTTPS://PEOPLES.CHAT/i#{nprofile}"),
+            format!("peoples.chat/i#{nprofile}"),
+            format!(" https://peoples.chat/i#{nprofile}/7QK2M9 "),
+            format!("https://peoples.chat/i#{}", key.npub),
+        ] {
+            let invite = parse(&form).unwrap_or_else(|error| panic!("{form}: {error}"));
+            assert_eq!(invite.public_key_hex, key.hex, "{form}");
+        }
+        // A secret key in a web link is still recognised as one.
+        let secret = Keys::generate().secret_key().to_bech32().unwrap();
+        assert_eq!(
+            parse(&format!("https://peoples.chat/i#{secret}")),
+            Err(InviteError::SecretKey)
+        );
+        assert_eq!(parse("https://peoples.chat/i#"), Err(InviteError::NotALink));
     }
 
     #[test]

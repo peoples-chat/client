@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 /** True in the iOS and Android apps, false on desktop and in the browser preview. */
 const inPhoneApp = isTauri() && /android|iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -79,4 +80,15 @@ export function jpegDataUrl(jpeg: Uint8Array): string {
   let binary = "";
   for (const byte of jpeg) binary += String.fromCharCode(byte);
   return `data:image/jpeg;base64,${btoa(binary)}`;
+}
+
+/**
+ * Calls `onLink` with each link that opened the app (#72): the one it started with, and each one
+ * tapped while it runs. Only the phone apps open links.
+ */
+export async function followOpenedLinks(onLink: (url: string) => void): Promise<() => void> {
+  if (!inPhoneApp) return () => {};
+  const started = await getCurrent().catch(() => null);
+  for (const url of started ?? []) onLink(url);
+  return onOpenUrl((urls) => urls.forEach(onLink));
 }

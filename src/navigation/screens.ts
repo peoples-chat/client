@@ -4,7 +4,8 @@ export type Screen =
   | { name: "createProfile" }
   | { name: "chats" }
   | { name: "chat"; chatId: string }
-  | { name: "newChat" }
+  /** `link`: an invite link that opened the app, filled in for the user to confirm (#72). */
+  | { name: "newChat"; link?: string }
   | { name: "scan" }
   | { name: "request"; invitationId: string }
   | { name: "settings" }

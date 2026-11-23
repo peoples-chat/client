@@ -1057,6 +1057,7 @@ fn account_view(
     name: String,
 ) -> Result<Account, MessagingError> {
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
+    let share_link = invite::web_link(&invite_link);
     let photo = messaging
         .known_picture(&public_key_hex)
         .and_then(|url| avatars.get(&url))
@@ -1066,6 +1067,7 @@ fn account_view(
         about: messaging.own_about(&public_key_hex),
         photo,
         invite_link,
+        share_link,
         public_key: public_key_hex,
     })
 }
