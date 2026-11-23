@@ -47,6 +47,8 @@ tokio = { version = "1", features = ["rt", "sync", "time"] }
 # reach radios over Bluetooth (#23). Notes: docs/radio.md.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 meshcore-rs = { version = "=0.2.0", default-features = false, features = ["serial"] }
+# Lists the USB serial ports a radio can be paired on (#24). meshcore-rs uses the same crate.
+tokio-serial = { version = "5.5", default-features = false }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 meshcore-rs = { version = "=0.2.0", default-features = false }
@@ -62,7 +64,3 @@ serde_json = "1"
 tempfile = "3"
 # `net` and `io-util` run the test relay's front door (tests/support/relay.rs).
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal"] }
-
-# Lists serial ports in the radio example. meshcore-rs uses the same crate.
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
-tokio-serial = { version = "5.5", default-features = false }

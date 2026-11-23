@@ -89,9 +89,18 @@
       "paired": {
         "name": "Emil's radio",
         "publicKey": "7d1c4a3be0f2a9c85e6b1f40d3a29e7c1b8f05d64e2a97c3b51f80e6d4c2a913",
-        "connected": true
+        "connection": "connected",
+        "port": "/dev/cu.usbmodem1101",
+        "preset": {
+          "frequencyKhz": 869618,
+          "bandwidthHz": 62500,
+          "spreadingFactor": 8,
+          "codingRate": 8,
+          "expected": true
+        }
       },
-      "forced": false
+      "forced": false,
+      "canPair": true
     }
   },
   "events": [

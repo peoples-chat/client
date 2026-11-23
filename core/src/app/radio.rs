@@ -14,8 +14,7 @@
 //! - **Addresses (#34).** With a radio, the core shares its radio address record in each direct
 //!   chat, and keeps the records its contacts share as their radios.
 //!
-//! The core uses the radio only while the switch that forces it is on; choosing the transport
-//! by itself is #45.
+//! Pairing a radio, and opening it again after its link drops, is in `pairing.rs` (#24).
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, MutexGuard, PoisonError, Weak};
@@ -27,12 +26,16 @@ use tokio::time::Instant;
 
 use super::{Core, Inner, failed, now_ms, upgrade};
 use crate::interface::{
-    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioIssue, RadioStatus, Reach,
+    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioConnection, RadioIssue,
+    RadioPreset, RadioStatus, Reach,
 };
 use crate::messaging::{RadioAddressItem, TextMessage};
 use crate::radio::airtime;
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
-use crate::radio::{Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, ReceivedText, Refusal};
+use crate::radio::{
+    EXPECTED_PRESET, Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, RadioPorts,
+    ReceivedText, Refusal,
+};
 use crate::radio_store::{RadioMessage, RadioStore, Transmission};
 use crate::reach::{Heard, radio_reach};
 
@@ -51,9 +54,9 @@ const EARLY_CONFIRMATIONS: usize = 16;
 
 /// The radio the core uses, and the watcher that follows its events.
 pub(super) struct Attached {
-    radio: Arc<dyn Radio>,
-    info: RadioInfo,
-    connected: bool,
+    pub(super) radio: Arc<dyn Radio>,
+    pub(super) info: RadioInfo,
+    pub(super) connected: bool,
     watcher: JoinHandle<()>,
 }
 
@@ -93,6 +96,14 @@ pub(super) struct RadioParts {
     /// `send_text` returns and the message is kept. Held while keeping a sent message or a
     /// confirmation, so that each sees the other.
     pub(super) early_confirmations: std::sync::Mutex<VecDeque<String>>,
+    /// Where radios are plugged in, on a device that pairs them over a cable (#24).
+    pub(super) ports: std::sync::Mutex<Option<Arc<dyn RadioPorts>>>,
+    /// Looks for the paired radio while its link is down (#24).
+    pub(super) reconnect: std::sync::Mutex<Option<JoinHandle<()>>>,
+    /// How long to wait between looks, when a test sets it (#24).
+    pub(super) reconnect_wait: std::sync::Mutex<Option<Duration>>,
+    /// Pairing, forgetting and opening the paired radio again happen one at a time (#24).
+    pub(super) pairing: tokio::sync::Mutex<()>,
 }
 
 /// A radio message whose confirmation the core awaits (#41).
@@ -117,8 +128,8 @@ impl Core {
     /// Uses `radio` for radio messages from now on, in place of any radio used before. Emits
     /// [`CoreEvent::RadioChanged`].
     ///
-    /// Pairing (#24) will connect a radio and hand it over here. Until then, tests hand over
-    /// mock radios.
+    /// Pairing (#24) opens a radio and hands it over here. Tests hand over mock radios directly
+    /// too; those aren't remembered.
     pub async fn attach_radio(&self, radio: Arc<dyn Radio>) -> Result<RadioStatus, CommandError> {
         let info = radio
             .info()
@@ -319,21 +330,51 @@ impl Core {
         }
     }
 
-    /// The radio as an interface shows it.
+    /// The radio as an interface shows it: the one in use, or else the paired one while the core
+    /// looks for it (#24).
     pub(super) fn radio_status(&self) -> RadioStatus {
-        let paired = self.attached().as_ref().map(|attached| PairedRadio {
-            name: attached.info.name.clone(),
-            public_key: attached.info.public_key.clone(),
-            connected: attached.connected,
-        });
+        let pairing = self.inner.radio_store.pairing();
+        let looking = self.reconnecting();
+        let can_pair = self.radio_ports_slot().is_some();
+        let unless_connected = if looking {
+            RadioConnection::Connecting
+        } else {
+            RadioConnection::Disconnected
+        };
+        let paired = match self.attached().as_ref() {
+            Some(attached) => {
+                let record = RadioAddress::new(&attached.info, 0);
+                Some(PairedRadio {
+                    name: attached.info.name.clone(),
+                    public_key: attached.info.public_key.clone(),
+                    connection: if attached.connected {
+                        RadioConnection::Connected
+                    } else {
+                        unless_connected
+                    },
+                    port: pairing
+                        .filter(|pairing| pairing.radio.key == record.key)
+                        .map(|pairing| pairing.port),
+                    preset: preset_view(&record),
+                })
+            }
+            None => pairing.map(|pairing| PairedRadio {
+                name: pairing.name,
+                public_key: pairing.radio.key.clone(),
+                connection: unless_connected,
+                port: Some(pairing.port),
+                preset: preset_view(&pairing.radio),
+            }),
+        };
         RadioStatus {
             paired,
             forced: self.inner.radio_store.forced(),
+            can_pair,
         }
     }
 
     /// Puts the radio's status into the snapshot, and emits it if it changed.
-    fn radio_changed(&self) -> RadioStatus {
+    pub(super) fn radio_changed(&self) -> RadioStatus {
         let status = self.radio_status();
         let changed = {
             let mut state = self.state();
@@ -396,8 +437,18 @@ impl Core {
         let chat = self
             .chat(chat_id)
             .ok_or_else(|| CommandError::new("This chat no longer exists."))?;
-        let Some(radio) = self.attached().as_ref().map(|a| Arc::clone(&a.radio)) else {
-            return Err(CommandError::new("Pair a radio first."));
+        let in_use = self
+            .attached()
+            .as_ref()
+            .map(|a| (Arc::clone(&a.radio), a.connected));
+        let radio = match in_use {
+            Some((radio, true)) => radio,
+            // Paired, but its link is down: the core is looking for it (#24).
+            Some((_, false)) => return Err(CommandError::new("Your radio isn't connected.")),
+            None if self.inner.radio_store.pairing().is_some() => {
+                return Err(CommandError::new("Your radio isn't connected."));
+            }
+            None => return Err(CommandError::new("Pair a radio first.")),
         };
         let Some(contact_radio) = self
             .inner
@@ -763,8 +814,14 @@ impl Core {
             RadioEvent::Delivered { ack } => self.radio_confirmed(&ack),
             RadioEvent::ContactHeard { public_key } => self.hear(&public_key),
             RadioEvent::Disconnected => {
-                if let Some(attached) = self.attached().as_mut() {
+                let key = self.attached().as_mut().map(|attached| {
                     attached.connected = false;
+                    attached.info.public_key.to_ascii_lowercase()
+                });
+                // The paired radio restarted, or its cable was pulled: look for it (#24).
+                let paired = self.inner.radio_store.pairing().map(|p| p.radio.key);
+                if key.is_some() && key == paired {
+                    self.paired_radio_lost();
                 }
                 self.radio_changed();
                 self.reach_changed();
@@ -890,13 +947,15 @@ impl Core {
         }
     }
 
-    /// Stops following the radio, as when the core closes.
+    /// Stops following the radio and looking for it, as when the core closes.
     pub(super) fn stop_radio(&self) {
+        self.stop_reconnect();
         drop(self.attached().take());
     }
 
-    /// Forgets the radio's keys and stops using it, as when the account is deleted.
-    pub(super) fn forget_radio(&self) {
+    /// Forgets the radio's keys and the paired radio, and stops using it, as when the account is
+    /// deleted.
+    pub(super) fn clear_radio(&self) {
         self.stop_radio();
         self.inbox().clear();
         self.heard().clear();
@@ -906,7 +965,7 @@ impl Core {
         }
     }
 
-    fn attached(&self) -> MutexGuard<'_, Option<Attached>> {
+    pub(super) fn attached(&self) -> MutexGuard<'_, Option<Attached>> {
         self.inner
             .radio
             .attached
@@ -944,6 +1003,18 @@ impl Core {
             .early_confirmations
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A radio's settings as an interface shows them, and whether they are the preset the app
+/// expects (#24).
+fn preset_view(record: &RadioAddress) -> RadioPreset {
+    RadioPreset {
+        frequency_khz: record.freq,
+        bandwidth_hz: record.bw,
+        spreading_factor: record.sf,
+        coding_rate: record.cr,
+        expected: record.preset() == EXPECTED_PRESET,
     }
 }
 

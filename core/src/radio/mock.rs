@@ -1,5 +1,5 @@
 //! Mock radios on a mock mesh: the [`Radio`] interface without hardware, for tests and for
-//! interface work (#60).
+//! interface work (#60). [`MockPorts`] plugs them into mock USB ports, for pairing (#24).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use super::{
-    ContactKind, EVENT_BUFFER, Mesh, Radio, RadioContact, RadioError, RadioEvent, RadioInfo,
-    RadioSettings, Sent, check_text, key_prefix,
+    ContactKind, EVENT_BUFFER, Mesh, Port, Radio, RadioContact, RadioError, RadioEvent, RadioInfo,
+    RadioPorts, RadioSettings, Sent, check_text, key_prefix,
 };
 
 /// The settings a mock radio reports unless it is given others: MeshCore's EU/UK narrow preset.
@@ -93,6 +93,20 @@ impl MockMesh {
             state.out_of_range.remove(public_key);
         } else {
             state.out_of_range.insert(public_key.to_owned());
+        }
+    }
+
+    /// Opens the link to the radio with `public_key`, or drops it, as when its port is opened or
+    /// its cable pulled.
+    fn set_connected(&self, public_key: &str, connected: bool) {
+        let mut state = self.state();
+        if let Some(node) = state.radios.get_mut(public_key)
+            && node.connected != connected
+        {
+            node.connected = connected;
+            if !connected {
+                let _ = node.events.send(RadioEvent::Disconnected);
+            }
         }
     }
 
@@ -222,6 +236,112 @@ impl Radio for MockRadio {
             let _ = node.events.send(RadioEvent::Disconnected);
         }
         Ok(())
+    }
+}
+
+/// Mock USB ports with mock radios plugged in (#24): pairing without hardware. Clones share the
+/// ports.
+#[derive(Clone, Default)]
+pub struct MockPorts {
+    ports: Arc<Mutex<BTreeMap<String, MockPort>>>,
+    opened: Arc<Mutex<Vec<String>>>,
+}
+
+struct MockPort {
+    description: String,
+    serial_number: String,
+    /// The radio on the port: its mesh and public key. `None` for a device that isn't a radio.
+    radio: Option<(MockMesh, String)>,
+}
+
+impl MockPorts {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Plugs `radio` in at `path`. The port is listed as a "Mock radio" with a serial number that
+    /// goes with the radio, and opening it reaches the radio with its link open.
+    pub fn plug(&self, path: &str, radio: &MockRadio) {
+        self.ports().insert(
+            path.to_owned(),
+            MockPort {
+                description: "Mock radio".to_owned(),
+                serial_number: format!("MOCK-{}", &radio.public_key[..16]),
+                radio: Some((radio.mesh.clone(), radio.public_key.clone())),
+            },
+        );
+    }
+
+    /// Plugs in a device at `path` that isn't a radio. Opening it times out, as with a device
+    /// that doesn't speak MeshCore's companion protocol.
+    pub fn plug_other(&self, path: &str, description: &str) {
+        self.ports().insert(
+            path.to_owned(),
+            MockPort {
+                description: description.to_owned(),
+                serial_number: format!("OTHER-{path}"),
+                radio: None,
+            },
+        );
+    }
+
+    /// Unplugs whatever is at `path`, as when its cable is pulled or the radio restarts. The port
+    /// goes, and a radio on it loses its link.
+    pub fn unplug(&self, path: &str) {
+        let removed = self.ports().remove(path);
+        if let Some(MockPort {
+            radio: Some((mesh, public_key)),
+            ..
+        }) = removed
+        {
+            mesh.set_connected(&public_key, false);
+        }
+    }
+
+    /// The paths of the ports opened so far, in order.
+    pub fn opened(&self) -> Vec<String> {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn ports(&self) -> MutexGuard<'_, BTreeMap<String, MockPort>> {
+        self.ports.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[async_trait]
+impl RadioPorts for MockPorts {
+    async fn list(&self) -> Result<Vec<Port>, RadioError> {
+        Ok(self
+            .ports()
+            .iter()
+            .map(|(path, port)| Port {
+                path: path.clone(),
+                description: Some(port.description.clone()),
+                serial_number: Some(port.serial_number.clone()),
+            })
+            .collect())
+    }
+
+    async fn open(&self, path: &str) -> Result<Arc<dyn Radio>, RadioError> {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.to_owned());
+        let ports = self.ports();
+        let port = ports
+            .get(path)
+            .ok_or_else(|| RadioError::Link(format!("{path}: no such port")))?;
+        let Some((mesh, public_key)) = &port.radio else {
+            return Err(RadioError::Timeout);
+        };
+        mesh.set_connected(public_key, true);
+        Ok(Arc::new(MockRadio {
+            mesh: mesh.clone(),
+            public_key: public_key.clone(),
+        }))
     }
 }
 
