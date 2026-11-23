@@ -62,5 +62,11 @@ nostr-relay-builder = "0.44"
 nostr-sdk = { git = "https://github.com/erskingardner/rust-nostr", rev = "e93cc06b5624f06c21ecd8111a124176eb0c7589" }
 serde_json = "1"
 tempfile = "3"
-# `net` and `io-util` run the test relay's front door (tests/support/relay.rs).
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal"] }
+# `net` and `io-util` run the test relay's front door (tests/support/relay.rs). `test-util` lets
+# the path spike's test (#36) skip the waits it keeps between packets.
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "test-util"] }
+
+# The path spike (#36) checks its frames and plan without radios; run its tests with the rest.
+[[example]]
+name = "path_spike"
+test = true
