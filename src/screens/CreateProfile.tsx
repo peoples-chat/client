@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { core } from "../core";
+import { MAX_NAME } from "../core/types";
 import { useNavigation } from "../navigation/Navigator";
 import { Button } from "../ui/Button";
 import { TextField } from "../ui/fields";
@@ -44,7 +45,7 @@ export function CreateProfile() {
           helper="Shown to the people you chat with. You can change it later."
           autoComplete="name"
           autoCapitalize="words"
-          maxLength={64}
+          maxLength={MAX_NAME}
           autoFocus
         />
         <div className={styles.keyNote}>

@@ -112,6 +112,25 @@ describe("mock core", () => {
     expect(await core.exportAccountKey({ kind: "plain" })).toMatch(/^nsec1demo/);
   });
 
+  it("changes the profile's name and about, as the core checks them", async () => {
+    const { core, events } = setup();
+    await expect(core.updateProfile("Emil", "")).rejects.toThrow("Create an account first.");
+    await core.createAccount("Emil");
+    events.length = 0;
+
+    const account = await core.updateProfile(" Emil D. ", " Aarhus ");
+    expect([account.name, account.about]).toEqual(["Emil D.", "Aarhus"]);
+    expect(events).toEqual([{ type: "accountChanged", account }]);
+    expect((await core.load()).account).toEqual(account);
+    // The same again is no change.
+    await core.updateProfile("Emil D.", "Aarhus");
+    expect(events).toHaveLength(1);
+
+    await expect(core.updateProfile(" ", "")).rejects.toThrow("Enter a name.");
+    await expect(core.updateProfile("n".repeat(65), "")).rejects.toThrow("up to 64 characters");
+    await expect(core.updateProfile("Emil", "æ".repeat(281))).rejects.toThrow("up to 280 characters");
+  });
+
   it("refuses an empty message and an unknown chat", async () => {
     const { core } = setup();
     await core.createAccount("Emil");

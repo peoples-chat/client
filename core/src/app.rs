@@ -30,6 +30,12 @@ use crate::reach::Reachability;
 const EVENT_BUFFER: usize = 64;
 /// The shortest password for an exported key, as the design asks.
 pub const MIN_EXPORT_PASSWORD_CHARS: usize = 12;
+/// The longest profile name, in characters (#93).
+pub const MAX_NAME_CHARS: usize = 64;
+/// The longest about text, in characters (#93).
+pub const MAX_ABOUT_CHARS: usize = 280;
+/// How often the core fetches its contacts' profiles again, for their new names (#93).
+const CONTACT_REFRESH: Duration = Duration::from_secs(5 * 60);
 
 /// The protocol core. Clones share one core.
 #[derive(Clone)]
@@ -105,10 +111,7 @@ impl Core {
     /// The key stays in the core: it goes to the platform's key store, and only the public key
     /// leaves.
     pub async fn create_account(&self, name: &str) -> Result<Account, CommandError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(CommandError::new("Enter a name."));
-        }
+        let name = checked_name(name)?;
         let _one_at_a_time = self.inner.account_commands.lock().await;
         if self.state().account.is_some() {
             return Err(CommandError::new("This device already has an account."));
@@ -140,6 +143,109 @@ impl Core {
         });
         self.follow(&account.public_key).await;
         Ok(account)
+    }
+
+    /// Changes the profile's name and about, and publishes them (#93). Emits
+    /// [`CoreEvent::AccountChanged`]. The photo and anything other apps put in the profile
+    /// stay as they are.
+    pub async fn update_profile(&self, name: &str, about: &str) -> Result<Account, CommandError> {
+        let name = checked_name(name)?;
+        let about = about.trim();
+        if about.chars().count() > MAX_ABOUT_CHARS {
+            return Err(CommandError::new(format!(
+                "About can have up to {MAX_ABOUT_CHARS} characters."
+            )));
+        }
+        let _one_at_a_time = self.inner.account_commands.lock().await;
+        let account = self.account()?;
+        if account.name == name && account.about == about {
+            return Ok(account);
+        }
+        self.inner
+            .messaging
+            .update_profile(&account.public_key, name, about)
+            .await
+            .map_err(|error| {
+                // MDK publishes the profile at once, or not at all.
+                if self.any_relay_connected() {
+                    failed("update your profile", error)
+                } else {
+                    log::warn!("could not update the profile without relays: {error}");
+                    CommandError::new("Could not reach the relays. Try again when you are online.")
+                }
+            })?;
+        log::info!("profile updated");
+
+        let mut state = self.state();
+        let Some(current) = state.account.as_mut() else {
+            return Err(CommandError::new("Create an account first."));
+        };
+        current.name = name.to_owned();
+        current.about = about.to_owned();
+        let account = current.clone();
+        self.emit(CoreEvent::AccountChanged {
+            account: account.clone(),
+        });
+        Ok(account)
+    }
+
+    /// Fetches the contacts' profiles again, and emits [`CoreEvent::ContactChanged`] for each
+    /// contact whose name changed (#93). The core does this as it starts following the account
+    /// and every few minutes after; MDK doesn't follow other people's profiles by itself.
+    pub async fn refresh_contacts(&self) {
+        let contacts: std::collections::BTreeMap<String, String> = {
+            let state = self.state();
+            state
+                .chats
+                .iter()
+                .map(|chat| &chat.contact)
+                .chain(state.invitations.iter().map(|invitation| &invitation.from))
+                .map(|contact| (contact.public_key.clone(), contact.name.clone()))
+                .collect()
+        };
+        for (public_key, name) in contacts {
+            let Some(fetched) = self.inner.messaging.fetch_name(&public_key, &[]).await else {
+                continue;
+            };
+            if fetched != name {
+                self.rename_contact(&public_key, &fetched);
+            }
+        }
+    }
+
+    fn any_relay_connected(&self) -> bool {
+        self.reach()
+            .relays(Instant::now())
+            .iter()
+            .any(|(_, status)| *status == RelayStatus::Connected)
+    }
+
+    /// Gives the contact with `public_key` a new name in their chats and invitations.
+    fn rename_contact(&self, public_key: &str, name: &str) {
+        let mut state = self.state();
+        let state = &mut *state;
+        let mut changed = false;
+        let contacts = state.chats.iter_mut().map(|chat| &mut chat.contact).chain(
+            state
+                .invitations
+                .iter_mut()
+                .map(|invitation| &mut invitation.from),
+        );
+        for contact in contacts {
+            if contact.public_key == public_key && contact.name != name {
+                contact.name = name.to_owned();
+                changed = true;
+            }
+        }
+        if changed {
+            log::info!("a contact's name changed");
+            self.emit(CoreEvent::ContactChanged {
+                contact: Contact {
+                    public_key: public_key.to_owned(),
+                    name: name.to_owned(),
+                },
+            });
+        }
     }
 
     /// Removes the account and its data from this device, including its key. Emits
@@ -457,7 +563,16 @@ impl Core {
                 core.apply_message(&message);
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher];
+        let core = Arc::downgrade(&self.inner);
+        let contact_watcher = tokio::spawn(async move {
+            loop {
+                let Some(core) = upgrade(&core) else { return };
+                core.refresh_contacts().await;
+                drop(core);
+                tokio::time::sleep(CONTACT_REFRESH).await;
+            }
+        });
+        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
@@ -791,6 +906,20 @@ fn relay_views(relays: Vec<(String, RelayStatus)>, project: &[&str]) -> Vec<Rela
     relays
 }
 
+/// A profile name as given, trimmed, or why it can't be one.
+fn checked_name(name: &str) -> Result<&str, CommandError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CommandError::new("Enter a name."));
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(CommandError::new(format!(
+            "Your name can have up to {MAX_NAME_CHARS} characters."
+        )));
+    }
+    Ok(name)
+}
+
 /// The account as an interface sees it. The invite link carries the relays new accounts
 /// publish to as hints (#19).
 fn account_view(
@@ -801,6 +930,7 @@ fn account_view(
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
     Ok(Account {
         name,
+        about: messaging.own_about(&public_key_hex),
         invite_link,
         public_key: public_key_hex,
     })

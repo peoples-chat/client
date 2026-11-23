@@ -35,9 +35,9 @@ export function Account() {
     <div className={layout.screen}>
       <ScreenHeader title="Account" bordered onLeading={navigation.back} />
       <main className={layout.scroll}>
-        {/* Usernames, signer apps and recovery are not built yet (#63). */}
+        {/* Signer apps and recovery are not built yet (#63). The design's Username is left out
+            for now: it would need a name service at peoples.chat (#93). */}
         <SectionTitle>Sign-in</SectionTitle>
-        <ActionRow icon="person" label="Username" disabled />
         <InfoRow icon="key" label="Account key" description="Kept on this phone only" />
         <ActionRow
           icon="download"

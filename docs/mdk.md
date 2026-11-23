@@ -21,7 +21,8 @@ lower `marmot-session` crate.
 | `start_direct_chat` | `Directory::fetch_account_relay_list_status_for_account_id` (relay hints), `start_direct_conversation` |
 | `accept_direct_chat` | `accept_group_invite` |
 | `follow_direct_chats` | `subscribe_chats` |
-| `known_name`, `contact_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
+| `known_name`, `contact_name`, `fetch_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
+| `own_about`, `update_profile` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
 | `chat_started_at` | `chat_list_row` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
@@ -252,6 +253,20 @@ given, MDK orders by MLS epoch, then by time and id. Its times are whole seconds
 **Messages before accepting.** MDK stores and shows messages that arrive in a chat whose invitation is still pending,
 so the core adds them to the invitation.
 
+## Profiles
+
+**Publishing** (#93). `publish_user_profile_using_account_relays` publishes the account's profile (kind 0).
+
+- MDK merges what it is given with the newest profile it knows. Name, display name, about, picture, NIP-05 and
+  lightning address are replaced, even when they are empty. Banner and other fields are kept unless the update sets them.
+- So `update_profile` starts from the profile as this device has it (`directory_entry_for_account_id`), and changes only
+  the name, display name and about. A photo or a lightning address set by another app stays.
+- MDK publishes at once or fails at once. With no relay connected it fails within milliseconds; nothing is queued.
+
+**Other people's profiles.** MDK fetches them when asked (`fetch_current_user_profile_for_account_id`), keeps what it
+finds, and has no event for changes. The core fetches its contacts' profiles when it starts following the account and
+every 5 minutes after, from our relays.
+
 ## Relay reachability
 
 Whether a chat's messages can go out now (#43). The interface's side is in [core-interface.md](core-interface.md#reach).
@@ -341,6 +356,13 @@ The link parsing has unit tests in `core/src/invite.rs`, including White Noise's
 - an app that starts without its relay marks its chats `unreachable` after 10 seconds.
 
 The tracker itself has unit tests in `core/src/reach.rs`.
+
+`core/tests/profile.rs` has a contact change her profile (#93):
+
+- the new name and about come back as `accountChanged`, and stay across a restart;
+- the other phone shows the new name once its core fetches the profiles again, and a second fetch finds nothing new;
+- without a relay the profile doesn't change, and the error says why;
+- the error messages, and the limits counted in characters.
 
 `core/tests/radio_keys.rs` has two contacts derive their chat's radio keys (#37):
 

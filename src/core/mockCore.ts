@@ -1,6 +1,8 @@
 import { radioBytes } from "./radio";
 import {
   CoreError,
+  MAX_ABOUT,
+  MAX_NAME,
   MIN_EXPORT_PASSWORD,
   RADIO_TEXT_LIMIT,
   type Account,
@@ -131,12 +133,12 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
     },
 
     async createAccount(name) {
-      const trimmed = name.trim();
-      if (!trimmed) throw new CoreError("Enter a name.");
+      const trimmed = checkedName(name);
       if (state.account) throw new CoreError("This device already has an account.");
 
       const account: Account = {
         name: trimmed,
+        about: "",
         publicKey: randomHex(32),
         inviteLink: INVITE_PREFIX + randomHex(6),
       };
@@ -154,6 +156,19 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         { type: "invitationReceived", invitation },
       );
       return structuredClone(account);
+    },
+
+    async updateProfile(name, about) {
+      const trimmedName = checkedName(name);
+      const trimmedAbout = about.trim();
+      if (Array.from(trimmedAbout).length > MAX_ABOUT) {
+        throw new CoreError(`About can have up to ${MAX_ABOUT} characters.`);
+      }
+      const account = requireAccount();
+      if (account.name === trimmedName && account.about === trimmedAbout) return structuredClone(account);
+      state.account = { ...account, name: trimmedName, about: trimmedAbout };
+      emit({ type: "accountChanged", account: state.account });
+      return structuredClone(state.account);
     },
 
     async deleteAccount() {
@@ -245,6 +260,14 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       return `ncryptsec1demo${randomBech32(148)}`;
     },
   };
+}
+
+/** A name as given, trimmed, or the core's reason it can't be one. */
+function checkedName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new CoreError("Enter a name.");
+  if (Array.from(trimmed).length > MAX_NAME) throw new CoreError(`Your name can have up to ${MAX_NAME} characters.`);
+  return trimmed;
 }
 
 /**
@@ -358,6 +381,8 @@ function restore(storage: StorageLike | null): MockState | null {
       return null;
     }
     const restored = { ...emptyState(), ...state } as MockState;
+    // Saved before profiles had an about (#93).
+    if (restored.account && typeof restored.account.about !== "string") restored.account.about = "";
     // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
     // in a chat that can't be reached.
     for (const chat of restored.chats) {

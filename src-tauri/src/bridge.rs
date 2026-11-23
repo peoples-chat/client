@@ -135,6 +135,16 @@ pub async fn create_account<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn update_profile<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    name: String,
+    about: String,
+) -> Result<Account, CommandError> {
+    slot.get(&app).await?.update_profile(&name, &about).await
+}
+
+#[tauri::command]
 pub async fn delete_account<R: Runtime>(
     app: AppHandle<R>,
     slot: State<'_, CoreSlot>,

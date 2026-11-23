@@ -15,6 +15,8 @@ export type PublicKey = string;
 
 export interface Account {
   name: string;
+  /** A few words about the user, from the profile. Empty when there are none (#93). */
+  about: string;
   publicKey: PublicKey;
   /**
    * Link that other people open or scan to start a chat. The user's QR code encodes it. From the
@@ -132,7 +134,11 @@ export type CoreEvent =
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
   | { type: "reachChanged"; chatId: string; reach: Reach }
   /** The account's relays changed, or their connections did. Carries all of them. */
-  | { type: "relaysChanged"; relays: Relay[] };
+  | { type: "relaysChanged"; relays: Relay[] }
+  /** The user changed their profile (#93). */
+  | { type: "accountChanged"; account: Account }
+  /** A contact's profile changed, for example their name. Applies to their chats and invitations (#93). */
+  | { type: "contactChanged"; contact: Contact };
 
 export type CoreListener = (event: CoreEvent) => void;
 
@@ -147,6 +153,11 @@ export interface Core {
 
   /** First launch: creates the account key and publishes the profile name. */
   createAccount(name: string): Promise<Account>;
+  /**
+   * Changes the profile's name and about, and publishes them (#93). The name is required; about
+   * can be empty. Needs a relay: offline, it fails and nothing changes.
+   */
+  updateProfile(name: string, about: string): Promise<Account>;
   /** Removes the profile, leaves every chat and deletes the account's data from this device. */
   deleteAccount(): Promise<void>;
   /**
@@ -168,6 +179,12 @@ export interface Core {
 
 /** What kind of copy of the account key to export. */
 export type KeyCopy = { kind: "protected"; password: string } | { kind: "plain" };
+
+/** The longest profile name, in characters (`MAX_NAME_CHARS` in the core). */
+export const MAX_NAME = 64;
+
+/** The longest about text, in characters (`MAX_ABOUT_CHARS` in the core). */
+export const MAX_ABOUT = 280;
 
 /** The shortest password for a protected copy of the account key. */
 export const MIN_EXPORT_PASSWORD = 12;
