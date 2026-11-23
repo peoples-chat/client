@@ -5,7 +5,7 @@
 use peoples_chat_core::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, Message, RadioStatus, SentInvite, Snapshot,
 };
-use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions};
+use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions, profile_copy_relays};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_biometric::{AuthOptions, BiometricExt};
 use tokio::sync::OnceCell;
@@ -81,6 +81,15 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
     if let Some(server) = MEDIA_SERVER {
         log::info!("media server for profile photos: {server}");
     }
+    // On the public defaults, profile changes also go to White Noise's relays (#113). A build
+    // with relays of its own, such as the Mac's test relay, keeps them to itself.
+    let profile_copies = profile_copy_relays(&relays);
+    if !profile_copies.is_empty() {
+        log::info!(
+            "profile changes are copied to: {}",
+            profile_copies.join(", ")
+        );
+    }
     Ok(MessagingOptions {
         data_dir: app.path().app_data_dir()?.join("core"),
         relays,
@@ -90,6 +99,7 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
             .map(str::trim)
             .filter(|server| !server.is_empty())
             .map(str::to_owned),
+        profile_copies,
     })
 }
 

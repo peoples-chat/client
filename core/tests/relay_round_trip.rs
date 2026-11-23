@@ -30,6 +30,7 @@ fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> MessagingOpt
         keychain_service: keychain_service.to_owned(),
         allow_loopback: true,
         media_server: None,
+        profile_copies: Vec::new(),
     }
 }
 

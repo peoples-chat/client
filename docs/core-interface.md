@@ -168,6 +168,8 @@ mistake.
   - The same limit holds for `createAccount`.
 - The core publishes the profile at once, and `accountChanged` follows. The photo, and anything other apps put in the
   profile, stay as they are.
+- It also copies the profile to White Noise's relays, where White Noise looks up its users' contacts' profiles (#113).
+  A build with relays of its own copies nothing.
 - Without a connected relay nothing changes. The command fails with "Could not reach the relays. Try again when you
   are online."
 - Sending the profile as it is changes nothing and publishes nothing.
@@ -189,8 +191,8 @@ say "Saved" or why not.
 - The core decodes the photo and turns it upright. It cuts a centred square, shrinks it to 512 pixels and saves it
   again as JPEG. Saving it again keeps the pixels only, so a phone photo's location doesn't travel with it; MDK would
   upload the file as it is.
-- It uploads the photo to the media server, blossom.primal.net for the PoC, and publishes its address in the profile.
-  Then `accountChanged` follows. Removing the photo takes the address out of the profile; the file stays on the server.
+- It uploads the photo to the media server, blossom.primal.net for the PoC, and publishes its address in the profile,
+  copied to White Noise's relays like any profile change. Then `accountChanged` follows. Removing the photo takes the address out of the profile; the file stays on the server.
 - Errors:
   - A file that isn't a photo, or is larger than 10 MB: "This photo can't be used. Try another one."
   - A failed upload: "Could not upload your photo. Try again."

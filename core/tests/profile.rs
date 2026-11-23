@@ -1,11 +1,78 @@
 //! Editing the profile (#93): a new name and about are published and kept across a restart, and
-//! a contact's core shows the new name once it fetches the profiles again.
+//! a contact's core shows the new name once it fetches the profiles again. Changes are also
+//! copied to White Noise's relays (#113), but never from a test relay.
 
 mod support;
 
+use std::time::Duration;
+
+use nostr_sdk::prelude::{Client, Filter, Kind, Metadata, PublicKey, ReqTarget};
 use peoples_chat_core::interface::{Contact, CoreEvent, RelayStatus};
 use peoples_chat_core::{MAX_ABOUT_CHARS, MAX_NAME_CHARS};
-use support::{Phone, TestRelay, make_contacts, next_event, until};
+use support::{Phone, TestRelay, WAIT, make_contacts, next_event, until};
+use tokio::time::Instant;
+
+/// The names in `author`'s profiles on the relay at `url`, read with a client that isn't MDK.
+async fn profile_names(url: &str, author: PublicKey) -> Vec<String> {
+    let client = Client::builder().build();
+    client.add_relay(url).await.unwrap();
+    client.connect().await;
+    let events = client
+        .fetch_events(ReqTarget::single(
+            url,
+            [Filter::new().author(author).kind(Kind::Metadata)],
+        ))
+        .timeout(Duration::from_secs(5))
+        .await
+        .unwrap();
+    events
+        .iter()
+        .filter_map(|event| Metadata::try_from(event).ok()?.name)
+        .collect()
+}
+
+/// Profile changes are copied to White Noise's relays (#113), but never from an account on
+/// loopback relays. That keeps these tests, and builds on the Mac's test relay, off public relays.
+/// MDK makes that call. A second relay stands in for White Noise's here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_account_on_a_test_relay_copies_its_profile_nowhere() {
+    let _turn = support::take_turn().await;
+    let relay = TestRelay::start().await;
+    let copies = TestRelay::start().await;
+    let phone = Phone::new("profile-copies", &relay.url()).with_profile_copies(&copies.url());
+    let core = phone.start().await;
+    core.create_account("Cleo Berg").await.unwrap();
+    until("the relay", || {
+        let relays = core.snapshot().relays;
+        relays
+            .iter()
+            .any(|relay| relay.status == RelayStatus::Connected)
+            .then_some(())
+    })
+    .await;
+    let account = core.update_profile("Cleo B.", "").await.unwrap();
+    let author = PublicKey::parse(&account.public_key).unwrap();
+
+    // The change reached the account's relay.
+    let deadline = Instant::now() + WAIT;
+    while !profile_names(&relay.url(), author)
+        .await
+        .contains(&"Cleo B.".to_owned())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the profile didn't reach the relay"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // The stand-in for White Noise's relays got nothing, even after a while.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        profile_names(&copies.url(), author).await,
+        Vec::<String>::new()
+    );
+    core.close().await.unwrap();
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_new_name_reaches_a_contact_and_the_profile_stays() {
