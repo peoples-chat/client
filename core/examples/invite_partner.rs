@@ -40,6 +40,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         data_dir: data.path().to_path_buf(),
         relays: vec![relay.clone()],
         keychain_service: "chat.peoples.client.invite-partner".to_owned(),
+        keys_in_file: false,
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),

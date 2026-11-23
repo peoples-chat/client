@@ -35,6 +35,19 @@ const RELAYS: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_RELAYS");
 /// `TAURI_PEOPLES_CHAT_MEDIA_SERVER=http://127.0.0.1:7778`; only debug builds accept it.
 const MEDIA_SERVER: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_MEDIA_SERVER");
 
+/// Set to `1` when the app is built to keep account keys in the keychain in a development build on
+/// a computer too (#115). Without it, such builds keep them in a file in the app's data folder,
+/// because the Mac's keychain sees each rebuild as a new app and asks for the password at every
+/// start. Release builds and phones always use the platform's key store.
+const KEYCHAIN: Option<&str> = option_env!("TAURI_PEOPLES_CHAT_KEYCHAIN");
+
+/// Whether this build keeps account keys in a file: development builds on computers, unless
+/// `TAURI_PEOPLES_CHAT_KEYCHAIN` asks for the keychain.
+fn keys_in_file() -> bool {
+    let keychain_asked = KEYCHAIN.is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"));
+    cfg!(all(debug_assertions, desktop)) && !keychain_asked
+}
+
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
     core: OnceCell<Core>,
@@ -90,10 +103,15 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
             profile_copies.join(", ")
         );
     }
+    let keys_in_file = keys_in_file();
+    if keys_in_file {
+        log::info!("account keys are kept in a file in the data folder, not in the keychain");
+    }
     Ok(MessagingOptions {
         data_dir: app.path().app_data_dir()?.join("core"),
         relays,
         keychain_service: KEYCHAIN_SERVICE.to_owned(),
+        keys_in_file,
         allow_loopback: cfg!(debug_assertions),
         media_server: MEDIA_SERVER
             .map(str::trim)

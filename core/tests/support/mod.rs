@@ -42,6 +42,7 @@ pub fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> Messagin
         data_dir: data_dir.to_path_buf(),
         relays: vec![relay.to_owned()],
         keychain_service: keychain_service.to_owned(),
+        keys_in_file: false,
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),
@@ -55,6 +56,7 @@ pub struct Phone {
     relay: String,
     media_server: Option<String>,
     profile_copies: Vec<String>,
+    keys_in_file: bool,
 }
 
 impl Phone {
@@ -67,6 +69,7 @@ impl Phone {
             relay: relay.to_owned(),
             media_server: None,
             profile_copies: Vec::new(),
+            keys_in_file: false,
         }
     }
 
@@ -83,15 +86,28 @@ impl Phone {
         self
     }
 
+    /// The phone keeps account keys in a file in its data folder, as development builds on
+    /// computers do (#115), or in the (mock) keychain.
+    pub fn with_keys_in_file(mut self, keys_in_file: bool) -> Self {
+        self.keys_in_file = keys_in_file;
+        self
+    }
+
     /// The phone's data folder.
     pub fn data_dir(&self) -> &Path {
         self.data.path()
+    }
+
+    /// The keychain service the phone keeps account keys under.
+    pub fn keychain_service(&self) -> &str {
+        &self.keychain_service
     }
 
     pub async fn start(&self) -> Core {
         Core::start(MessagingOptions {
             media_server: self.media_server.clone(),
             profile_copies: self.profile_copies.clone(),
+            keys_in_file: self.keys_in_file,
             ..options(self.data.path(), &self.relay, &self.keychain_service)
         })
         .await

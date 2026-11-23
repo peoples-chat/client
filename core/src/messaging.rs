@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cgka_traits::{GroupId, TransportEndpoint};
-use marmot_account::AccountHome;
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
     AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, RelayLiveness,
@@ -122,6 +121,10 @@ pub struct MessagingOptions {
     pub relays: Vec<String>,
     /// Keychain service under which account keys are stored, one entry per account.
     pub keychain_service: String,
+    /// Keeps account keys in a file in the data folder instead of the platform's key store. This
+    /// is for development builds on computers (#115). A key moves between the two at the first
+    /// start of a build that keeps keys somewhere other than the build before did.
+    pub keys_in_file: bool,
     /// Allows relays (`ws://`) and media servers (`http://`) on the loopback interface, for tests
     /// and local development.
     pub allow_loopback: bool,
@@ -482,8 +485,12 @@ impl Messaging {
     /// Opens the stores in the data folder and starts the runtime. Account keys live in the
     /// platform's key store. Must run inside a Tokio runtime, which MDK's relay tasks use.
     pub async fn open(options: MessagingOptions) -> Result<Self, MessagingError> {
-        let home = AccountHome::open_with_keychain(&options.data_dir, options.keychain_service)
-            .map_err(AppError::from)?;
+        let home = crate::keys::open_account_home(
+            &options.data_dir,
+            &options.keychain_service,
+            options.keys_in_file,
+        )
+        .map_err(AppError::from)?;
         let config = MarmotAppConfig::default()
             .with_allow_loopback_relay_endpoints(options.allow_loopback)
             .with_allow_loopback_blob_endpoints(options.allow_loopback);
@@ -554,8 +561,9 @@ impl Messaging {
             .collect())
     }
 
-    /// Signs the account out and removes it from this device: its databases and its key in the
-    /// keychain. Telling relays and groups is best effort and does not block the local wipe.
+    /// Signs the account out and removes it from this device: its databases and its key, from the
+    /// keychain or its file (#115). Telling relays and groups is best effort and does not block the
+    /// local wipe.
     pub async fn delete_account(&self, public_key_hex: &str) -> Result<(), MessagingError> {
         self.runtime.sign_out_and_wipe(public_key_hex).await?;
         Ok(())
