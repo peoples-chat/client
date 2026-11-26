@@ -1,0 +1,66 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(pnpm verify)",
+      "Bash(pnpm verify:quick)",
+      "Bash(pnpm check)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm build)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(pnpm tauri:*)",
+      "Bash(cargo:*)",
+      "Bash(git:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(adb:*)",
+      "Bash(pnpm verify:radio)",
+      "Bash(uhubctl:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(rm -rf:*)",
+      "Read(./.env*)",
+      "Edit(.github/**)",
+      "Write(.github/**)",
+      "Edit(CLAUDE.md)",
+      "Write(CLAUDE.md)",
+      "Edit(.claude/**)",
+      "Write(.claude/**)",
+      "Edit(scripts/hooks/**)",
+      "Bash(esptool:*)",
+      "Bash(esptool.py:*)",
+      "Bash(pio:*)",
+      "Bash(nrfutil:*)",
+      "Bash(adafruit-nrfutil:*)",
+      "Write(scripts/hooks/**)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push origin +*)",
+      "Bash(cat .env*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/require-verify.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
