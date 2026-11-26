@@ -1,0 +1,18 @@
+# NOT a capture from a real radio: none was available. The app's frames are what meshcore-rs
+# 0.2.0 writes; the radio's are built by hand in firmware v1.18.0's layouts. Frame logs from
+# real radios (#133) can be added beside this file in the same format.
+
+# APP_START -> SELF_INFO: key adad..., 869.618 MHz, 62.5 kHz, SF 8, CR 8, named "Recorded".
+app 01000000000000006d63636c69
+radio 05011616adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad000000000000000000000000f2440d0024f4000008085265636f72646564
+
+# A message waits (push), unasked.
+radio 83
+
+# SYNC_NEXT_MESSAGE -> CONTACT_MSG_RECV_V3 from bea011223344: "Coming at three".
+app 0a
+radio 101d0000bea011223344ff00041b026b436f6d696e67206174207468726565
+
+# SYNC_NEXT_MESSAGE -> NO_MORE_MESSAGES.
+app 0a
+radio 0a
