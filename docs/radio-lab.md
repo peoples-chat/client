@@ -39,9 +39,9 @@ max_tx_power_dbm = 2
 
 [[radio]]
 label = "R1"
-usb_serial = "69781CF0DC6F5820"
+usb_serial = "0123456789ABCDEF"
 firmware = "v1.18.0-81dbae5"   # exactly as the radio reports it
-public_key = "3298…"           # optional, checked when given
+public_key = "abcd…"           # optional; all 64 hex digits, checked when given
 hub_port = "1-1.4:2"           # optional: <hub location>:<port>, as uhubctl names them
 ```
 
