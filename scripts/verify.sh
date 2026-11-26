@@ -13,7 +13,9 @@ step "Rust format";        cargo fmt --all --check
 step "Rust clippy (core)"; cargo clippy -p peoples-chat-core --all-targets -- -D warnings
 step "Rust clippy (shell)";cargo clippy -p peoples-chat --all-targets -- -D warnings
 step "Rust clippy (shell, e2e build)"; cargo clippy -p peoples-chat --all-targets --features e2e -- -D warnings
+step "Rust clippy (fake radio)"; cargo clippy -p peoples-chat-fake-radio --all-targets -- -D warnings
 step "Rust tests";         cargo test -p peoples-chat-core
+step "Rust tests (fake radio)";  cargo test -p peoples-chat-fake-radio
 step "Type check";         pnpm check && pnpm e2e:check
 step "Front-end tests";    pnpm test
 

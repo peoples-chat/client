@@ -5418,6 +5418,7 @@ dependencies = [
  "nostr 0.45.5",
  "nostr-relay-builder",
  "nostr-sdk",
+ "peoples-chat-fake-radio",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "serde",
@@ -5428,6 +5429,17 @@ dependencies = [
  "tokio",
  "tokio-serial",
  "zeroize",
+]
+
+[[package]]
+name = "peoples-chat-fake-radio"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "meshcore-rs",
+ "rand 0.8.8",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]
