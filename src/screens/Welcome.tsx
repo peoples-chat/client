@@ -7,14 +7,14 @@ import styles from "./Welcome.module.css";
 export function Welcome() {
   const navigation = useNavigation();
   return (
-    <div className={layout.screen}>
+    <div className={layout.screen} data-testid="welcome-screen">
       <main className={styles.main}>
         <Logo />
-        <h1 className={styles.title}>peoples.chat</h1>
+        <h1 className={styles.title} data-testid="welcome-title">peoples.chat</h1>
         <p className={styles.tagline}>Private messages that keep working when the internet does not.</p>
       </main>
       <footer className={styles.footer}>
-        <Button onClick={() => navigation.push({ name: "createProfile" })}>Create account</Button>
+        <Button data-testid="welcome-create-account" onClick={() => navigation.push({ name: "createProfile" })}>Create account</Button>
         {/* Recovery is not built yet (#63). */}
         <Button variant="secondary" disabled>
           I already have an account

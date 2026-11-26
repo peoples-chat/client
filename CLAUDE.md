@@ -14,7 +14,9 @@ It is shown in a showcase on macOS desktop and iOS. Read [README.md](README.md) 
 ## Conventions
 - pnpm, never npm. Rust toolchain pinned in `rust-toolchain.toml`.
 - `cargo fmt`, clippy with `-D warnings`, `tsc` must be clean.
-- Select UI elements in tests by `data-testid`, never by CSS structure or text.
+- Select UI elements in tests by `data-testid`, never by CSS structure or text. Add the testid when you add the test.
+- Desktop e2e: WebdriverIO specs in `e2e/` (`pnpm e2e` builds the app with `--features e2e` and runs them; each run
+  gets an empty data folder). Screenshots: `browser.saveScreenshot("evidence/<issue>/<step>.png")`.
 - No new dependencies without a reason in the PR body.
 
 ## Definition of done
