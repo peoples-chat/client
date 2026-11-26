@@ -5237,6 +5237,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-serial",
+ "toml 0.8.2",
  "zeroize",
 ]
 
