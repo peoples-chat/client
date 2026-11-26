@@ -17,3 +17,7 @@ vite.config.ts.timestamp-*
 .env.*
 !.env.example
 *.local
+
+# Factory: verify stamp and local evidence (screenshots go to the evidence branch)
+/.factory/
+/evidence/

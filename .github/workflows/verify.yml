@@ -1,0 +1,40 @@
+name: Verify
+
+on:
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-macos:
+    name: verify-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/odin-archive
+          key: odin-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: odin-${{ runner.os }}-
+      - name: Install Odin for MDK's Markdown parser
+        run: ODIN_ARCHIVE_CACHE="$HOME/.cache/odin-archive" scripts/install-odin.sh
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: evidence/
+          if-no-files-found: ignore
