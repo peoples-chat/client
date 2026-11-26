@@ -99,3 +99,6 @@ pnpm check
 pnpm test
 pnpm build
 ```
+
+With the radio lab's hardware plugged in, `pnpm verify:radio` runs the checks that need it
+([docs/radio-lab.md](docs/radio-lab.md)).
