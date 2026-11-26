@@ -3,6 +3,10 @@
 
 mod bridge;
 
+// The e2e plugins open a WebDriver server inside the app: never in a release build.
+#[cfg(all(feature = "e2e", not(debug_assertions)))]
+compile_error!("the e2e feature is for debug builds only (pnpm e2e builds with --debug)");
+
 /// Stack size of the async runtime's threads. Unoptimized OpenMLS, inside MDK, can outgrow the
 /// default 2 MiB when it creates a group; MDK's own runtime tests use 8 MiB. `RUST_MIN_STACK` in
 /// `.cargo/config.toml` does not help here: it reaches only processes Cargo starts, not an app
@@ -44,8 +48,20 @@ pub fn run() {
         .plugin(tauri_plugin_share_sheet::init())
         .plugin(tauri_plugin_deep_link::init());
 
+    // Desktop end-to-end tests (pnpm e2e): WebdriverIO drives the app through these.
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+
     builder
         .setup(|app| {
+            // Added here rather than in capabilities/, so builds without the plugins never name them.
+            #[cfg(feature = "e2e")]
+            {
+                use tauri::Manager;
+                app.add_capability(include_str!("../e2e-capability.json"))?;
+            }
             // The core starts with the app, not when the web view first asks for it.
             bridge::start(app.handle())?;
             Ok(())

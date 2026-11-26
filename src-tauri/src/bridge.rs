@@ -48,6 +48,17 @@ fn keys_in_file() -> bool {
     cfg!(all(debug_assertions, desktop)) && !keychain_asked
 }
 
+/// In e2e builds only: the data folder a test run asks for in `PEOPLES_CHAT_E2E_DATA_DIR`, so every
+/// run starts without an account and never touches the app's real data on the machine.
+fn e2e_data_dir() -> Option<std::path::PathBuf> {
+    if !cfg!(feature = "e2e") {
+        return None;
+    }
+    std::env::var_os("PEOPLES_CHAT_E2E_DATA_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 /// The core, once it has started. Commands that arrive while it starts wait for it.
 pub struct CoreSlot {
     core: OnceCell<Core>,
@@ -108,7 +119,10 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
         log::info!("account keys are kept in a file in the data folder, not in the keychain");
     }
     Ok(MessagingOptions {
-        data_dir: app.path().app_data_dir()?.join("core"),
+        data_dir: match e2e_data_dir() {
+            Some(dir) => dir,
+            None => app.path().app_data_dir()?.join("core"),
+        },
         relays,
         keychain_service: KEYCHAIN_SERVICE.to_owned(),
         keys_in_file,

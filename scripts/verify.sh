@@ -12,16 +12,13 @@ step() { echo; echo "==> $*"; }
 step "Rust format";        cargo fmt --all --check
 step "Rust clippy (core)"; cargo clippy -p peoples-chat-core --all-targets -- -D warnings
 step "Rust clippy (shell)";cargo clippy -p peoples-chat --all-targets -- -D warnings
+step "Rust clippy (shell, e2e build)"; cargo clippy -p peoples-chat --all-targets --features e2e -- -D warnings
 step "Rust tests";         cargo test -p peoples-chat-core
-step "Type check";         pnpm check
+step "Type check";         pnpm check && pnpm e2e:check
 step "Front-end tests";    pnpm test
 
 if (( quick == 0 )); then
-  if [[ -f e2e/wdio.conf.ts ]]; then
-    step "Desktop e2e"; pnpm exec wdio run e2e/wdio.conf.ts
-  else
-    echo "!! Desktop e2e harness not set up yet (e2e/wdio.conf.ts missing): see the factory bootstrap issue." >&2
-  fi
+  step "Desktop e2e (builds the app with --features e2e)"; pnpm e2e
 fi
 
 mkdir -p .factory

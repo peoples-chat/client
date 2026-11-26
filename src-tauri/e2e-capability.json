@@ -1,0 +1,6 @@
+{
+  "identifier": "e2e",
+  "description": "Desktop end-to-end tests only (the e2e Cargo feature): WebdriverIO's plugins",
+  "windows": ["main"],
+  "permissions": ["wdio:default", "wdio-webdriver:default"]
+}
