@@ -4,10 +4,9 @@
 `pnpm verify`, which needs no hardware.
 
 ```sh
-pnpm verify:radio                     # checks every radio, then runs the hardware tests
-pnpm verify:radio --dry-run           # lists the radios it found and their firmware; sends nothing
-pnpm verify:radio --usb-only          # leaves the radios on Bluetooth alone
-pnpm verify:radio --allow-bluetooth   # once, by a person at the Mac: see Bluetooth below
+pnpm verify:radio              # checks every radio, then runs the hardware tests
+pnpm verify:radio --dry-run    # lists the radios it found and their firmware; sends nothing
+pnpm verify:radio --usb-only   # leaves the radios on Bluetooth alone
 ```
 
 `npm run verify:radio` runs the same script. The code is in `core/examples/verify_radio/`.
@@ -22,11 +21,12 @@ pnpm verify:radio --allow-bluetooth   # once, by a person at the Mac: see Blueto
    frequency, bandwidth, spreading factor and coding rate against `[lab]`, and its transmit power against
    `max_tx_power_dbm`. All radios are checked, every difference is reported, and then the run fails.
 5. **Checks that each radio still responds**, by asking for its contacts. A dry run skips this.
-6. **Runs the Bluetooth test** for each radio with a `ble_name` and no `usb_serial` ([Bluetooth](#bluetooth)). A dry
-   run finds and checks the radio over Bluetooth, and stops there.
+6. **Runs the Bluetooth test** for each radio with a `ble_name` and no `usb_serial`, through the
+   [bridge](#the-bluetooth-bridge). A dry run connects and checks the radio, and stops there. Without a running bridge
+   the radio is skipped, the run says `SKIPPED`, and it can still pass.
 
 Up to step 5 the harness sends nothing over the air. The message tests between USB radios come with #134. With
-`--usb-only`, and on computers other than Macs, a radio without a `usb_serial` is listed as not checked.
+`--usb-only`, a radio without a `usb_serial` is listed as not checked.
 
 It exits with 0 when all passed, 1 when something failed, 2 for a wrong argument and 130 when interrupted.
 
@@ -53,18 +53,11 @@ label = "R3"
 ble_name = "MeshCore-0123456789AB"   # the name the radio advertises over Bluetooth
 firmware = "v1.18.0-81dbae5"
 public_key = "abcd…"
-reboot_to_drop_link = true           # optional, off by default: see Bluetooth below
+bridge_port = 5535                   # optional: where the bridge passes frames, on 127.0.0.1
+bridge_control_port = 5536           # optional: the port after bridge_port
 ```
 
 Other fields are ignored. A `hub_port` in angle brackets, such as `"<none: …>"`, means there is none.
-
-Two switches let the Bluetooth test do what it otherwise refuses to. Both are off unless the file turns them on, so
-that a person decides:
-
-| Switch | Where | What it allows |
-| --- | --- | --- |
-| `exchange_adverts = true` | `[lab]` | Two radios that don't hold each other as contacts announce themselves once (command 7). A radio that hears an announcement adds its sender, which changes what the radios store |
-| `reboot_to_drop_link = true` | the Bluetooth radio's `[[radio]]` | The harness restarts that radio (command 19) to drop its Bluetooth link. A restart changes no firmware, frequency or preset |
 
 | Environment variable | Default |
 | --- | --- |
@@ -72,7 +65,6 @@ that a person decides:
 | `RADIO_LAB_LOCK` | `~/factory/locks/radio-lab` |
 | `RADIO_LOG_DIR` | `.factory/radio/` in the repository |
 | `UHUBCTL` | `uhubctl` on the `PATH` |
-| `VERIFY_RADIO_BLE_PROGRAM` | the harness's own binary: the program that holds the Bluetooth link |
 
 ## The lock
 
@@ -93,72 +85,87 @@ radio with the wrong firmware or settings, or a port that another program holds,
 
 Cycling a hub port restarts only a radio that has no battery of its own.
 
-## Bluetooth
+## The Bluetooth bridge
 
-The Bluetooth test (#135) reaches a radio through meshcore-rs's own Bluetooth link, the code under
-`MeshCoreRadio::connect_ble` ([radio.md](radio.md#the-interface)). The radio must already be paired with the Mac.
+macOS asks for Bluetooth permission per program, and an agent can't click Allow. So everything that uses Bluetooth for
+the lab is in one small program, `ble-bridge` (#135, Swift with CoreBluetooth, `tools/ble-bridge/`). It is built once,
+installed at a fixed path, run as its own launchd job and allowed once by a person. The harness never touches
+Bluetooth: the core reaches the radio over TCP on this computer, with meshcore-rs's TCP link
+(`MeshCoreRadio::connect_tcp`). meshcore-rs's own Bluetooth code is therefore not under test.
 
-**Two processes.** macOS decides about Bluetooth by the program *responsible* for the one that uses it. For anything
-started from a terminal, an agent or cargo, that is the terminal or the agent: macOS ends the program, or asks on the
-screen. So the side that holds the Bluetooth link runs as its own launchd job
-(`chat.peoples.factory.verify-radio-ble`): the harness's own binary, started with `--ble-child` through
-`launchctl submit`, with the reason it uses Bluetooth built in (`Info.plist`). The run keeps the lab lock and the USB
-radios, and tells that side what to do over a socket on the same computer. The job is removed when the run ends,
-however it ends. Its output is next to the frame log, as `frames-….bluetooth.log`.
+### What it does
 
-A small Bluetooth-to-TCP bridge behind launchd would have been simpler to keep allowed, but it would test the
-bridge's Bluetooth code and skip meshcore-rs's, which is what the app is to use.
+- Finds the radio that advertises `ble_name`, connects over the Nordic UART service and passes companion frames both
+  ways. The radio must already be paired with the Mac.
+- **Frames**, on `127.0.0.1:<bridge_port>`: MeshCore's stream framing, as over serial. One client at a time; a new one
+  replaces the old. While there is no Bluetooth link, a client is turned away, and when the link is lost the client's
+  connection is closed.
+- **Control**, on `127.0.0.1:<bridge_control_port>`: one command per line. `status` answers `connected` or
+  `disconnected`. `drop` disconnects the Bluetooth link and answers `dropped`.
+- Looks for the radio again, 2 seconds after any lost link.
+- **Never raises a prompt by itself.** Before anything touches Bluetooth it reads `CBManager.authorization`. Unless
+  the answer is "allowed", it says so and exits with code 77.
 
-**What a run does**, for the Bluetooth radio (R3) and the first USB radio (R1):
+Anything on this computer can connect to the two ports while the bridge runs, and so use the radio. The lab Mac is
+for this only; stop the bridge when that matters.
 
-1. Finds R3 by its advertised name, connects, and checks its firmware, key and settings against the lab file, exactly
-   as for a USB radio. On any difference the run stops before anything is sent to R3 or through it.
-2. Makes sure R1 and R3 hold each other as contacts. If they don't, the run fails, unless `exchange_adverts` allows
-   them to announce themselves.
-3. Sends a message from R1, which must arrive on R3 over Bluetooth, and one from R3 over Bluetooth, which must arrive
-   on R1.
-4. Restarts R3, if `reboot_to_drop_link` allows it, which drops the link from the radio's end. The link's own checks
-   must notice. The same process must then find the radio and connect again, and a message from R1 must arrive over
-   the new link. Without the switch the run fails here and says so: it doesn't pass with the drop untested.
+### Install it (a person, at the Mac)
 
-**No prompt.** The Bluetooth side first asks macOS whether it is allowed (`CBManager.authorization`), which uses no
-Bluetooth and shows nothing. Unless the answer is "allowed", it never touches Bluetooth, and the run fails with what
-to do. Nothing a run does can put a dialog on the screen.
-
-**Allowing it** takes a person at the Mac, once:
+Needs Xcode's command line tools (`xcrun swiftc`). From the repository:
 
 ```sh
-pnpm verify:radio --allow-bluetooth
+tools/ble-bridge/install.sh                     # builds ~/factory/bin/ble-bridge and its launchd job
+tools/ble-bridge/install.sh --allow-bluetooth   # once: macOS asks on the screen, click Allow
 ```
 
-This is a dry run that may ask. macOS shows its dialog for "verify:radio"; click Allow. If macOS asks to pair, the
-radio isn't paired with this Mac yet.
+The first command stops with a note that Bluetooth isn't allowed yet. The second runs the bridge once as a launchd job
+that may ask, and after Allow starts the real job. The job is `chat.peoples.factory.ble-bridge`
+(`~/Library/LaunchAgents/chat.peoples.factory.ble-bridge.plist`), started at login, and restarted if it crashes. Its
+log is `~/factory/logs/ble-bridge.log`. It reads the radio's name and the ports from `radios.toml` when it starts, so
+run `install.sh` again after changing them.
 
-The harness isn't signed with an identity, so macOS should tie the permission to the exact binary, and **a rebuilt
-harness must then be allowed again**: after any change to the harness or the core. (Expected from how macOS records
-permissions; not yet tried in the lab.) To keep one allowed binary across rebuilds, copy
-`target/debug/examples/verify_radio` somewhere stable, set `VERIFY_RADIO_BLE_PROGRAM` to the copy, and allow that
-one with `--allow-bluetooth`. The copy then holds the Bluetooth link for every run, with the Bluetooth code it was
-built with, until the socket's protocol changes; the run says when it does. A binary signed with a real identity
-would stay allowed across rebuilds. Whether the lab gets one is a person's decision, not the harness's.
+The program is built only when it isn't there, because macOS ties the permission to the exact program: it isn't signed
+with an identity. `--rebuild` builds it again, and then `--allow-bluetooth` is needed again. (Expected from how macOS
+records permissions; not yet tried in the lab.) `--uninstall` stops the job and removes both files.
 
-**Not through the harness's serial link.** meshcore-rs writes to the radio itself over Bluetooth, so these frames
-are not in the frame log and no list of commands filters them. The Bluetooth side can only call `MeshCoreRadio`,
-which sends app start (1), send text (2), contacts (4), next message (10), battery (20) and device query (22), and,
-when the lab file allows it, advert (7) and reboot (19).
+`BLE_BRIDGE_BIN`, `RADIOS_TOML` and `BLE_BRIDGE_LOG` change the paths. `pnpm verify` never installs or starts the
+bridge. Its tests build their own copy under `target/` and run it only with a fake radio.
+
+### Run the test
+
+```sh
+pnpm verify:radio --dry-run   # connects to R3 through the bridge and checks it; sends nothing
+pnpm verify:radio             # the whole run
+```
+
+For the Bluetooth radio (R3) and the first USB radio (R1), a run:
+
+1. Asks the bridge's control port. If nothing listens, R3 is skipped.
+2. Waits up to 45 seconds for the bridge to have its link, connects, and checks R3's firmware, key and settings against
+   the lab file, exactly as for a USB radio. On any difference the run fails before anything is sent to R3 or through
+   it.
+3. Makes sure R1 and R3 hold each other as contacts. If they don't, both announce themselves once (command 7), and a
+   radio that hears an announcement adds its sender.
+4. Sends a message from R1, which must arrive on R3, and one from R3, which must arrive on R1.
+5. Has the bridge drop the Bluetooth link. The core must notice. The same process then connects again, checks R3 again,
+   and a message from R1 must arrive over the new link.
+
+A bridge that runs but can't reach the radio fails the run; it isn't skipped.
 
 ## What the harness never does
 
 It never changes a radio's firmware, frequency, preset or power. Every frame to a USB radio goes through the
 harness's own serial link (`link.rs`), which lets only these companion commands through: app start (1), send text (2),
 contacts (4), time (5), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and
-device query (22). Anything else is refused and logged as `blocked`. Over USB that includes reboot (19); the one
-radio the harness may restart is a Bluetooth radio whose entry says `reboot_to_drop_link = true`
-([Bluetooth](#bluetooth)).
+device query (22). Anything else is refused and logged as `blocked`.
+
+Frames to the Bluetooth radio go through meshcore-rs's TCP link and the bridge, so they are **not in the frame log and
+no list of commands filters them**. The harness reaches that radio only through `MeshCoreRadio`, which sends app start
+(1), send text (2), contacts (4), advert (7), next message (10), battery (20) and device query (22).
 
 ## The frame log
 
-Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame, in order.
+Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame to or from a USB radio, in order.
 
 ```json
 {"at_ms":1795700000000,"dir":"to_radio","frame":"16…","radio":"R1"}
@@ -177,5 +184,5 @@ A log still holds public keys, contact names and, in later tests, message packet
 `Lab::run` in `lab.rs` has every checked radio as a `Station`, with its `MeshCoreRadio`: the same adapter the app
 uses. A test added there runs under the lock, after the checks, with its frames logged.
 
-The Bluetooth test is in `ble.rs`: `run` is the run's side and `serve` the side that holds the link. `ble_tests.rs`
-runs both against fake radios, with a task in place of the launchd job.
+The Bluetooth test is in `ble.rs`. `ble_tests.rs` runs it with the real bridge program and fake radios, and
+`core/tests/issue_135_ble_bridge.rs` tests the bridge itself the same way. Both need a Mac.

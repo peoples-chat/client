@@ -143,20 +143,18 @@ account. Trying it on a real radio waits for hardware day (#12).
 - **`MeshCoreRadio`** (`core/src/radio/meshcore.rs`):
   - `connect_serial(port)` connects over USB serial on desktops. A radio that doesn't answer its greeting, or that is
     dropped, lets go of the port, so that it can be opened again (#24).
-  - `connect_ble(name, within)` (macOS only, #135) finds the radio that advertises `name` and connects through
-    meshcore-rs's own Bluetooth link. It scans until `within` has passed, and watches the link from the start. The
-    radio must already be paired with the Mac, and macOS must allow the program to use Bluetooth
-    ([radio-lab.md](radio-lab.md#bluetooth)). The app doesn't offer Bluetooth pairing yet.
+  - `connect_tcp(host, port)` connects over TCP on desktops, and watches the link from the start. The radio lab
+    reaches its Bluetooth radio this way, through a bridge on the same computer
+    ([radio-lab.md](radio-lab.md#the-bluetooth-bridge), #135). The app doesn't offer Bluetooth or TCP pairing.
   - `over(commands, dispatcher)` works over meshcore-rs's command handler and event dispatcher. That is for a link
     the app runs itself, such as Bluetooth on phones (#23), and for tests.
-  - `watch_link(every)` checks a link that can end silently. Nothing in meshcore-rs's Bluetooth link reports a drop
-    for certain (see [meshcore-rs](#meshcore-rs); not yet measured on a radio): no more frames arrive, and what it
-    writes goes nowhere. A check asks for the battery level (command 20), which
-    changes nothing and puts nothing on the air. Two checks in a row without any answer count as a lost link:
-    `Disconnected` follows, and the core looks for the paired radio again as after any lost link
-    ([Pairing](#pairing)). `connect_ble` checks every 10 seconds, so a drop is noticed within about 30.
-  - `advertise()` has the radio announce itself to the radios in direct range, and `restart()` restarts it. Neither
-    changes a setting. Only the radio lab uses them.
+  - `watch_link(every)` checks a link that can end silently: no more frames arrive, and what is written goes
+    nowhere. A check asks for the battery level (command 20), which changes nothing and puts nothing on the air. Two
+    checks in a row without any answer count as a lost link: `Disconnected` follows, and the core looks for the paired
+    radio again as after any lost link ([Pairing](#pairing)). `connect_tcp` checks every 10 seconds, so such a drop is
+    noticed within about 30. A connection that closes is noticed at once.
+  - `advertise()` has the radio announce itself to the radios in direct range. It changes no setting. Only the radio
+    lab uses it.
 - **`MockMesh` and `MockRadio`** (`core/src/radio/mock.rs`): radios on a mesh in memory. They hear each other, confirm
   delivery, and can be taken out of range. They're for tests and for interface work without hardware. `MockPorts`
   plugs them into mock USB ports, for pairing (#24).
@@ -196,12 +194,9 @@ With two radios, `path_spike` measures the three paths for the app's packets (#3
 
 | Platform | Link | Features |
 | --- | --- | --- |
-| Desktop | USB serial | `serial` |
-| macOS | also Bluetooth through meshcore-rs (#135) | `serial`, `ble` |
+| Desktop | USB serial; TCP for the radio lab's Bluetooth bridge (#135) | `serial`, `tcp` |
 | iOS, Android | Bluetooth through the app (#23), passed in with `MeshCoreRadio::over` | none |
 
-- **`ble` brings in `btleplug`** 0.12 (MIT, Apache-2.0 or BSD-3-Clause), which talks to CoreBluetooth on a Mac. It is
-  enabled only there: on Linux `btleplug` needs D-Bus headers to build, which CI doesn't have.
 - With no feature, the protocol code still builds, and `cargo check` passes for iOS and Android with every feature.
 - **iOS** apps can't open serial ports.
 - **Android** needs `UsbManager` for USB. meshcore-rs's own Bluetooth (`btleplug`) needs extra Java setup there, and
@@ -238,11 +233,6 @@ Any command can still be sent as hand-built bytes through meshcore-rs's `send`.
   starts listening after it writes. Real links are slow enough; the test radio waits 20 ms.
 - **A dropped `MeshCore` keeps running.** Its tasks and the serial port stay open, so call `disconnect()`. There is
   no reconnect.
-- **A lost Bluetooth link is silent.** `ble_connect` reports `Disconnected` only when its notification stream ends,
-  and write errors are only logged. `disconnect()` stops meshcore-rs's tasks and doesn't disconnect the peripheral
-  itself. The adapter checks the link instead (`watch_link`).
-- **`ble_connect` scans for 2 seconds, once.** A radio that has just restarted isn't advertising yet. `connect_ble`
-  tries again until its own deadline.
 - **Others:** the `STATUS_RESPONSE`, `TELEMETRY_RESPONSE`, `TRACE_DATA` and `CONTROL_DATA` layouts are wrong.
   `max_contacts` is capped at 255. The doc comments give the frequency in the wrong unit: the radio reports kHz, and
   the bandwidth in Hz.
@@ -297,14 +287,13 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
 
 - **Ports.** Each fake listens on 127.0.0.1, on a free port unless `Config::port` names one, so tests run in parallel.
 - **Commands.** App start, device query, contacts, sending a direct message and collecting received ones, with the
-  message-waiting and send-confirmed pushes; the battery level, announcing itself and restarting (#135). Any other
-  command gets the "unsupported" error.
+  message-waiting and send-confirmed pushes; the battery level and announcing itself (#135). Any other command gets
+  the "unsupported" error.
 - **Pairs.** `pair` starts two radios that hear each other and hold each other as contacts; `link` does so for two that
   are already running. `add_contact` adds more. `put_in_range` makes two radios hear each other without making them
   contacts: each adds the other when it hears it announce itself.
 - **A lost link.** `go_quiet` makes the link to the app go quiet without closing it, as a lost Bluetooth link looks to
-  meshcore-rs. A restart does the same, and the radio answers no one for `restart_time`. An app that connects again
-  is served as usual.
+  meshcore-rs. An app that connects again is served as usual.
 - **Knobs** (`Config`, per radio):
 
   | Field | Effect |
@@ -315,7 +304,6 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
   | `max_contacts` | Size of the contact table. Reported halved, as firmware does |
   | `seed` | Repeats the same choice of what is lost or duplicated |
   | `reply_latency` | How long the radio takes to answer its app, 20 ms by default (see [meshcore-rs](#meshcore-rs)) |
-  | `restart_time` | How long a restart takes, 300 ms by default |
   | `frequency_khz` | The frequency the radio reports, 869 618 by default |
 
 - **Fixtures.** `Fixture::load` reads captured frames and `FakeRadio::replay` answers with them. A fixture is a text
@@ -333,7 +321,8 @@ replay. `core/tests/issue_132_radio_over_tcp.rs` runs `MeshCoreRadio` over a pai
 
 `core/tests/issue_135_ble_link.rs` covers the link that ends silently, against a fake that goes quiet: the lost link
 is reported, the core opens the paired radio again without a restart, and radios that announce themselves become
-contacts. The same over real Bluetooth is the radio lab's run ([radio-lab.md](radio-lab.md#bluetooth)).
+contacts. `core/tests/issue_135_ble_bridge.rs` runs the Bluetooth bridge with a fake radio behind it (Macs only).
+The same over real Bluetooth is the radio lab's run ([radio-lab.md](radio-lab.md#the-bluetooth-bridge)).
 
 `core/tests/radio.rs`:
 

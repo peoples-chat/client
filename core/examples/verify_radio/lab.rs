@@ -12,7 +12,7 @@ use peoples_chat_core::radio::{
 use tokio::time::Instant;
 use tokio_serial::SerialPortBuilderExt;
 
-use crate::ble::{self, Launcher};
+use crate::ble;
 use crate::config::{Config, Preset, RadioEntry};
 use crate::link::{FrameLog, Io, Link};
 use crate::power::Power;
@@ -51,14 +51,12 @@ pub struct Timing {
     pub back: Duration,
     /// How often to look for it meanwhile.
     pub poll: Duration,
-    /// How long the side that holds the Bluetooth link may take to start (#135).
-    pub ble_start: Duration,
-    /// How long finding a Bluetooth radio by its name and connecting may take: also after it
-    /// restarted.
+    /// How long the Bluetooth bridge (#135) may take to have its radio: also after a drop.
     pub ble_connect: Duration,
-    /// How long a lost Bluetooth link may go unnoticed. The link is checked every 10 seconds,
-    /// and two checks in a row must go unanswered.
-    pub ble_lost: Duration,
+    /// How often the link to a radio behind the bridge is checked.
+    pub watch: Duration,
+    /// How long a lost link may go unnoticed: two checks in a row must go unanswered.
+    pub lost: Duration,
     /// How long a message may take from one radio to the other.
     pub message: Duration,
     /// How long radios may take to add each other after they announced themselves.
@@ -71,9 +69,9 @@ impl Default for Timing {
             reply: Duration::from_secs(5),
             back: Duration::from_secs(60),
             poll: Duration::from_secs(1),
-            ble_start: Duration::from_secs(20),
             ble_connect: Duration::from_secs(45),
-            ble_lost: Duration::from_secs(90),
+            watch: Duration::from_secs(10),
+            lost: Duration::from_secs(45),
             message: Duration::from_secs(45),
             contacts: Duration::from_secs(30),
         }
@@ -134,12 +132,9 @@ pub struct Lab<'a> {
     pub power: &'a dyn Power,
     pub log: Arc<FrameLog>,
     pub timing: Timing,
-    /// Starts the side that holds a Bluetooth link (#135). Without one, as on computers other
-    /// than Macs, Bluetooth radios are listed and not checked.
-    pub ble: Option<&'a dyn Launcher>,
-    /// Whether this run may put the macOS Bluetooth prompt on the screen: only when a person
-    /// asked for that.
-    pub may_ask: bool,
+    /// Whether to run against the radios on Bluetooth, through the bridge (#135). Without,
+    /// they are listed and not checked.
+    pub bluetooth: bool,
 }
 
 impl Lab<'_> {
@@ -296,7 +291,7 @@ impl Lab<'_> {
         let mut over_bluetooth = Vec::new();
         for entry in &self.config.radios {
             if entry.usb_serial.is_none() {
-                if entry.ble_name.is_some() && self.ble.is_some() {
+                if entry.ble_name.is_some() && self.bluetooth {
                     over_bluetooth.push(entry);
                     continue;
                 }
@@ -354,16 +349,14 @@ impl Lab<'_> {
             }
             stations = checked;
         }
-        // Bluetooth radios (#135). Each is checked against the lab over Bluetooth before
+        // Bluetooth radios (#135). Each is checked against the lab through the bridge before
         // anything is sent to it. A dry run stops there.
         let mut result = Ok(());
-        if let Some(launcher) = self.ble {
-            for entry in over_bluetooth {
-                let usb = if dry_run { None } else { stations.first() };
-                result = ble::run(self, launcher, entry, usb, self.may_ask, out).await;
-                if result.is_err() {
-                    break;
-                }
+        for entry in over_bluetooth {
+            let usb = if dry_run { None } else { stations.first() };
+            result = ble::run(self, entry, usb, out).await;
+            if result.is_err() {
+                break;
             }
         }
         for station in stations {

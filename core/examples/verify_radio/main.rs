@@ -3,22 +3,19 @@
 //! ```sh
 //! pnpm verify:radio              # checks every USB radio, then that each still responds
 //! pnpm verify:radio --dry-run    # lists the radios found and their firmware
-//! pnpm verify:radio --allow-bluetooth   # once, by a person: lets macOS ask for Bluetooth
 //! ```
 //!
 //! It holds the lab lock for the whole run, finds radios by their USB serial numbers, refuses
 //! to go on when a radio's firmware or settings differ from `radios.toml`, and saves every frame.
-//! It never changes a radio's firmware or settings. A radio on Bluetooth (#135) is reached
-//! through meshcore-rs's Bluetooth link, from a launchd job of its own. Details:
-//! `docs/radio-lab.md`.
+//! It never changes a radio's firmware or settings. A radio on Bluetooth (#135) is reached over
+//! TCP through the bridge in `tools/ble-bridge/`, and skipped when the bridge isn't running. The
+//! harness itself never touches Bluetooth. Details: `docs/radio-lab.md`.
 
 mod ble;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod ble_tests;
 mod config;
 mod lab;
-#[cfg(target_os = "macos")]
-mod launchd;
 mod link;
 mod lock;
 mod power;
@@ -36,19 +33,16 @@ use crate::link::FrameLog;
 use crate::lock::LabLock;
 use crate::power::Uhubctl;
 
-const USAGE: &str = "Usage: pnpm verify:radio [--dry-run | --allow-bluetooth] [--usb-only]
+const USAGE: &str = "Usage: pnpm verify:radio [--dry-run] [--usb-only]
 
-  --dry-run             lists the radios and checks them against the lab; sends nothing
-  --usb-only            leaves the radios on Bluetooth alone
-  --allow-bluetooth     a dry run that may put the macOS Bluetooth prompt on the screen.
-                        A person runs it once, at the Mac, and clicks Allow.
+  --dry-run    lists the radios and checks them against the lab; sends nothing
+  --usb-only   leaves the radios on Bluetooth alone
 
 Environment:
-  RADIOS_TOML               the lab file (default: ~/factory/radios.toml)
-  RADIO_LAB_LOCK            the lock (default: ~/factory/locks/radio-lab)
-  RADIO_LOG_DIR             where frame logs go (default: .factory/radio in the repository)
-  UHUBCTL                   the uhubctl program (default: uhubctl)
-  VERIFY_RADIO_BLE_PROGRAM  a copy of this program to hold the Bluetooth link (default: itself)";
+  RADIOS_TOML     the lab file (default: ~/factory/radios.toml)
+  RADIO_LAB_LOCK  the lock (default: ~/factory/locks/radio-lab)
+  RADIO_LOG_DIR   where frame logs go (default: .factory/radio in the repository)
+  UHUBCTL         the uhubctl program (default: uhubctl)";
 
 /// Where a run reads and writes.
 struct Paths {
@@ -56,8 +50,6 @@ struct Paths {
     lock: PathBuf,
     logs: PathBuf,
     uhubctl: PathBuf,
-    /// The program that holds the Bluetooth link, when it isn't this one.
-    ble_program: Option<PathBuf>,
 }
 
 /// What a run may do.
@@ -65,8 +57,6 @@ struct Paths {
 struct Mode {
     /// Lists and checks the radios, and sends nothing.
     dry_run: bool,
-    /// May put the macOS Bluetooth prompt on the screen.
-    may_ask: bool,
     /// Leaves Bluetooth radios alone.
     usb_only: bool,
 }
@@ -87,7 +77,6 @@ impl Paths {
                 core.parent().unwrap_or(core).join(".factory/radio")
             }),
             uhubctl: set("UHUBCTL").unwrap_or_else(|| "uhubctl".into()),
-            ble_program: set("VERIFY_RADIO_BLE_PROGRAM"),
         })
     }
 }
@@ -144,30 +133,6 @@ where
     end
 }
 
-/// What starts the side that holds a Bluetooth link: a launchd job on a Mac, nothing elsewhere.
-#[cfg(target_os = "macos")]
-fn bluetooth(
-    paths: &Paths,
-    mode: Mode,
-    log: &FrameLog,
-) -> Result<Option<Box<dyn ble::Launcher>>, String> {
-    if mode.usb_only {
-        return Ok(None);
-    }
-    let program = match &paths.ble_program {
-        Some(program) => program.clone(),
-        None => std::env::current_exe().map_err(|error| error.to_string())?,
-    };
-    // Next to the frame log, and named after it.
-    let output = log.path().with_extension("bluetooth.log");
-    Ok(Some(Box::new(launchd::Launchd { program, output })))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn bluetooth(_: &Paths, _: Mode, _: &FrameLog) -> Result<Option<Box<dyn ble::Launcher>>, String> {
-    Ok(None)
-}
-
 fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
     // Before the lock: a missing lab file needs no radios.
     let config = match config::load(&paths.config) {
@@ -181,15 +146,13 @@ fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
         let power = Uhubctl {
             program: paths.uhubctl.clone(),
         };
-        let bluetooth = bluetooth(paths, mode, &log)?;
         let lab = Lab {
             config: &config,
             usb: &Computer,
             power: &power,
             log: log.clone(),
             timing: Timing::default(),
-            ble: bluetooth.as_deref(),
-            may_ask: mode.may_ask,
+            bluetooth: !mode.usb_only,
         };
         lab.run(mode.dry_run, out).await?;
         if log.failed() {
@@ -202,41 +165,12 @@ fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
     })
 }
 
-/// `--ble-child <port> <name> [--may-ask]`.
-fn ble_child(arguments: &[String]) -> i32 {
-    let (Some(port), Some(name)) = (
-        arguments.first().and_then(|port| port.parse::<u16>().ok()),
-        arguments.get(1),
-    ) else {
-        eprintln!("--ble-child is started by a run, with a port and a radio's name");
-        return 2;
-    };
-    let may_ask = arguments.get(2).map(String::as_str) == Some("--may-ask");
-    #[cfg(target_os = "macos")]
-    return launchd::child(port, name, may_ask);
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (port, name, may_ask);
-        eprintln!("The Bluetooth run needs a Mac.");
-        2
-    }
-}
-
 fn main() {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    // The side that holds the Bluetooth link: launchd starts it for a run (launchd.rs).
-    if arguments.first().map(String::as_str) == Some("--ble-child") {
-        std::process::exit(ble_child(&arguments[1..]));
-    }
     let mut mode = Mode::default();
-    for argument in arguments {
+    for argument in std::env::args().skip(1) {
         match argument.as_str() {
             "--dry-run" => mode.dry_run = true,
             "--usb-only" => mode.usb_only = true,
-            "--allow-bluetooth" => {
-                mode.dry_run = true;
-                mode.may_ask = true;
-            }
             // pnpm passes the separator on.
             "--" => {}
             "--help" | "-h" => {

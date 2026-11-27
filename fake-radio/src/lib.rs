@@ -54,9 +54,6 @@ pub struct Config {
     /// How long the radio takes to answer its app. meshcore-rs listens for an answer only
     /// after it has written the command, so an instant answer can be missed.
     pub reply_latency: Duration,
-    /// How long the radio takes to restart when its app tells it to. Meanwhile it answers no
-    /// one.
-    pub restart_time: Duration,
     /// The frequency the radio says it is on, in kHz. The rest of its preset is fixed: 62.5 kHz,
     /// SF 8, CR 8.
     pub frequency_khz: u32,
@@ -73,7 +70,6 @@ impl Default for Config {
             max_contacts: 350,
             seed: 0,
             reply_latency: Duration::from_millis(20),
-            restart_time: Duration::from_millis(300),
             frequency_khz: 869_618,
         }
     }
@@ -121,8 +117,6 @@ struct State {
     /// Counts the links. A link with an older number has gone quiet: the radio neither reads
     /// nor writes it any more, and doesn't close it either.
     link: u64,
-    /// The radio is restarting until then, and answers no one.
-    off_until: Option<Instant>,
     contacts: Vec<(Contact, u32)>,
     /// Message frames waiting for the app to collect them.
     waiting: VecDeque<Waiting>,
@@ -221,7 +215,6 @@ impl FakeRadio {
         let state = State {
             app: None,
             link: 0,
-            off_until: None,
             contacts: Vec::new(),
             waiting: VecDeque::new(),
             unconfirmed: HashMap::new(),
@@ -396,17 +389,9 @@ impl Shared {
     }
 
     /// Whether the radio reads what arrives on the link with this number: not on one that went
-    /// quiet, and not while it restarts.
+    /// quiet.
     fn hears(&self, link: u64) -> bool {
-        let state = self.state();
-        link == state.link && state.off_until.is_none_or(|until| Instant::now() >= until)
-    }
-
-    /// REBOOT: the link goes quiet, and the radio is away for a while.
-    fn restart(&self) {
-        let mut state = self.state();
-        state.link += 1;
-        state.off_until = Some(Instant::now() + self.config.restart_time);
+        link == self.state().link
     }
 
     /// SEND_SELF_ADVERT: the radios in range hear it, and add this one to their contacts if
@@ -472,11 +457,6 @@ impl Shared {
                 frames::ok()
             }
             frames::CMD_GET_BATT_AND_STORAGE => frames::battery(),
-            // The firmware restarts only when the command spells it out, and never answers.
-            frames::CMD_REBOOT if body == b"reboot" => {
-                self.restart();
-                return (Vec::new(), None);
-            }
             _ => frames::error(frames::ERR_UNSUPPORTED),
         };
         (vec![answer], None)

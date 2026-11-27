@@ -1,8 +1,7 @@
 //! Issue #135: a link that ends silently, as a Bluetooth link does, is noticed and opened again
 //! without restarting anything. A fake companion radio over TCP stands in for the radio: its
-//! link can go quiet without closing, which is what meshcore-rs sees when Bluetooth drops.
-//!
-//! The same against the real radio over Bluetooth is `pnpm verify:radio` (`docs/radio-lab.md`).
+//! link can go quiet without closing. The tests of the bridge itself are in
+//! `issue_135_ble_bridge.rs`.
 
 mod support;
 
@@ -121,7 +120,7 @@ async fn issue_135_a_link_that_goes_quiet_is_reported_as_lost() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn issue_135_radios_that_announce_themselves_become_contacts_and_a_restart_ends_the_link() {
+async fn issue_135_radios_that_announce_themselves_become_contacts_and_keep_them_on_a_new_link() {
     let ada = FakeRadio::start(Config::default()).await.unwrap();
     let bea = FakeRadio::start(Config::default()).await.unwrap();
     put_in_range(&ada, &bea);
@@ -142,18 +141,13 @@ async fn issue_135_radios_that_announce_themselves_become_contacts_and_a_restart
     );
     assert_eq!(held(bea_radio.contacts().await.unwrap()), [ada_key]);
 
-    // Restarting the radio ends its link without closing it; the checks notice.
+    // The link is lost without closing; the checks notice.
     let mut events = bea_radio.events();
-    bea_radio.radio.restart().await.unwrap();
+    bea.go_quiet();
     assert_eq!(next_event(&mut events).await, RadioEvent::Disconnected);
 
-    // Once it is back, a new link works, and it kept its contacts.
-    let bea_again = loop {
-        match Watched::connect(&bea).await {
-            Ok(radio) => break radio,
-            Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
-        }
-    };
+    // A new link works, and the radio kept its contacts.
+    let bea_again = Watched::connect(&bea).await.unwrap();
     let mut events = bea_again.events();
     ada_radio.send_text(&bea_key, "Still there?").await.unwrap();
     match next_event(&mut events).await {
@@ -178,8 +172,7 @@ async fn issue_135_the_core_opens_a_radio_again_after_its_link_went_quiet() {
     assert_eq!(paired.public_key, hex::encode(fake.public_key()));
     assert_eq!(paired.connection, RadioConnection::Connected);
 
-    // The radio restarts, as the lab does to drop a Bluetooth link: nothing closes, and the
-    // radio is away for longer than one look for it.
+    // The link goes quiet: nothing closes, and the radio just stops answering.
     let mut changes = core.subscribe();
     fake.go_quiet();
     until("the core noticing the lost link", || {

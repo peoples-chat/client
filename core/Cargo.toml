@@ -43,18 +43,13 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 # MeshCore's companion protocol (#60; MIT). On desktops it reaches radios over USB serial, which
-# brings in the serialport crate (MPL-2.0). Phones build it without a link of its own: they will
+# brings in the serialport crate (MPL-2.0), and over TCP, which is how the radio lab reaches a
+# Bluetooth radio through its bridge (#135). Phones build it without a link of its own: they will
 # reach radios over Bluetooth (#23). Notes: docs/radio.md.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-meshcore-rs = { version = "=0.2.0", default-features = false, features = ["serial"] }
+meshcore-rs = { version = "=0.2.0", default-features = false, features = ["serial", "tcp"] }
 # Lists the USB serial ports a radio can be paired on (#24). meshcore-rs uses the same crate.
 tokio-serial = { version = "5.5", default-features = false }
-
-# Bluetooth to a companion radio from a Mac (#135), through meshcore-rs's own link. It brings in
-# btleplug (MIT/Apache-2.0/BSD-3-Clause), which talks to CoreBluetooth. Only on macOS for now:
-# on Linux btleplug needs D-Bus headers at build time, and phones get their link in #23.
-[target.'cfg(target_os = "macos")'.dependencies]
-meshcore-rs = { version = "=0.2.0", default-features = false, features = ["serial", "ble"] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 meshcore-rs = { version = "=0.2.0", default-features = false }
@@ -76,11 +71,6 @@ toml = "0.8"
 # `net` and `io-util` run the test relay's front door (tests/support/relay.rs). `test-util` lets
 # the path spike's test (#36) skip the waits it keeps between packets.
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "test-util"] }
-
-# The radio lab harness asks macOS whether it may use Bluetooth before it does (#135): one
-# Objective-C call. btleplug, behind meshcore-rs's Bluetooth link, already builds this version.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2 = "0.5"
 
 # The path spike (#36) checks its frames and plan without radios; run its tests with the rest.
 [[example]]

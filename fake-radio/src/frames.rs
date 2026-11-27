@@ -13,7 +13,6 @@ pub const CMD_SEND_TXT_MSG: u8 = 2;
 pub const CMD_GET_CONTACTS: u8 = 4;
 pub const CMD_SEND_SELF_ADVERT: u8 = 7;
 pub const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
-pub const CMD_REBOOT: u8 = 19;
 pub const CMD_GET_BATT_AND_STORAGE: u8 = 20;
 pub const CMD_DEVICE_QUERY: u8 = 22;
 

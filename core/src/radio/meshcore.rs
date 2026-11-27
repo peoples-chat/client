@@ -1,5 +1,5 @@
-//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops
-//! and, on a Mac, over Bluetooth too (#135).
+//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops,
+//! or over TCP, as the radio lab reaches a Bluetooth radio through its bridge (#135).
 //!
 //! meshcore-rs speaks the MeshCore companion protocol. This adapter turns its commands and
 //! events into [`Radio`]. On phones the crate is built without a link of its own, and a link the
@@ -34,12 +34,9 @@ const BAUD_RATE: u32 = 115_200;
 /// MeshCore's text type for plain messages. CLI replies from repeaters and signed room posts use
 /// others.
 const TXT_PLAIN: u8 = 0;
-/// How often a Bluetooth link is checked, as long as nothing else says that it ended.
-#[cfg(target_os = "macos")]
-const BLE_WATCH_EVERY: Duration = Duration::from_secs(10);
-/// How long to wait before scanning for a Bluetooth radio again. A scan itself takes 2 seconds.
-#[cfg(target_os = "macos")]
-const BLE_SCAN_PAUSE: Duration = Duration::from_millis(500);
+/// How often a TCP link is checked, as long as nothing else says that it ended.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const TCP_WATCH_EVERY: Duration = Duration::from_secs(10);
 /// How long a radio may take to answer a link check, at most.
 const LINK_CHECK_REPLY: Duration = Duration::from_secs(5);
 /// How many link checks in a row a radio may leave unanswered before its link counts as lost.
@@ -96,33 +93,18 @@ impl MeshCoreRadio {
         Self::start(commands, &dispatcher, Some(link)).await
     }
 
-    /// Finds the companion radio that advertises `name` over Bluetooth, such as
-    /// `MeshCore-E49B86FC784A`, and connects to it through meshcore-rs's own Bluetooth link
-    /// (#135). It keeps scanning until `within` has passed: a radio that has just restarted takes
-    /// a few seconds to advertise again. The link is watched from the start
-    /// ([`MeshCoreRadio::watch_link`]).
-    ///
-    /// The radio must already be paired with this Mac, and macOS must allow the program to use
-    /// Bluetooth: a program that asks without that permission gets a system prompt, or is ended.
-    #[cfg(target_os = "macos")]
-    pub async fn connect_ble(name: &str, within: Duration) -> Result<Self, RadioError> {
-        let deadline = tokio::time::Instant::now() + within;
-        let link = loop {
-            match meshcore_rs::MeshCore::ble_connect(name).await {
-                Ok(link) => break link,
-                Err(error) if tokio::time::Instant::now() >= deadline => {
-                    return Err(RadioError::Link(format!(
-                        "no Bluetooth link to {name}: {error}"
-                    )));
-                }
-                Err(error) => log::info!("no Bluetooth link to {name} yet: {error}"),
-            }
-            tokio::time::sleep(BLE_SCAN_PAUSE).await;
-        };
+    /// Connects to a companion radio over TCP, such as the Bluetooth bridge of the radio lab on
+    /// `127.0.0.1` (#135). The link is watched from the start ([`MeshCoreRadio::watch_link`]):
+    /// whatever is behind the TCP connection can be lost without the connection ending.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub async fn connect_tcp(host: &str, port: u16) -> Result<Self, RadioError> {
+        let link = meshcore_rs::MeshCore::tcp(host, port)
+            .await
+            .map_err(|error| RadioError::Link(error.to_string()))?;
         let commands = link.commands().clone();
         let dispatcher = link.dispatcher().clone();
         let radio = Self::start(commands, &dispatcher, Some(link)).await?;
-        radio.watch_link(BLE_WATCH_EVERY);
+        radio.watch_link(TCP_WATCH_EVERY);
         Ok(radio)
     }
 
@@ -209,14 +191,6 @@ impl MeshCoreRadio {
         let commands = self.commands.lock().await;
         commands.send_advert(false).await.map_err(command_error)?;
         Ok(())
-    }
-
-    /// Restarts the radio, which ends its link. Its settings and contacts stay as they are. The
-    /// radio lab uses it to drop a Bluetooth link (#135); the app never does.
-    pub async fn restart(&self) -> Result<(), RadioError> {
-        self.ensure_connected()?;
-        let commands = self.commands.lock().await;
-        commands.reboot().await.map_err(command_error)
     }
 
     fn ensure_connected(&self) -> Result<(), RadioError> {

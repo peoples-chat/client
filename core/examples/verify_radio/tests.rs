@@ -23,7 +23,7 @@ use crate::{End, Mode, Paths, locked, verify};
 
 const FIRMWARE: &str = "v1.18.0-81dbae5";
 
-pub(crate) const LAB: &str = r#"
+const LAB: &str = r#"
 [lab]
 preset = "private-test"
 frequency_mhz = 869.850
@@ -250,9 +250,9 @@ fn timing() -> Timing {
         reply: Duration::from_millis(500),
         back: Duration::from_secs(2),
         poll: Duration::from_millis(10),
-        ble_start: Duration::from_secs(2),
         ble_connect: Duration::from_secs(3),
-        ble_lost: Duration::from_secs(5),
+        watch: Duration::from_millis(100),
+        lost: Duration::from_secs(5),
         message: Duration::from_secs(3),
         contacts: Duration::from_secs(2),
     }
@@ -273,8 +273,7 @@ async fn run(
         power: switch,
         log: log.clone(),
         timing: timing(),
-        ble: None,
-        may_ask: false,
+        bluetooth: false,
     };
     let mut out = Vec::new();
     let result = lab.run(dry_run, &mut out).await;
@@ -319,7 +318,6 @@ fn issue_133_a_missing_lab_file_fails_cleanly_and_takes_no_lock() {
         lock: folder.path().join("locks/radio-lab"),
         logs: folder.path().join("logs"),
         uhubctl: "uhubctl".into(),
-        ble_program: None,
     };
     let mut out = Vec::new();
     let End::Failed(error) = verify(&paths, Mode::default(), &mut out) else {
@@ -411,6 +409,64 @@ async fn issue_133_a_public_key_other_than_the_lab_files_is_refused() {
     let bench = Bench::new();
     let (result, _, _) = run(&config, &bench, &Switch::new(&bench, true), true).await;
     assert!(result.unwrap_err().contains("R1: public key is adadad"));
+}
+
+// The Bluetooth radio without a bridge (#135). The runs with one are in `ble_tests.rs`.
+
+#[test]
+fn issue_135_the_bridges_ports_come_from_the_lab_file() {
+    let r3 = lab().radios.remove(2);
+    assert_eq!((r3.bridge_port(), r3.bridge_control_port()), (5535, 5536));
+    let named = LAB.replace("MeshCore-TEST\"", "MeshCore-TEST\"\nbridge_port = 6000");
+    let r3 = config::parse(&named).unwrap().radios.remove(2);
+    assert_eq!((r3.bridge_port(), r3.bridge_control_port()), (6000, 6001));
+    let both = named.replace("6000", "6000\nbridge_control_port = 7000");
+    let r3 = config::parse(&both).unwrap().radios.remove(2);
+    assert_eq!((r3.bridge_port(), r3.bridge_control_port()), (6000, 7000));
+
+    let unnamed = LAB.replace("\"MeshCore-TEST\"", "\"<name>\"");
+    let error = config::parse(&unnamed).unwrap_err();
+    assert!(error.contains("R3: ble_name isn't filled in"), "{error}");
+}
+
+#[tokio::test]
+async fn issue_135_the_bluetooth_radio_is_skipped_when_the_bridge_is_not_running() {
+    // A port nothing listens on.
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = config::parse(&LAB.replace(
+        "MeshCore-TEST\"",
+        &format!("MeshCore-TEST\"\nbridge_control_port = {port}"),
+    ))
+    .unwrap();
+    let bench = Bench::new();
+    let folder = TempDir::new().unwrap();
+    let switch = Switch::new(&bench, true);
+    for dry_run in [true, false] {
+        let lab = Lab {
+            config: &config,
+            usb: &bench,
+            power: &switch,
+            log: FrameLog::create(folder.path()).unwrap(),
+            timing: timing(),
+            bluetooth: true,
+        };
+        let mut out = Vec::new();
+        // The run passes: the radio is left out, and says so.
+        lab.run(dry_run, &mut out).await.unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains(&format!(
+                "R3: SKIPPED, not checked: the Bluetooth bridge isn't running (nothing listens \
+                 on 127.0.0.1:{port})"
+            )),
+            "{out}"
+        );
+        assert!(out.contains("tools/ble-bridge/install.sh"), "{out}");
+    }
 }
 
 // The lock.

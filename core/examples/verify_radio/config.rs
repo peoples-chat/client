@@ -23,12 +23,11 @@ pub struct Preset {
     pub spreading_factor: u8,
     pub coding_rate: u8,
     pub max_tx_power_dbm: u8,
-    /// Whether the Bluetooth run (#135) may have two radios announce themselves, so that they
-    /// add each other as contacts. Off unless the file says so: it adds to what the radios
-    /// store.
-    #[serde(default)]
-    pub exchange_adverts: bool,
 }
+
+/// The bridge's port when radios.toml names none. `tools/ble-bridge/LabFile.swift` has the
+/// same.
+pub const BRIDGE_PORT: u16 = 5535;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RadioEntry {
@@ -44,10 +43,10 @@ pub struct RadioEntry {
     /// Where `uhubctl` switches the radio's power: `<hub location>:<port>`. A value in angle
     /// brackets says why there is none.
     pub hub_port: Option<String>,
-    /// Whether the Bluetooth run (#135) may restart this radio to drop its Bluetooth link. Off
-    /// unless the file says so.
-    #[serde(default)]
-    pub reboot_to_drop_link: bool,
+    /// Where the Bluetooth bridge (#135) passes this radio's frames, on 127.0.0.1.
+    pub bridge_port: Option<u16>,
+    /// Where the bridge takes commands about the link. By default the port after `bridge_port`.
+    pub bridge_control_port: Option<u16>,
 }
 
 /// A port of a hub that `uhubctl` can switch.
@@ -58,6 +57,15 @@ pub struct HubPort {
 }
 
 impl RadioEntry {
+    pub fn bridge_port(&self) -> u16 {
+        self.bridge_port.unwrap_or(BRIDGE_PORT)
+    }
+
+    pub fn bridge_control_port(&self) -> u16 {
+        self.bridge_control_port
+            .unwrap_or_else(|| self.bridge_port().saturating_add(1))
+    }
+
     /// Where the radio's power is switched, if anywhere.
     pub fn hub(&self) -> Result<Option<HubPort>, String> {
         let Some(text) = self.hub_port.as_deref().map(str::trim) else {

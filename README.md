@@ -15,6 +15,7 @@ Work is tracked in the issues of this repository.
 | --- | --- |
 | `core/` | Rust core (`peoples-chat-core`). All protocol logic goes here. It must not depend on Tauri or on interface code. It builds on MDK; see [docs/mdk.md](docs/mdk.md). |
 | `fake-radio/` | A fake MeshCore companion radio over TCP, for tests without hardware ([docs/radio.md](docs/radio.md#fake-radios-over-tcp)). |
+| `tools/ble-bridge/` | A Mac program that passes a Bluetooth MeshCore radio's frames to TCP on this computer, for the radio lab ([docs/radio-lab.md](docs/radio-lab.md#the-bluetooth-bridge)). |
 | `src-tauri/` | Tauri 2 app shell (`peoples-chat`). Hosts the web view and forwards commands to the core. |
 | `src-tauri/plugins/share-sheet/` | A Tauri plugin of the app's own: the system share sheet on iOS (Swift) and Android (Kotlin), which the phones' web views can't open. |
 | `src-tauri/gen/apple`, `src-tauri/gen/android` | Generated Xcode and Android Studio projects. They are committed. |
