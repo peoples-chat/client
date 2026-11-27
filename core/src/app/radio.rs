@@ -635,6 +635,7 @@ impl Core {
                     confirm_by: Some(due(wait)),
                     timed_out: false,
                     kept_at: now_ms(),
+                    deleted: false,
                 };
                 self.keep_sent(&sent.ack, |store| store.add_message(kept).map(|_| ()));
                 self.await_confirmation(Awaited {
@@ -873,6 +874,9 @@ impl Core {
             text: received.text.clone(),
             sent_at: u64::from(received.sent_at) * 1000,
             acknowledged: false,
+            edited: false,
+            deleted: false,
+            withdrawn: false,
         };
         let kept = self.inner.radio_store.add_message(RadioMessage {
             chat_id: message.chat_id.clone(),
@@ -886,6 +890,7 @@ impl Core {
             confirm_by: None,
             timed_out: false,
             kept_at: now_ms(),
+            deleted: false,
         });
         if let Err(error) = kept {
             // Shown anyway; after a restart it is gone until its relay copy arrives.

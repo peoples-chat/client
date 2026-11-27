@@ -40,6 +40,23 @@
             "sentAt": 1795300090000,
             "transport": "radio",
             "delivery": "timedOut"
+          },
+          {
+            "id": "msg-6",
+            "direction": "in",
+            "text": "",
+            "sentAt": 1795300095000,
+            "transport": "internet",
+            "deleted": true
+          },
+          {
+            "id": "msg-7",
+            "direction": "out",
+            "text": "See you there.",
+            "sentAt": 1795300100000,
+            "transport": "internet",
+            "delivery": "sent",
+            "withdrawn": true
           }
         ],
         "reach": "radio"
@@ -151,6 +168,18 @@
       "type": "messageRemoved",
       "chatId": "chat-2",
       "messageId": "queued-3f9a0c4be1d27586"
+    },
+    {
+      "type": "messageChanged",
+      "chatId": "chat-1",
+      "message": {
+        "id": "msg-1",
+        "direction": "in",
+        "text": "Are you coming to the meeting at four?",
+        "sentAt": 1795300000000,
+        "transport": "internet",
+        "edited": true
+      }
     },
     {
       "type": "reachChanged",

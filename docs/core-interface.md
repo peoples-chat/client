@@ -72,7 +72,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
-| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
+| `messageChanged` | `chatId`, `message` | A message the snapshot has was edited, deleted or withdrawn. The whole message replaces the one with its id | Done (#122) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id, or MDK removed it from this device | Done (#46, #122) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
@@ -89,7 +90,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable`, `edited`, `deleted`, `withdrawn` (each optional, #122) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -285,10 +286,23 @@ that comes before the user accepts an invitation is added to the invitation: `me
 - `sentAt` is the sender's clock, in whole seconds. After a restart, messages sent within the same second can come back
   in another order.
 
+**Edits, deletions and withdrawn messages** (#122). Another app, such as White Noise, can edit or delete its user's
+messages. The core follows MDK's changes to messages the snapshot has, and `messageChanged` carries the message as it
+is now:
+
+- An edit: `text` is the new text, and `edited` is set. The message keeps its place and time.
+- A deletion for everyone: `deleted` is set and `text` is empty. The interface shows "This message was deleted." The
+  radio store's copy of the text goes too.
+- A withdrawn message lost a race between two versions of the chat's state, so the other side never got it: `withdrawn`
+  is set, and the interface shows it as not delivered, whatever `delivery` says. It stays withdrawn.
+- A restart shows the same from MDK's history, except a withdrawn message that MDK took away entirely: it is gone then.
+- A message MDK removes from this device, for example one that expired (#124), goes with `messageRemoved`.
+- Changes to a message the snapshot never showed, such as one deleted before it arrived, emit nothing.
+
 **Not built yet:**
 
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
-- editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
+- editing and deleting the user's own messages, and reactions. Media and stickers aren't shown.
 
 ## Reach
 

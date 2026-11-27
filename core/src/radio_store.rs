@@ -56,6 +56,9 @@ pub struct RadioMessage {
     /// within the same second.
     #[serde(default)]
     pub kept_at: u64,
+    /// The sender deleted it for everyone, and its text is gone from here too (#122).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 /// The radio paired over a cable (#24).
@@ -311,6 +314,24 @@ impl RadioStore {
             .cloned()
     }
 
+    /// Removes the text of the message `id`, which its sender deleted for everyone (#122), and
+    /// marks it deleted. What the radio needs to match a confirmation stays. Returns whether
+    /// there was text to remove.
+    pub fn forget_text(&self, id: &str) -> std::io::Result<bool> {
+        let mut data = self.lock();
+        let Some(message) = data
+            .messages
+            .iter_mut()
+            .find(|message| message.id == id && !message.deleted)
+        else {
+            return Ok(false);
+        };
+        message.text = String::new();
+        message.deleted = true;
+        self.save(&data)?;
+        Ok(true)
+    }
+
     /// The chat's messages that travelled by radio, oldest first.
     pub fn messages_in(&self, chat_id: &str) -> Vec<RadioMessage> {
         self.lock()
@@ -485,7 +506,37 @@ mod tests {
             confirm_by: None,
             timed_out: false,
             kept_at: 1_795_300_000_100,
+            deleted: false,
         }
+    }
+
+    #[test]
+    fn issue_122_a_deleted_message_leaves_no_text_on_disk() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        store
+            .add_message(RadioMessage {
+                text: "Meet at the old mill".to_owned(),
+                ..sent("m1", "0001")
+            })
+            .unwrap();
+        store.add_message(sent("m2", "0002")).unwrap();
+
+        assert!(store.forget_text("m1").unwrap());
+        let forgotten = store.message("m1").unwrap();
+        assert!(forgotten.deleted);
+        assert_eq!(forgotten.text, "");
+        // The confirmation still finds it.
+        assert_eq!(forgotten.ack.as_deref(), Some("0001"));
+        // Once is enough, and other messages and unknown ids are left alone.
+        assert!(!store.forget_text("m1").unwrap());
+        assert!(!store.forget_text("m9").unwrap());
+        assert_eq!(store.message("m2").unwrap().text, "Hello");
+
+        let file = std::fs::read_to_string(data.path().join("radio.json")).unwrap();
+        assert!(!file.contains("old mill"), "{file}");
+        let reopened = RadioStore::open(data.path());
+        assert!(reopened.message("m1").unwrap().deleted);
     }
 
     #[test]
