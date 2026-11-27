@@ -23,6 +23,11 @@ pub struct Preset {
     pub spreading_factor: u8,
     pub coding_rate: u8,
     pub max_tx_power_dbm: u8,
+    /// Whether the Bluetooth run (#135) may have two radios announce themselves, so that they
+    /// add each other as contacts. Off unless the file says so: it adds to what the radios
+    /// store.
+    #[serde(default)]
+    pub exchange_adverts: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -39,6 +44,10 @@ pub struct RadioEntry {
     /// Where `uhubctl` switches the radio's power: `<hub location>:<port>`. A value in angle
     /// brackets says why there is none.
     pub hub_port: Option<String>,
+    /// Whether the Bluetooth run (#135) may restart this radio to drop its Bluetooth link. Off
+    /// unless the file says so.
+    #[serde(default)]
+    pub reboot_to_drop_link: bool,
 }
 
 /// A port of a hub that `uhubctl` can switch.
@@ -109,6 +118,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
         }
         labels.push(&radio.label);
         let Some(serial) = &radio.usb_serial else {
+            // A Bluetooth radio is checked like the others before anything is sent, so its entry
+            // must say what to expect.
+            if let Some(name) = &radio.ble_name {
+                for (field, value) in [("ble_name", name), ("firmware", &radio.firmware)] {
+                    if value.trim().is_empty() || placeholder(value) {
+                        return Err(format!("{}: {field} isn't filled in", radio.label));
+                    }
+                }
+            }
             continue;
         };
         for (field, value) in [("usb_serial", serial), ("firmware", &radio.firmware)] {

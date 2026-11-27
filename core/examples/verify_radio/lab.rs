@@ -12,6 +12,7 @@ use peoples_chat_core::radio::{
 use tokio::time::Instant;
 use tokio_serial::SerialPortBuilderExt;
 
+use crate::ble::{self, Launcher};
 use crate::config::{Config, Preset, RadioEntry};
 use crate::link::{FrameLog, Io, Link};
 use crate::power::Power;
@@ -50,6 +51,18 @@ pub struct Timing {
     pub back: Duration,
     /// How often to look for it meanwhile.
     pub poll: Duration,
+    /// How long the side that holds the Bluetooth link may take to start (#135).
+    pub ble_start: Duration,
+    /// How long finding a Bluetooth radio by its name and connecting may take: also after it
+    /// restarted.
+    pub ble_connect: Duration,
+    /// How long a lost Bluetooth link may go unnoticed. The link is checked every 10 seconds,
+    /// and two checks in a row must go unanswered.
+    pub ble_lost: Duration,
+    /// How long a message may take from one radio to the other.
+    pub message: Duration,
+    /// How long radios may take to add each other after they announced themselves.
+    pub contacts: Duration,
 }
 
 impl Default for Timing {
@@ -58,6 +71,11 @@ impl Default for Timing {
             reply: Duration::from_secs(5),
             back: Duration::from_secs(60),
             poll: Duration::from_secs(1),
+            ble_start: Duration::from_secs(20),
+            ble_connect: Duration::from_secs(45),
+            ble_lost: Duration::from_secs(90),
+            message: Duration::from_secs(45),
+            contacts: Duration::from_secs(30),
         }
     }
 }
@@ -116,6 +134,12 @@ pub struct Lab<'a> {
     pub power: &'a dyn Power,
     pub log: Arc<FrameLog>,
     pub timing: Timing,
+    /// Starts the side that holds a Bluetooth link (#135). Without one, as on computers other
+    /// than Macs, Bluetooth radios are listed and not checked.
+    pub ble: Option<&'a dyn Launcher>,
+    /// Whether this run may put the macOS Bluetooth prompt on the screen: only when a person
+    /// asked for that.
+    pub may_ask: bool,
 }
 
 impl Lab<'_> {
@@ -269,8 +293,13 @@ impl Lab<'_> {
         );
         let mut stations = Vec::new();
         let mut problems = Vec::new();
+        let mut over_bluetooth = Vec::new();
         for entry in &self.config.radios {
             if entry.usb_serial.is_none() {
+                if entry.ble_name.is_some() && self.ble.is_some() {
+                    over_bluetooth.push(entry);
+                    continue;
+                }
                 let _ = writeln!(
                     out,
                     "{}: not on USB ({}), not checked",
@@ -325,10 +354,22 @@ impl Lab<'_> {
             }
             stations = checked;
         }
+        // Bluetooth radios (#135). Each is checked against the lab over Bluetooth before
+        // anything is sent to it. A dry run stops there.
+        let mut result = Ok(());
+        if let Some(launcher) = self.ble {
+            for entry in over_bluetooth {
+                let usb = if dry_run { None } else { stations.first() };
+                result = ble::run(self, launcher, entry, usb, self.may_ask, out).await;
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
         for station in stations {
             station.close().await;
         }
-        Ok(())
+        result
     }
 }
 
@@ -403,13 +444,20 @@ pub fn mismatches(preset: &Preset, entry: &RadioEntry, info: &RadioInfo) -> Vec<
 }
 
 fn describe(station: &Station) -> String {
-    let info = &station.info;
-    let settings = info.settings;
     format!(
-        "{}: {} (USB {}), firmware {}, key {}…, {} MHz, {} kHz, SF {}, CR {}, {} dBm",
+        "{}: {} (USB {}), {}",
         station.entry.label,
         station.port,
         station.entry.usb_serial.as_deref().unwrap_or_default(),
+        describe_info(&station.info)
+    )
+}
+
+/// A radio's firmware, key and settings, as the run lists them.
+pub fn describe_info(info: &RadioInfo) -> String {
+    let settings = info.settings;
+    format!(
+        "firmware {}, key {}…, {} MHz, {} kHz, SF {}, CR {}, {} dBm",
         info.firmware.as_deref().unwrap_or("unknown"),
         info.public_key.get(..12).unwrap_or(&info.public_key),
         settings.frequency_mhz,

@@ -89,13 +89,14 @@ pub fn contact(contact: &Contact, last_modified: u32) -> Vec<u8> {
     frame
 }
 
-/// SELF_INFO on MeshCore's EU/UK narrow preset: 869.618 MHz, 62.5 kHz, SF 8, CR 8.
-pub fn self_info(public_key: &[u8; 32], name: &str) -> Vec<u8> {
+/// SELF_INFO with the rest of MeshCore's EU/UK narrow preset (869.618 MHz): 62.5 kHz, SF 8,
+/// CR 8.
+pub fn self_info(public_key: &[u8; 32], name: &str, frequency_khz: u32) -> Vec<u8> {
     let mut frame = vec![5, 1, 22, 22]; // chat node, TX power, its maximum
     frame.extend_from_slice(public_key);
     frame.extend_from_slice(&[0; 8]); // latitude, longitude
     frame.extend_from_slice(&[0; 4]); // multi ACKs, location policy, telemetry, manual add
-    frame.extend_from_slice(&869_618u32.to_le_bytes()); // kHz
+    frame.extend_from_slice(&frequency_khz.to_le_bytes());
     frame.extend_from_slice(&62_500u32.to_le_bytes()); // Hz
     frame.extend_from_slice(&[8, 8]);
     frame.extend_from_slice(name.as_bytes());

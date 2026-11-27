@@ -19,11 +19,11 @@ use crate::lab::{Lab, Timing, Usb};
 use crate::link::{FrameLog, Io, Link};
 use crate::lock::LabLock;
 use crate::power::{Power, Uhubctl};
-use crate::{End, Paths, locked, verify};
+use crate::{End, Mode, Paths, locked, verify};
 
 const FIRMWARE: &str = "v1.18.0-81dbae5";
 
-const LAB: &str = r#"
+pub(crate) const LAB: &str = r#"
 [lab]
 preset = "private-test"
 frequency_mhz = 869.850
@@ -250,6 +250,11 @@ fn timing() -> Timing {
         reply: Duration::from_millis(500),
         back: Duration::from_secs(2),
         poll: Duration::from_millis(10),
+        ble_start: Duration::from_secs(2),
+        ble_connect: Duration::from_secs(3),
+        ble_lost: Duration::from_secs(5),
+        message: Duration::from_secs(3),
+        contacts: Duration::from_secs(2),
     }
 }
 
@@ -268,6 +273,8 @@ async fn run(
         power: switch,
         log: log.clone(),
         timing: timing(),
+        ble: None,
+        may_ask: false,
     };
     let mut out = Vec::new();
     let result = lab.run(dry_run, &mut out).await;
@@ -312,9 +319,10 @@ fn issue_133_a_missing_lab_file_fails_cleanly_and_takes_no_lock() {
         lock: folder.path().join("locks/radio-lab"),
         logs: folder.path().join("logs"),
         uhubctl: "uhubctl".into(),
+        ble_program: None,
     };
     let mut out = Vec::new();
-    let End::Failed(error) = verify(&paths, false, &mut out) else {
+    let End::Failed(error) = verify(&paths, Mode::default(), &mut out) else {
         panic!("a run without a lab file passed");
     };
     assert!(error.contains("No radio lab file at"), "{error}");

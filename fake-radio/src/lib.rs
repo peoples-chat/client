@@ -57,6 +57,9 @@ pub struct Config {
     /// How long the radio takes to restart when its app tells it to. Meanwhile it answers no
     /// one.
     pub restart_time: Duration,
+    /// The frequency the radio says it is on, in kHz. The rest of its preset is fixed: 62.5 kHz,
+    /// SF 8, CR 8.
+    pub frequency_khz: u32,
 }
 
 impl Default for Config {
@@ -71,6 +74,7 @@ impl Default for Config {
             seed: 0,
             reply_latency: Duration::from_millis(20),
             restart_time: Duration::from_millis(300),
+            frequency_khz: 869_618,
         }
     }
 }
@@ -445,7 +449,11 @@ impl Shared {
             return (vec![frames::error(frames::ERR_ILLEGAL_ARG)], None);
         };
         let answer = match code {
-            frames::CMD_APP_START => frames::self_info(&self.public_key, &self.config.name),
+            frames::CMD_APP_START => frames::self_info(
+                &self.public_key,
+                &self.config.name,
+                self.config.frequency_khz,
+            ),
             frames::CMD_DEVICE_QUERY => frames::device_info(self.config.max_contacts),
             frames::CMD_GET_CONTACTS => return (self.contacts(body), None),
             frames::CMD_SEND_TXT_MSG => {
