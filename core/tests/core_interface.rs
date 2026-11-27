@@ -56,6 +56,7 @@ fn kind(event: &CoreEvent) -> &'static str {
         CoreEvent::DeliveryChanged { .. } => "deliveryChanged",
         CoreEvent::MessageRemoved { .. } => "messageRemoved",
         CoreEvent::ReachChanged { .. } => "reachChanged",
+        CoreEvent::DisappearingChanged { .. } => "disappearingChanged",
         CoreEvent::RelaysChanged { .. } => "relaysChanged",
         CoreEvent::AccountChanged { .. } => "accountChanged",
         CoreEvent::ContactChanged { .. } => "contactChanged",

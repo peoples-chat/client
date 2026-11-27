@@ -358,6 +358,16 @@ pub async fn cancel_message<R: Runtime>(
         .await
 }
 
+/// The user has seen the chat up to its newest message (#124).
+#[tauri::command]
+pub async fn mark_read<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    chat_id: String,
+) -> Result<(), CommandError> {
+    slot.get(&app).await?.mark_read(&chat_id).await
+}
+
 #[tauri::command]
 pub async fn set_force_radio<R: Runtime>(
     app: AppHandle<R>,
