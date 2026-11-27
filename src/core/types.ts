@@ -76,6 +76,15 @@ export interface Message {
    * it goes, `messageRemoved` takes it away and `messageAdded` brings it with the core's id.
    */
   cancellable?: boolean;
+  /** The sender changed the text since sending it; `text` is the latest (#122). */
+  edited?: boolean;
+  /** The sender deleted it for everyone. `text` is empty (#122). */
+  deleted?: boolean;
+  /**
+   * It never reached the chat: it lost a race between two versions of the chat's state, and the
+   * other side doesn't have it (#122).
+   */
+  withdrawn?: boolean;
 }
 
 /**
@@ -238,7 +247,15 @@ export type CoreEvent =
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
-  /** A message is gone: cancelled while it waited, or gone out under the core's id (#46). */
+  /**
+   * A message the state has changed (#122): the sender edited or deleted it, or it was withdrawn.
+   * The whole message replaces the one with its id.
+   */
+  | { type: "messageChanged"; chatId: string; message: Message }
+  /**
+   * A message is gone: cancelled while it waited, or gone out under the core's id (#46), or gone
+   * from this device.
+   */
   | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
   /** The account's relays changed, or their connections did. Carries all of them. */

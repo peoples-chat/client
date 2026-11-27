@@ -44,3 +44,11 @@ export function formatDay(ms: number, now = Date.now()): string {
   if (days < 7) return weekday.format(ms);
   return longDate.format(ms);
 }
+
+/** What a deleted message says in its place (#122). */
+export const DELETED_TEXT = "This message was deleted.";
+
+/** A message's text as the chat and the chat list show it: a deleted one says so (#122). */
+export function shownText(message: { text: string; deleted?: boolean }): string {
+  return message.deleted ? DELETED_TEXT : message.text;
+}

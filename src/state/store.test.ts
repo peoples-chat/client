@@ -160,6 +160,59 @@ describe("applyEvent", () => {
     expect(applyEvent(state, { type: "messageRemoved", chatId: "x", messageId: "m1" })).toBe(state);
   });
 
+  it("issue 122: an edited, deleted or withdrawn message replaces the one shown, once", () => {
+    const received = (id: string, extra: Partial<Message> = {}) =>
+      message(id, 1, { direction: "in", delivery: undefined, ...extra });
+    const state = ready([chat("a", [received("m1"), message("m2", 2)])]);
+
+    const edit: CoreEvent = {
+      type: "messageChanged",
+      chatId: "a",
+      message: received("m1", { text: "Changed", edited: true }),
+    };
+    const edited = applyEvent(state, edit);
+    expect(edited.chats[0].messages[0]).toMatchObject({ text: "Changed", edited: true });
+    expect(edited.chats[0].messages[1]).toBe(state.chats[0].messages[1]);
+    expect(applyEvent(edited, structuredClone(edit))).toBe(edited);
+
+    const deleted = applyEvent(edited, {
+      type: "messageChanged",
+      chatId: "a",
+      message: received("m1", { text: "", deleted: true }),
+    });
+    expect(deleted.chats[0].messages[0]).toMatchObject({ text: "", deleted: true });
+    expect(deleted.chats[0].messages[0].edited).toBeUndefined();
+
+    const withdrawn = applyEvent(deleted, {
+      type: "messageChanged",
+      chatId: "a",
+      message: message("m2", 2, { delivery: "sent", withdrawn: true }),
+    });
+    expect(withdrawn.chats[0].messages[1]).toMatchObject({ withdrawn: true, delivery: "sent" });
+
+    // Nothing for a message or a chat the state doesn't have.
+    expect(applyEvent(state, { type: "messageChanged", chatId: "a", message: received("m9") })).toBe(state);
+    expect(applyEvent(state, { type: "messageChanged", chatId: "x", message: received("m1") })).toBe(state);
+  });
+
+  it("issue 122: a message that came with an invitation changes too", () => {
+    const state = applyEvent(ready(), {
+      type: "invitationReceived",
+      invitation: {
+        id: "inv",
+        from: { publicKey: "key-c", name: "Contact c" },
+        receivedAt: 1,
+        messages: [message("m1", 1, { direction: "in", delivery: undefined })],
+      },
+    });
+    const next = applyEvent(state, {
+      type: "messageChanged",
+      chatId: "inv",
+      message: message("m1", 1, { direction: "in", delivery: undefined, text: "", deleted: true }),
+    });
+    expect(next.invitations[0].messages[0].deleted).toBe(true);
+  });
+
   it("takes the mesh of a contact's radio", () => {
     const state = ready([chat("b")]);
     const withRadio = { publicKey: "key-b", name: "Contact b", meshes: ["meshCore" as const] };

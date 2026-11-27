@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { radioBytes } from "../core/radio";
 import { RADIO_TEXT_LIMIT, type DeliveryState, type Message } from "../core/types";
-import { formatDay, formatTime, sameDay } from "./format";
+import { formatDay, formatTime, sameDay, shownText } from "./format";
 import { Icon } from "./Icon";
 import styles from "./MessageList.module.css";
 
@@ -55,7 +55,15 @@ export function MessageList({ messages, empty, onCancel, byRadio = false }: Mess
             <div className={styles.day}>{formatDay(message.sentAt, now)}</div>
           )}
           <MessageBubble message={message} />
-          {message.direction === "out" && message.delivery === "timedOut" && (
+          {message.withdrawn && !message.deleted && (
+            <p
+              className={`${styles.waiting} ${message.direction === "in" ? styles.noteIn : ""}`}
+              data-testid="message-withdrawn-note"
+            >
+              {WITHDRAWN_NOTE}
+            </p>
+          )}
+          {message.direction === "out" && message.delivery === "timedOut" && !message.withdrawn && (
             <p className={styles.waiting}>Not confirmed by radio. It goes by internet once a relay is back.</p>
           )}
           {message.cancellable && onCancel && (
@@ -74,9 +82,18 @@ function MessageBubble({ message }: { message: Message }) {
   const outgoing = message.direction === "out";
   // Radio messages say so, in the radio colour (#48). Internet is the usual way and says nothing.
   const radio = message.transport === "radio";
+  const state = message.deleted ? "deleted" : message.withdrawn ? "withdrawn" : message.edited ? "edited" : undefined;
   return (
-    <div className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}>
-      <div className={styles.text}>{message.text}</div>
+    <div
+      className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""} ${
+        message.deleted ? styles.deleted : ""
+      } ${message.withdrawn ? styles.withdrawn : ""}`}
+      data-testid={`message-${message.id}`}
+      data-state={state}
+    >
+      <div className={styles.text} data-testid="message-text">
+        {shownText(message)}
+      </div>
       <div className={styles.meta}>
         {radio && (
           <span className={styles.transport}>
@@ -84,8 +101,21 @@ function MessageBubble({ message }: { message: Message }) {
             Radio
           </span>
         )}
+        {message.edited && !message.deleted && (
+          <span className={styles.edited} data-testid="message-edited">
+            Edited
+          </span>
+        )}
         <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
-        {outgoing && message.delivery && <Delivery state={message.delivery} radio={radio} />}
+        {/* A withdrawn message never reached the chat, whatever the relay said (#122). */}
+        {outgoing && message.delivery && !message.withdrawn && !message.deleted && (
+          <Delivery state={message.delivery} radio={radio} />
+        )}
+        {message.withdrawn && !message.deleted && (
+          <span role="img" aria-label="Not delivered" className={styles.delivery} data-testid="message-not-delivered">
+            <Icon name="info" size={15} strokeWidth={2} />
+          </span>
+        )}
       </div>
     </div>
   );
@@ -102,6 +132,9 @@ function WaitingNote({ tooLongForRadio, onCancel }: { tooLongForRadio: boolean; 
     </div>
   );
 }
+
+/** Under a message that lost a race between two versions of the chat's state (#122). */
+const WITHDRAWN_NOTE = "Not delivered. This message didn't reach the chat.";
 
 const DELIVERY_LABELS: Record<DeliveryState, string> = {
   waiting: "Waiting to send",
