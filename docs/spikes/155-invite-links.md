@@ -21,7 +21,10 @@ The recommendation is in [Recommendation](#recommendation). The work is split in
   | `marmot-protocol/whitenoise-android` | `fc08eebe912765e3dee50561910e276011017e23` | 23 Nov 2026 |
   | `marmot-protocol/whitenoise-ios` | `d7037f1477c25c33924e2ec8bfa8597546096e68` | 23 Nov 2026 |
   | `marmot-protocol/whitenoise-linux` | `d559c9173906631e8c3c8ee56c92aff44ff769ac` | 23 Nov 2026 |
+  | `marmot-protocol/whitenoise-mac` | `58a8bf27e3d0fcc0d8589c251662ed57ee4504db` | 23 Nov 2026 |
   | `marmot-protocol/wn-tui` | `5191bc92f5da0532ebc469e908f6b33ae760b6c9` | 28 Jul 2026 |
+  | `marmot-protocol/marmot-ts` | `b795617992cfa37962ea6501b79d89ffdca372be` | 21 Nov 2026 |
+  | `marmot-protocol/marmots-web-chat` | `8d7d18f7e485899968ccd36c209bb34a499aa325` | 27 Oct 2026 |
   | `peoples-chat/www` | `8e1ea4c7f71dbb28bbca31ca5c6f78c1917492ec` | 24 Nov 2026 |
   | This repository | `95bf7efb14ca3c2df712f92d489ac95f924fc6dc` | |
 
@@ -44,7 +47,7 @@ The recommendation is in [Recommendation](#recommendation). The work is split in
 | A QR code, and a URL inside it, on `https://<sub>.peoples.chat/<identifier>` | `https://on.peoples.chat/<identifier>`; the QR code carries the key form of it | [1](#1-domain-and-url-shape), [5](#5-shortkeys) |
 | With the app: opens on the profile page | Universal links and App Links on `on.peoples.chat`, into a profile sheet with Start chat | [2](#2-opening-the-app) |
 | Without it: a profile page with directions | A page the service renders, with three ways on | [3](#3-the-web-profile-page) |
-| Works alongside White Noise and other Marmot apps | The page opens White Noise through `marmot://profile/<npub>`; handles are NIP-05 addresses that White Noise resolves and verifies; a second QR code its scanners read | [6](#6-white-noise-and-other-marmot-apps) |
+| Works alongside White Noise and other Marmot apps | The page opens White Noise for Android, iOS, macOS and Linux through `marmot://profile/<npub>`; handles are NIP-05 addresses that White Noise for Android, iOS and macOS resolves in New chat; a second QR code its phone scanners read | [6](#6-white-noise-and-other-marmot-apps) |
 | Shortkey | 8 characters, made by the service, resettable | [5](#5-shortkeys) |
 | Handle | `/@emil`, which is also `emil@peoples.chat` (NIP-05) | [4](#4-handles) |
 | Pubkey | `/npub1…`, which needs nothing stored | [1](#1-domain-and-url-shape) |
@@ -293,7 +296,7 @@ confirmation.
 1. **Open in peoples.chat:** the button from [question 2](#2-opening-the-app).
 2. **Get peoples.chat:** store links once there are any. Today the website has a sign-up form for the preview.
 3. **Using White Noise or another Marmot app?**
-   - A button to `marmot://profile/<npub>`, which White Noise for Android, iOS and Linux open
+   - A button to `marmot://profile/<npub>`, which White Noise for Android, iOS, macOS and Linux open
      ([question 6](#6-white-noise-and-other-marmot-apps)).
    - The key (`npub1…`) with Copy, and the handle as `emil@peoples.chat` when there is one: White Noise finds a person
      by either.
@@ -342,8 +345,9 @@ A handle `emil` is the Nostr address `emil@peoples.chat`
 
 What this buys with White Noise, from its code ([question 6](#6-white-noise-and-other-marmot-apps)):
 
-- Its Android and iOS apps resolve a typed `emil@peoples.chat` in New chat.
-- Both show the address on the profile, with a verified mark once the file answers with the same key.
+- Its Android, iOS and macOS apps resolve a typed `emil@peoples.chat` in New chat.
+- The two phone apps show the address on the profile, with a verified mark once the file answers with the same key.
+  The macOS app checks only the user's own address and leaves a contact's address out.
 - So a handle is the one identifier a peoples.chat user can say aloud to a White Noise user.
 
 **The address is on the main domain.** `emil@peoples.chat` is looked up on `peoples.chat`, which the CDN serves. The
@@ -437,16 +441,16 @@ Files marked ✔ were read for this document. The rest come from the first pass 
 
 ### What White Noise takes for adding a contact
 
-| Input | Android | iOS | Linux |
-| --- | --- | --- | --- |
-| `npub1…` | Yes | Yes | Yes |
-| `nprofile1…` | Scanner only; pasting is refused | Yes | Yes |
-| `nostr:` before either | Yes, same limits | Yes | Yes |
-| `marmot://profile/<npub>` | Yes | Yes, also with an nprofile or hex key | Yes |
-| `whitenoise://profile/<npub>` | Yes | Yes | No |
-| `https://whitenoise.chat/profile/<npub>`, also on `marmot.app` | Yes | No | No |
-| An https link on any other host | **No** | **No** | Only `njump.me/` |
-| `name@domain` (NIP-05) | Yes | Yes | In the group member fields only |
+| Input | Android | iOS | macOS | Linux |
+| --- | --- | --- | --- | --- |
+| `npub1…` | Yes | Yes | Yes | Yes |
+| `nprofile1…` | Scanner only; pasting is refused | Yes | Yes | Yes |
+| `nostr:` before either | Yes, same limits | Yes | Yes | Yes |
+| `marmot://profile/<npub>` | Yes | Yes, also with an nprofile or hex key | Yes, also with an nprofile | Yes |
+| `whitenoise://profile/<npub>` | Yes | Yes | No | No |
+| `https://whitenoise.chat/profile/<npub>`, also on `marmot.app` | Yes | No | No | No |
+| An https link on any other host | **No** | **No** | **No** | Only `njump.me/` |
+| `name@domain` (NIP-05) | Yes | Yes | Yes | In the group member fields only |
 
 - **Android** ✔ `app/src/main/java/dev/ipf/whitenoise/android/core/ProfileLink.kt`:
   - `parse` (38-50) takes a bare npub, `nostr:` plus an npub, and links.
@@ -470,6 +474,21 @@ Files marked ✔ were read for this document. The rest come from the first pass 
   "whitenoise-staging"` (✔ `Shared/DeepLink.swift:36-39`). There is no branch for web links, and nothing searches
   inside a longer text. An all-capitals key is accepted (283).
 - **iOS, NIP-05** ✔ `whitenoise-ios/Recipients/Nip05Resolver.swift:46-50` builds the same lookup address.
+- **macOS** leaves the parsing to MDK. New chat sends what is typed or pasted to MDK's `normalizeMemberRef`
+  (✔ `whitenoise-mac/Core/WorkspaceState+NewChat.swift:72-77`), after one step of its own: text shaped like
+  `name@domain` that holds no `nostr:`, `npub1` or `nprofile1` is first resolved through NIP-05 (✔ 393-403).
+  - MDK strips `nostr:` and then `marmot://profile/` from the front, and nothing else
+    (✔ `mdk` `crates/marmot-uniffi/src/conversions/group.rs:742-747`). Its reference lists what it takes: "hex,
+    `npub`, `nostr:npub...`, `nprofile`, `nostr:nprofile...`, and `marmot://profile/...` references"
+    (✔ `mdk` `crates/marmot-uniffi/API-REFERENCE.md:1932-1940`).
+  - So a web link is refused, also one that ends in an npub: "Enter a valid NIP-05, npub, profile link, or hex
+    public key." (✔ `WorkspaceState+NewChat.swift:64`). This follows from the code; it was not run.
+  - The field's Paste button puts the clipboard's text into the same field
+    (✔ `whitenoise-mac/Views/ComposeFlowViews.swift:176-179`). Nothing searches inside a longer text.
+- **macOS, NIP-05** ✔ `whitenoise-mac/Core/NIP05Resolver.swift:171-188` builds
+  `https://<domain>/.well-known/nostr.json?name=<name>`. The local part may use `a-z`, `0-9`, `-`, `_` and `.`, up to
+  64 bytes (✔ 140-141, 196-205); the handle rules in [question 4](#4-handles) fit inside that. It follows up to five
+  redirects (✔ 94-101), which NIP-05 forbids a server to send.
 - **Linux** ✔ `app/deeplink.odin:25-38` takes `marmot://profile/<ref>` only. ✔ `app/nostr_ref.odin:36-44` allows the
   prefixes `@`, `nostr:`, `https://primal.net/e/` and `https://njump.me/` before a key. NIP-05 lookups are in
   ✔ `app/nip05.odin:57-87`, which asks `https://<domain>/.well-known/nostr.json?name=<name>` and refuses redirects.
@@ -483,10 +502,11 @@ Files marked ✔ were read for this document. The rest come from the first pass 
 | --- | --- | --- |
 | Android | `marmot://profile/<npub>?from=qr` (✔ `ProfileLink.kt:16-20`) | What `ProfileLink.parse` takes, or text that starts with `npub1` or `nprofile1`, with or without `nostr:` (✔ `…/ui/qr/QrScanResult.kt:77-107`) |
 | iOS | `marmot://profile/<npub>` (✔ `whitenoise-ios/Settings/ShareAndConnectView.swift:35-37`, ✔ `Shared/DeepLink.swift:53-72`) | The same forms as pasting (✔ `Shared/DeepLink.swift:112-123`) |
+| macOS | `marmot://profile/<npub>?from=qr`, at error level M (✔ `whitenoise-mac/Core/MarmotProfileLink.swift:19-21`, ✔ `whitenoise-mac/Views/Settings/PublicIdentityViews.swift:160`, `314`) | No scanner: the app asks for the microphone and not for the camera (✔ `Config/Info.plist:72-73`, ✔ `whitenoise-mac/whitenoise-mac.entitlements:5-16`) |
 | Linux | `marmot://profile/<npub>?from=qr` (✔ `app/pane_widgets.odin:55-65`) | No scanner in the files read |
 | wn-tui | None | None |
 
-A web link in a QR code is refused by both scanners. Android's test says so:
+A web link in a QR code is refused by both phone scanners. Android's test says so:
 `assertEquals(QrScanOutcome.Invalid, viewProfile("https://example.com"))`
 (✔ `app/src/test/java/dev/ipf/whitenoise/android/ui/qr/QrScanResultTest.kt:93`). iOS answers "That QR code isn't a
 White Noise profile." (✔ `whitenoise-ios/Chats/NewChatFlowView.swift:140-145`).
@@ -497,9 +517,23 @@ White Noise profile." (✔ `whitenoise-ios/Chats/NewChatFlowView.swift:140-145`)
   host, no `autoVerify`, no `nostr:`.
 - **iOS** ✔ `Config/Production.xcconfig:6-7`: `marmot` and `whitenoise`. No universal links: the entitlements have no
   associated domains (✔ `whitenoise-ios/whitenoise-ios.entitlements`).
+- **macOS** ✔ `Config/Info.plist:27-39` registers one scheme, `$(WN_URL_SCHEME)`, which is `marmot` in the
+  production build (✔ `Config/AppBuild.xcconfig:9`) and `marmot-staging` or `marmot-dev` in the others
+  (✔ `whitenoise-mac/Core/AppFlavor.swift:48-54`).
+  - It differs from the phones in two ways. `whitenoise://` is not taken: the scheme must be `marmot` or the
+    build's own, with the host `profile` (✔ `whitenoise-mac/Core/MarmotProfileLink.swift:31-33`). And there is no
+    chat route: "only the strict `marmot://profile/<npub|nprofile>` form is accepted, everything else is dropped with
+    a status hint" (✔ `whitenoise-mac/Core/WorkspaceState+DeepLinks.swift:13-21`).
+  - The key in the link may be an npub or an nprofile, and `?from=qr` is ignored
+    (✔ `MarmotProfileLink.swift:23-42`, ✔ `whitenoise-mac/Core/MarkdownLinkPolicy.swift:84-91`).
+  - An opened link lands in New chat with the person looked up (✔ `whitenoise-mac/ContentView.swift:142-143`,
+    ✔ `whitenoise-mac/Core/WorkspaceState+Links.swift:53-71`). A link that arrives before sign-in waits
+    (✔ `WorkspaceState+DeepLinks.swift:23-32`).
+  - No universal links: the entitlements have no associated domains
+    (✔ `whitenoise-mac/whitenoise-mac.entitlements`).
 - **Linux:** `x-scheme-handler/marmot` (✔ `assets/whitenoise-linux.desktop:6,10`).
-- **Routes:** `profile/<ref>` and `chat/<group id>` (✔ `Shared/DeepLink.swift:14-15`, `86-97`; Android
-  ✔ `core/ChatLink.kt:16-53`).
+- **Routes on the phones:** `profile/<ref>` and `chat/<group id>` (✔ `Shared/DeepLink.swift:14-15`, `86-97`; Android
+  ✔ `core/ChatLink.kt:16-53`). macOS has `profile/<ref>` only.
   - Android makes chat links too: "The canonical link for a chat, in the form [parse] reads back; shared from chat
     details" (✔ `core/ChatLink.kt:30-31`).
   - A chat link holds the group's id and nothing else: no key, no token, nobody to ask. Since nobody can add
@@ -513,11 +547,23 @@ White Noise profile." (✔ `whitenoise-ios/Chats/NewChatFlowView.swift:140-145`)
 - **Share** gives `marmot://profile/<npub>` on both phones (Android ✔ `ui/settings/ShareConnectScreen.kt:184-191`,
   which shares the link, or the bare npub when there is none; iOS ✔ `ShareAndConnectView.swift:75-80`). That Copy
   gives the bare npub is from the first pass.
+- **macOS has no Share button in the files read.** The user's own sheet shows the QR code and a "Copy npub" card
+  (✔ `whitenoise-mac/Views/Settings/PublicIdentityViews.swift:147-160`), and a contact's profile has the same card
+  (✔ `whitenoise-mac/Views/ContactDetails/ContactIdentitySection.swift:47-52`). So what a macOS user passes on is
+  the bare npub, or a picture of the code.
 - **NIP-05 on a profile.** Android and iOS check the address and mark it verified when it resolves to the same key
   (Android ✔ `ui/chats/newchat/RecipientResolution.kt:310-318`; iOS
   ✔ `whitenoise-ios/Profile/ProfileAddressVerificationModel.swift:22-56`). iOS takes a local part of `a-z`, `0-9`,
   `.`, `_`, `-` and `+`, up to 64 characters (✔ `Shared/ContentSanitizer.swift:337-347`); the handle rules above fit
   inside that. That Linux and wn-tui show the address as well is from the first pass.
+- **NIP-05 on a profile, macOS.** The app verifies the user's own address: Profile has a "Verified Nostr Address"
+  field with a seal (✔ `whitenoise-mac/Views/Settings/ProfileSettingsView.swift:98-114`), drawn only when "the
+  domain's `/.well-known/nostr.json` maps that name to *this* account's public key"
+  (✔ `whitenoise-mac/Models/NostrAddressVerification.swift:17-21`; the check is
+  ✔ `whitenoise-mac/Core/WorkspaceState+Settings.swift:471-515`). A contact's profile shows no address at all, on
+  purpose: "checking it means fetching the peer's own domain, which tells that domain who is looking"
+  (✔ `ContactIdentitySection.swift:16-17`). So a macOS user can find `emil@peoples.chat` by typing it, and sees no
+  verified mark on Emil's profile afterwards.
 - **Finding the account** is a separate matter from links: White Noise looks a new contact up on its own two relays
   (✔ `core/MarmotClient.kt:59-63`; #76). The app already copies profiles there and looks people up there (#113, #120).
   Whether relay lists and key packages are copied too is #76, still open. A link that reaches White Noise is only
@@ -527,11 +573,11 @@ White Noise profile." (✔ `whitenoise-ios/Chats/NewChatFlowView.swift:140-145`)
 
 | They… | Today's link (`peoples.chat/i#nprofile1…`) | Recommended |
 | --- | --- | --- |
-| Tap it in a chat or mail | A 404 page | The profile page, with "Open in White Noise" (`marmot://profile/<npub>`), the key to copy, and the handle |
+| Tap it in a chat or mail | A 404 page | The profile page, with "Open in White Noise" (`marmot://profile/<npub>`), the key to copy, and the handle. The button works on Android, iOS, macOS and Linux |
 | Scan our QR code with the phone's camera | Nothing: no app takes `nostr:` | The same page |
-| Scan it inside White Noise | Works: it reads `nostr:nprofile1…` | "Not a White Noise profile" for the main code. The second code works |
-| Paste the link into White Noise | Refused on both phones | Android: the key form (`/npub1…`) works, others become a name search. iOS: a name search that finds nothing |
-| Type `emil@peoples.chat` | Nothing to type | Found on both phones, and verified |
+| Scan it inside White Noise | Works on both phones: it reads `nostr:nprofile1…`. macOS has no scanner | "Not a White Noise profile" for the main code. The second code works |
+| Paste the link into White Noise | Refused on both phones and on macOS | Android: the key form (`/npub1…`) works, others become a name search. iOS: a name search that finds nothing. macOS: refused; the key copied from the page works |
+| Type `emil@peoples.chat` | Nothing to type | Found on both phones and on macOS. Verified on the phones; macOS shows no mark for a contact |
 
 The one thing that gets worse is scanning our main QR code inside White Noise. Hence the second code, and a question
 for White Noise: Android already accepts profile links on a list of hosts. A rule that reads `https://<host>/<npub>`
@@ -540,9 +586,26 @@ on more hosts, or on any, would make every Marmot app's links work in every othe
 
 ### Other Marmot apps
 
-MDK itself reads hex keys, `npub`, `nprofile` and `marmot://profile/` links (`crates/marmot-uniffi/API-REFERENCE.md`,
-`normalize_member_ref`, from the first pass). Any app built on it can take the key from our page. `marmot-ts` was not
-examined.
+- **MDK** reads the key forms itself. `normalize_member_ref` "Accepts hex, `npub`, `nostr:npub...`, `nprofile`,
+  `nostr:nprofile...`, and `marmot://profile/...` references. nprofile relay hints are discarded"
+  (✔ `crates/marmot-uniffi/API-REFERENCE.md:1932-1940`). The C interface says the same of
+  `marmot_normalize_member_ref`: it takes "`nprofile` and `nostr:nprofile` references (plus
+  hex/`npub`/`marmot://profile/` forms)" and drops relay hints (✔ `crates/marmot-c/README.md:445-446`). Any app built
+  on MDK can take the key from our page. White Noise for macOS relies on this function alone.
+- **`marmot-ts`** is a library, and its file list has no module for links or QR codes. Its example terminal app was
+  read briefly:
+  - It takes a hex key, an npub or a NIP-05 address: "invalid pubkey, npub, or NIP-05 identifier"
+    (✔ `examples/opentui/src/marmot/controller.ts:847-856`). The key forms go through a helper it imports,
+    `normalizeToPubkey`, which was not read.
+  - Its QR code holds the bare npub (✔ `examples/opentui/src/components/QrModal.tsx:45-46`).
+- **`marmots-web-chat`,** the web app built on that library, was read briefly too:
+  - Inviting takes "npub1… or name@domain" (✔ `src/components/marmot/invite-dialog.tsx:109-119`), through the same
+    helper and then NIP-05 (✔ `src/lib/marmot/invitations.ts:56-60`).
+  - Its QR code holds the bare npub (✔ `src/components/marmot/my-qr-dialog.tsx:37`). The file list of `src/` has no
+    scanner.
+- **For both,** whether a `marmot://` link is taken was not checked. The page's key with Copy and the handle as
+  `emil@peoples.chat` are the way in.
+- **Not examined:** any Marmot app outside the reference checkouts.
 
 ## 7. Groups
 
@@ -570,8 +633,10 @@ examined.
 - **White Noise has no link that lets someone join.** Members are added by someone in the group who supplies their
   key: Android calls `inviteMembersDetailed` with the person's reference (✔ `state/AppStateProfileGroups.kt:179-200`),
   and iOS says "Paste an npub or scan a QR code to add someone you haven't chatted with yet."
-  (✔ `whitenoise-ios/Group/AddMembersSheet.swift:157`). Its `marmot://chat/<group id>` links carry only the group's
-  id ([question 6](#links-that-open-white-noise)).
+  (✔ `whitenoise-ios/Group/AddMembersSheet.swift:157`). macOS has the same kind of picker, for "a pasted NIP-05 /
+  npub / profile link", which "then invites everyone staged in one commit"
+  (✔ `whitenoise-mac/Views/GroupAddMembersSheet.swift:5-7`). The phones' `marmot://chat/<group id>` links carry only
+  the group's id ([question 6](#links-that-open-white-noise)).
 
 ### What a link can't carry
 
