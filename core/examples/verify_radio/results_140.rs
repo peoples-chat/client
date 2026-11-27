@@ -9,9 +9,7 @@ use std::path::Path;
 const PATHS: [&str; 3] = ["text", "raw", "channel"];
 
 fn repository(file: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join(file);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(file);
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{file}: {error}"))
 }
 
