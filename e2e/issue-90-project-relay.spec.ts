@@ -6,7 +6,10 @@ import { $, $$, browser, expect } from "@wdio/globals";
 
 mkdirSync("evidence/90", { recursive: true });
 
-const PROJECT_RELAY = '[data-testid="relay-relay.peoples.chat"]';
+const testId = (id: string) => `[data-testid="${id}"]`;
+const PROJECT_RELAY = testId("relay-relay.peoples.chat");
+const PROJECT_RELAY_LABEL = testId("relay-relay.peoples.chat-label");
+const PROJECT_RELAY_DESCRIPTION = testId("relay-relay.peoples.chat-description");
 const OTHER_DEFAULTS = ["relay.damus.io", "nos.lol", "relay.primal.net"];
 
 /** One step back, as the browser's back button: the navigator follows history (Navigator.tsx). */
@@ -28,10 +31,10 @@ describe("issue 90: the project's relay", () => {
     await expect($('[data-testid="relays-screen"]')).toBeDisplayed();
 
     await $(PROJECT_RELAY).waitForDisplayed({ timeout: 30_000 });
-    await expect($(`${PROJECT_RELAY}-label`)).toHaveText("relay.peoples.chat");
+    await expect($(PROJECT_RELAY_LABEL)).toHaveText("relay.peoples.chat");
     // Connected once MDK has opened the connection.
     await browser.waitUntil(
-      async () => (await $(`${PROJECT_RELAY}-description`).getText()) === "Run by peoples.chat. Connected",
+      async () => (await $(PROJECT_RELAY_DESCRIPTION).getText()) === "Run by peoples.chat. Connected",
       { timeout: 30_000, timeoutMsg: "relay.peoples.chat did not show as run by peoples.chat and connected" },
     );
 
