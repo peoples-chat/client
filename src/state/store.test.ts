@@ -160,6 +160,25 @@ describe("applyEvent", () => {
     expect(applyEvent(state, { type: "messageRemoved", chatId: "x", messageId: "m1" })).toBe(state);
   });
 
+  it("issue 124: follows the chat's timer, and takes away a message that disappeared, also from a request", () => {
+    const state = ready([chat("a", [message("m1", 1, { expiresAt: 5_000 })])]);
+    const on = applyEvent(state, { type: "disappearingChanged", chatId: "a", disappearAfter: 3600 });
+    expect(on.chats[0].disappearAfter).toBe(3600);
+    expect(applyEvent(on, { type: "disappearingChanged", chatId: "a", disappearAfter: 3600 })).toBe(on);
+    const off = applyEvent(on, { type: "disappearingChanged", chatId: "a" });
+    expect(off.chats[0].disappearAfter).toBeUndefined();
+
+    const withRequest = {
+      ...on,
+      invitations: [
+        { id: "inv", from: { publicKey: "key-x", name: "X" }, receivedAt: 1, messages: [message("r1", 1, { expiresAt: 5_000 })] },
+      ],
+    };
+    const gone = applyEvent(withRequest, { type: "messageRemoved", chatId: "inv", messageId: "r1" });
+    expect(gone.invitations[0].messages).toEqual([]);
+    expect(applyEvent(gone, { type: "messageRemoved", chatId: "inv", messageId: "r1" })).toBe(gone);
+  });
+
   it("takes the mesh of a contact's radio", () => {
     const state = ready([chat("b")]);
     const withRadio = { publicKey: "key-b", name: "Contact b", meshes: ["meshCore" as const] };
