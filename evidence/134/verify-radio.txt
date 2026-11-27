@@ -1,0 +1,31 @@
+$ pnpm verify:radio          # code of commit 3c3c7e2; home folder shortened to ~
+$ cargo run --quiet -p peoples-chat-core --example verify_radio --
+Radio lab: ~/factory/radios.toml
+Frame log: ~/factory/worktrees/issue-134/.factory/radio/frames-1795773695004-98931.jsonl
+Lab preset private-test: 869.85 MHz, 62.5 kHz, SF 7, CR 5, at most 2 dBm
+R1: /dev/cu.usbmodem1101 (USB 69781CF0DC6F5820), firmware v1.18.0-81dbae5, key 32981804a143…, 869.85 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm
+R2: /dev/cu.usbmodem101 (USB DC0A402E428381B4), firmware v1.18.0-81dbae5, key 3d0e1c634782…, 869.85 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm
+R3: not on USB (MeshCore-E49B86FC784A), not checked
+ok R1: responds, 1 contacts
+ok R2: responds, 1 contacts
+Over the air: R1 and R2
+ok R1: paired on /dev/cu.usbmodem1101, the app warns that it isn't on EU/UK (Narrow)
+ok R2: paired on /dev/cu.usbmodem101, the app warns that it isn't on EU/UK (Narrow)
+ok R1: stored R2's radio address record
+ok R2: stored R1's radio address record
+ok R1: contact not reachable, their radio not heard yet
+ok R2: contact not reachable, their radio not heard yet
+WARNING R1: reported none of R2's 3 adverts. R2's clock: 1715824066; the newest advert time R1 holds for it: 1795767172; this computer: 1795773754 (Unix seconds). A radio ignores an advert that isn't newer than the last.
+WARNING R2: reported none of R1's 3 adverts. R1's clock: 1715824653; the newest advert time R2 holds for it: 1795767172; this computer: 1795773799 (Unix seconds). A radio ignores an advert that isn't newer than the last.
+ok "Lab hello" from R1 to R2: arrived after 0.4 s, acknowledged after 0.7 s, 0 retries (the radio estimated 2.6 s)
+ok R1: R2's radio was heard, contact reachable by radio
+ok R2: R1's radio was heard, contact reachable by radio
+ok "Lab message 1" from R1 to R2: arrived after 0.4 s, acknowledged after 0.7 s, 0 retries (the radio estimated 2.6 s)
+ok "Lab reply" from R2 to R1: arrived after 0.8 s, acknowledged after 1.1 s, 0 retries (the radio estimated 2.6 s)
+ok R2: serial port closed, the app shows its radio as gone
+ok R2: reconnected by itself 1.5 s after the port came back
+ok "Lab message 2" from R1 to R2: arrived after 0.3 s, acknowledged after 0.7 s, 0 retries (the radio estimated 2.6 s)
+WARNING: an advert wasn't reported (see above). Reachability was shown with a message and its acknowledgement only.
+Fixture: ~/factory/worktrees/issue-134/.factory/radio/frames-1795773695004-98931-R1.frames
+Fixture: ~/factory/worktrees/issue-134/.factory/radio/frames-1795773695004-98931-R2.frames
+verify:radio passed
