@@ -74,7 +74,7 @@ export interface MockCoreOptions {
    * Milliseconds until a relay "acknowledges" a message, and until the contact replies after that;
    * and until a radio message that no radio confirms times out.
    */
-  delays?: { sent: number; reply: number; timedOut?: number };
+  delays?: { sent: number; reply: number; timedOut?: number; invitation?: number };
   /** Whether the contacts' radios confirm radio messages. Without, they time out (#41). Default true. */
   radioConfirms?: boolean;
 }
@@ -100,6 +100,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
   const delays = options.delays ?? { sent: 600, reply: 1500 };
   // The core waits for the radio's estimate and a margin, then once more after a retry.
   const timedOutDelay = delays.timedOut ?? 12_000;
+  // How long a new demo contact's invitation takes to arrive (#126).
+  const invitationDelay = delays.invitation ?? 15_000;
   const radioConfirms = options.radioConfirms ?? true;
   const listeners = new Set<CoreListener>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -288,6 +290,20 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       state.chats.push(chat);
       state.links[link] = chat.id;
       emit({ type: "chatAdded", chat });
+      // The demo's invitations don't arrive at first, and do a while later, to show how a chat
+      // says so (#126).
+      later(delays.sent, () => {
+        const started = state.chats.find((c) => c.id === chat.id);
+        if (!started) return;
+        started.undelivered = { since: now() };
+        emit({ type: "invitationDeliveryChanged", chatId: chat.id, undelivered: started.undelivered });
+      });
+      later(invitationDelay, () => {
+        const started = state.chats.find((c) => c.id === chat.id);
+        if (!started?.undelivered) return;
+        delete started.undelivered;
+        emit({ type: "invitationDeliveryChanged", chatId: chat.id });
+      });
       return structuredClone(chat);
     },
 
