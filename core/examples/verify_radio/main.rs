@@ -7,8 +7,9 @@
 //!
 //! It holds the lab lock for the whole run, finds radios by their USB serial numbers, refuses
 //! to go on when a radio's firmware or settings differ from `radios.toml`, and saves every frame.
-//! It never changes a radio's firmware or settings. The over-the-air tests (#134) are in
-//! `messages.rs`. Details: `docs/radio-lab.md`.
+//! It never changes a radio's firmware, frequency, preset or power; it does set each radio's
+//! clock, except in a dry run. The over-the-air tests (#134) are in `messages.rs`. Details:
+//! `docs/radio-lab.md`.
 
 mod config;
 mod fixtures;
@@ -146,17 +147,7 @@ fn verify(paths: &Paths, dry_run: bool, out: &mut (dyn Write + Send)) -> End {
             log: log.clone(),
             timing: Timing::default(),
         };
-        let mut result = lab.run(dry_run, out).await;
-        if result.is_ok() && !dry_run {
-            let bench = Bench {
-                config: config.clone(),
-                usb: lab.usb.clone(),
-                log: log.clone(),
-                timing: lab.timing,
-                waits: Waits::default(),
-            };
-            result = messages::run(&bench, out).await;
-        }
+        let result = checks_and_tests(&lab, Waits::default(), dry_run, out).await;
         // Whether the tests passed or not: a failed run's frames are worth having too.
         for fixture in fixtures::save(log.path())? {
             let _ = writeln!(out, "Fixture: {}", fixture.display());
@@ -170,6 +161,27 @@ fn verify(paths: &Paths, dry_run: bool, out: &mut (dyn Write + Send)) -> End {
         }
         Ok(())
     })
+}
+
+/// Checks every radio and sets its clock, then, unless it is a dry run, tests over the air.
+async fn checks_and_tests(
+    lab: &Lab<'_>,
+    waits: Waits,
+    dry_run: bool,
+    out: &mut (dyn Write + Send),
+) -> Result<(), String> {
+    lab.run(dry_run, out).await?;
+    if dry_run {
+        return Ok(());
+    }
+    let bench = Bench {
+        config: lab.config.clone(),
+        usb: lab.usb.clone(),
+        log: lab.log.clone(),
+        timing: lab.timing,
+        waits,
+    };
+    messages::run(&bench, out).await
 }
 
 fn main() {

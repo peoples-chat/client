@@ -3,7 +3,8 @@
 //! Over serial, a frame is a start byte (`<` to the radio, `>` from it), its length in two
 //! little-endian bytes, and the payload. meshcore-rs speaks the protocol; this link frames what
 //! it writes and unframes what the radio sends, writes both to the frame log, and refuses any
-//! command that isn't on the list of ones that can't change firmware or radio settings.
+//! command that isn't on the list of ones that can't change firmware or radio settings. The
+//! clock isn't one of those settings: every run sets it, as the MeshCore app does.
 
 use std::fs::File;
 use std::io::Write;
@@ -33,6 +34,7 @@ const ALLOWED_COMMANDS: &[u8] = &[
     2,  // SEND_TXT_MSG
     4,  // GET_CONTACTS
     5,  // GET_DEVICE_TIME
+    6,  // SET_DEVICE_TIME: the clock is not a protected setting
     7,  // SEND_SELF_ADVERT
     9,  // ADD_UPDATE_CONTACT
     10, // SYNC_NEXT_MESSAGE

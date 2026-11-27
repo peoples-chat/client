@@ -20,6 +20,11 @@ pnpm verify:radio --dry-run   # lists the radios it found and their firmware
    frequency, bandwidth, spreading factor and coding rate against `[lab]`, and its transmit power against
    `max_tx_power_dbm`. All radios are checked, every difference is reported, and then the run fails.
 5. **Checks that each radio still responds**, by asking for its contacts. A dry run stops after step 4.
+6. **Sets each radio's clock** to the computer's time (`set_time`, command 6), and prints what it read before and
+   after. This happens once every radio has passed the checks, and before anything goes on the air. A radio ignores an
+   advert that isn't stamped later than the last one it took from that contact, so one whose clock is behind goes
+   unheard. The clock isn't a protected setting; the MeshCore app sets it on every connect. A radio doesn't move its
+   clock back: one that is ahead keeps its time, and the run says so and goes on.
 
 A run that isn't dry then goes on to the [over-the-air tests](#the-over-the-air-tests). Bluetooth comes with #135: a
 radio without a `usb_serial` is listed as not checked.
@@ -44,12 +49,13 @@ over USB as the app does.
 The times to arrive and to be acknowledged are printed, with the radio's own estimate.
 
 **What goes on the air:** one zero-hop advert from each radio (sent again up to twice if not heard), three short
-messages (four when an advert isn't reported), any retry, and the radios' own acknowledgements.
+messages, any retry, and the radios' own acknowledgements.
 
-**When an advert isn't reported.** A radio ignores an advert that isn't stamped later than the last one it took from
-that contact, so a radio whose clock is behind goes unheard. Neither the app nor the harness sets a radio's clock. The
-run then prints a `WARNING` with both times, and each app hears the other by a message and its acknowledgement instead,
-sent with the app's force-radio switch. The run still passes: read the warnings.
+**When an advert isn't reported** after three tries, the run fails, and says what the sender's clock reads, the advert
+time the other radio holds for it, and the computer's time. No message is sent instead. If the held time is in the
+future, setting the clocks can't help: that contact's stored time has to go first.
+
+The app itself doesn't set a radio's clock; only the harness does.
 
 **Closing the port isn't a power cycle.** The radio keeps running. The harness closes the port, tells the app the link
 ended, and hides the port until it "plugs it in" again.
@@ -107,7 +113,7 @@ Cycling a hub port restarts only a radio that has no battery of its own.
 
 It never changes a radio's firmware, frequency, preset or power. Every frame goes through the harness's own serial
 link (`link.rs`), which lets only these companion commands through: app start (1), send text (2), contacts (4), time
-(5), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and device query (22).
+(5), set time (6), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and device query (22).
 Anything else is refused and logged as `blocked`.
 
 ## The frame log

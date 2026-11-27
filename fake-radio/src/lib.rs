@@ -121,7 +121,10 @@ struct State {
     replay: Option<Replay>,
     /// How many of the next messages are lost on the air.
     lose_texts: usize,
-    ignore_adverts: bool,
+    /// How far the radio's clock is from the computer's, in seconds.
+    clock_offset: i64,
+    /// The time on the last advert this radio sent.
+    last_advert_sent: u32,
 }
 
 struct Waiting {
@@ -180,6 +183,8 @@ enum Packet {
     },
     Advert {
         from: [u8; 32],
+        /// The sender's clock when it sent it.
+        at: u32,
     },
 }
 
@@ -220,7 +225,8 @@ impl FakeRadio {
             rng: StdRng::seed_from_u64(config.seed),
             replay,
             lose_texts: 0,
-            ignore_adverts: false,
+            clock_offset: 0,
+            last_advert_sent: 0,
         };
         let shared = Arc::new(Shared {
             config,
@@ -255,10 +261,15 @@ impl FakeRadio {
         self.shared.state().lose_texts = count;
     }
 
-    /// Reports no advert from now on, as firmware does with adverts stamped no later than the
-    /// last one it took from that contact.
-    pub fn ignore_adverts(&self) {
-        self.shared.state().ignore_adverts = true;
+    /// Sets the radio's clock, to any time: for tests of a radio whose clock is off. It runs
+    /// on from there.
+    pub fn set_clock(&self, seconds: u32) {
+        self.shared.state().set_clock(seconds);
+    }
+
+    /// The radio's clock, in seconds since 1970. It starts at the computer's time.
+    pub fn clock(&self) -> u32 {
+        self.shared.state().clock()
     }
 
     /// The app's commands that didn't follow the fixture being replayed.
@@ -295,7 +306,8 @@ pub fn link(a: &FakeRadio, b: &FakeRadio) -> Result<(), TableFull> {
             public_key: other.public_key(),
             name: other.shared.config.name.clone(),
             kind: 1,
-            last_advert: now(),
+            // Before any advert the other sends from now on.
+            last_advert: now().saturating_sub(1),
         });
         result = result.and(added);
     }
@@ -309,6 +321,16 @@ pub async fn pair(a: Config, b: Config) -> io::Result<(FakeRadio, FakeRadio)> {
     let b = FakeRadio::start(b).await?;
     link(&a, &b).map_err(io::Error::other)?;
     Ok((a, b))
+}
+
+impl State {
+    fn clock(&self) -> u32 {
+        u32::try_from(i64::from(now()) + self.clock_offset).unwrap_or(0)
+    }
+
+    fn set_clock(&mut self, seconds: u32) {
+        self.clock_offset = i64::from(seconds) - i64::from(now());
+    }
 }
 
 fn now() -> u32 {
@@ -410,10 +432,10 @@ impl Shared {
                 let (answer, packet) = self.send_text(body);
                 return (vec![answer], packet);
             }
+            frames::CMD_GET_DEVICE_TIME => frames::current_time(self.state().clock()),
+            frames::CMD_SET_DEVICE_TIME => self.set_time(body),
             frames::CMD_SEND_SELF_ADVERT => {
-                let advert = Packet::Advert {
-                    from: self.public_key,
-                };
+                let advert = self.advert();
                 return (vec![frames::ok()], Some(advert));
             }
             frames::CMD_SYNC_NEXT_MESSAGE => self
@@ -426,6 +448,31 @@ impl Shared {
             _ => frames::error(frames::ERR_UNSUPPORTED),
         };
         (vec![answer], None)
+    }
+
+    /// SET_DEVICE_TIME. As the firmware, it refuses to move the clock back.
+    fn set_time(&self, body: &[u8]) -> Vec<u8> {
+        let Some(seconds) = body.first_chunk::<4>() else {
+            return frames::error(frames::ERR_ILLEGAL_ARG);
+        };
+        let seconds = u32::from_le_bytes(*seconds);
+        let mut state = self.state();
+        if seconds < state.clock() {
+            return frames::error(frames::ERR_ILLEGAL_ARG);
+        }
+        state.set_clock(seconds);
+        frames::ok()
+    }
+
+    /// An advert stamped with the radio's clock, and always later than its last one.
+    fn advert(&self) -> Packet {
+        let mut state = self.state();
+        let at = state.clock().max(state.last_advert_sent.saturating_add(1));
+        state.last_advert_sent = at;
+        Packet::Advert {
+            from: self.public_key,
+            at,
+        }
     }
 
     /// GET_CONTACTS, with an optional time: only contacts changed since then.
@@ -537,12 +584,20 @@ impl Shared {
                 self.to_app(vec![frames::message_waiting()]);
                 self.transmit(Packet::Ack { to: from, ack });
             }
-            Packet::Advert { from } => {
-                // Only contacts: the fake adds none by itself.
+            Packet::Advert { from, at } => {
+                // Only contacts: the fake adds none by itself. And only an advert stamped later
+                // than the last one taken from that contact.
                 let reported = {
-                    let state = self.state();
-                    !state.ignore_adverts
-                        && state.contacts.iter().any(|(c, _)| c.public_key == from)
+                    let mut state = self.state();
+                    state
+                        .contacts
+                        .iter_mut()
+                        .find(|(c, _)| c.public_key == from && at > c.last_advert)
+                        .map(|(contact, modified)| {
+                            contact.last_advert = at;
+                            *modified = now();
+                        })
+                        .is_some()
                 };
                 if reported {
                     self.to_app(vec![frames::advert(&from)]);

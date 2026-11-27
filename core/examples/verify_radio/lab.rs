@@ -3,7 +3,7 @@
 
 use std::io::Write;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use peoples_chat_core::radio::{
@@ -18,6 +18,8 @@ use crate::power::Power;
 
 /// MeshCore companion radios talk at this rate over USB serial.
 const BAUD_RATE: u32 = 115_200;
+/// How far, in seconds, a clock just set may read from the time it was set to.
+const CLOCK_SLACK: u32 = 10;
 
 /// The computer's USB ports.
 #[async_trait]
@@ -253,8 +255,60 @@ impl Lab<'_> {
         }
     }
 
+    /// Sets a radio's clock to this computer's time, and says what it read before and after. A
+    /// radio drops an advert that isn't stamped later than the last one it took from that
+    /// contact, so one whose clock is behind goes unheard. The firmware doesn't move a clock
+    /// back: a radio that is ahead keeps its time.
+    async fn set_clock(
+        &self,
+        station: &Station,
+        out: &mut (dyn Write + Send),
+    ) -> Result<(), String> {
+        let label = &station.entry.label;
+        let failed = |what: &str, error: meshcore_rs::Error| {
+            format!("{label}: could not {what} the clock: {error}")
+        };
+        let commands = station.link.commands.lock().await;
+        let before = commands
+            .get_time()
+            .await
+            .map_err(|error| failed("read", error))?;
+        let time = computer_time();
+        let set = commands.set_time(time).await;
+        let after = commands
+            .get_time()
+            .await
+            .map_err(|error| failed("read", error))?;
+        match set {
+            // It has run on since it was set, by no more than the answers took.
+            Ok(_) if after.abs_diff(time) <= CLOCK_SLACK => {
+                let _ = writeln!(
+                    out,
+                    "ok {label}: clock set to this computer's {time}: it read {before} before, \
+                     {after} after (Unix seconds)"
+                );
+                Ok(())
+            }
+            Ok(_) => Err(format!(
+                "{label}: the clock didn't take: set to {time}, it reads {after}"
+            )),
+            // Refused, and not behind: it is ahead, or its second turned before the command
+            // arrived. meshcore-rs reports a refusal only as an answer that didn't come.
+            Err(_) if after >= time => {
+                let _ = writeln!(
+                    out,
+                    "ok {label}: clock left alone, not behind this computer's {time}: it read \
+                     {before} before, {after} after (Unix seconds), and a radio doesn't move its \
+                     clock back"
+                );
+                Ok(())
+            }
+            Err(error) => Err(failed("set", error)),
+        }
+    }
+
     /// The whole run. Every USB radio is checked before any test starts. A dry run lists what it
-    /// finds, and never touches a radio's power.
+    /// finds, and never touches a radio's power or clock. Any other run sets every clock.
     pub async fn run(&self, dry_run: bool, out: &mut (dyn Write + Send)) -> Result<(), String> {
         let preset = &self.config.lab;
         let _ = writeln!(
@@ -324,12 +378,22 @@ impl Lab<'_> {
                 checked.push(station);
             }
             stations = checked;
+            // Every radio matches the lab by now, and nothing has gone on the air yet.
+            for station in &stations {
+                self.set_clock(station, out).await?;
+            }
         }
         for station in stations {
             station.close().await;
         }
         Ok(())
     }
+}
+
+fn computer_time() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as u32)
 }
 
 /// The path of the one port with this USB serial number, or how many ports have it.

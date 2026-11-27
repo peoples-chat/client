@@ -73,7 +73,7 @@ pub struct Bench {
 }
 
 /// Ports never touch a radio's power.
-struct NoPower;
+pub struct NoPower;
 
 #[async_trait]
 impl Power for NoPower {
@@ -450,28 +450,10 @@ async fn scenario(
             side.label
         );
     }
-    let first = heard_after_advert(bench, bea, ada, &chat_id, out).await?;
+    heard_after_advert(bench, bea, ada, &chat_id, out).await?;
     // The first radio hasn't announced itself, so the second still can't reach it.
     not_heard(waits.app, bea, &chat_id).await?;
-    let second = heard_after_advert(bench, ada, bea, &chat_id, out).await?;
-    if !(first && second) {
-        // A message and its acknowledgement are heard too (#44). The app's switch for testing
-        // sends one although the contact isn't reachable yet.
-        heard_by_message(waits.delivery, ada, bea, &chat_id, out).await?;
-    }
-    for (side, other) in [(ada, bea), (bea, ada)] {
-        within(waits.app, "the contact is reachable by radio", || {
-            side.chat(&chat_id)
-                .filter(|chat| chat.reach == Reach::Radio)
-                .map(|_| ())
-        })
-        .await?;
-        let _ = writeln!(
-            out,
-            "ok {}: {}'s radio was heard, contact reachable by radio",
-            side.label, other.label
-        );
-    }
+    heard_after_advert(bench, ada, bea, &chat_id, out).await?;
 
     // A message each way (#40, #41).
     exchange(waits.delivery, ada, bea, &chat_id, "Lab message 1", out).await?;
@@ -502,13 +484,6 @@ async fn scenario(
         back.elapsed().as_secs_f32()
     );
     exchange(waits.delivery, ada, bea, &chat_id, "Lab message 2", out).await?;
-    if !(first && second) {
-        let _ = writeln!(
-            out,
-            "WARNING: an advert wasn't reported (see above). Reachability was shown with a \
-             message and its acknowledgement only."
-        );
-    }
     Ok(())
 }
 
@@ -546,15 +521,15 @@ async fn not_heard(wait: Duration, side: &Side, chat_id: &str) -> Result<(), Str
     }
 }
 
-/// `from`'s radio announces itself, and `to`'s app then counts the contact as reachable. When
-/// `to`'s radio never reports it, says what the clocks show and returns false.
+/// `from`'s radio announces itself, and `to`'s app then counts the contact as reachable. Fails,
+/// saying what the clocks show, when `to`'s radio never reports it.
 async fn heard_after_advert(
     bench: &Bench,
     from: &Side,
     to: &Side,
     chat_id: &str,
     out: &mut (dyn Write + Send),
-) -> Result<bool, String> {
+) -> Result<(), String> {
     for attempt in 1..=ADVERT_TRIES {
         from.ports.radio()?.advertise().await?;
         let heard = within(bench.waits.advert, "the advert", || {
@@ -569,7 +544,7 @@ async fn heard_after_advert(
                 "ok {}: heard {}'s advert (try {attempt}), contact reachable by radio",
                 to.label, from.label
             );
-            return Ok(true);
+            return Ok(());
         }
     }
     let seconds = |time: Option<u64>| time.map_or("unknown".to_owned(), |time| time.to_string());
@@ -590,11 +565,10 @@ async fn heard_after_advert(
     let held = contacts
         .iter()
         .find(|contact| contact.public_key.eq_ignore_ascii_case(&own));
-    let _ = writeln!(
-        out,
-        "WARNING {}: reported none of {}'s {ADVERT_TRIES} adverts. {}'s clock: {}; the newest \
-         advert time {} holds for it: {}; this computer: {} (Unix seconds). A radio ignores an \
-         advert that isn't newer than the last.",
+    Err(format!(
+        "{}: reported none of {}'s {ADVERT_TRIES} adverts. {}'s clock: {}; the newest advert \
+         time {} holds for it: {}; this computer: {} (Unix seconds). A radio ignores an advert \
+         that isn't newer than the last.",
         to.label,
         from.label,
         from.label,
@@ -602,24 +576,7 @@ async fn heard_after_advert(
         to.label,
         held.map_or("not a contact".to_owned(), |held| seconds(held.last_heard)),
         support::now_ms() / 1000
-    );
-    Ok(false)
-}
-
-/// One message sent with the app's force-radio switch, so that each app hears the other's radio:
-/// the receiver by the message, the sender by its acknowledgement.
-async fn heard_by_message(
-    wait: Duration,
-    from: &Side,
-    to: &Side,
-    chat_id: &str,
-    out: &mut (dyn Write + Send),
-) -> Result<(), String> {
-    let force = |on| from.core.set_force_radio(on).map_err(|error| error.message);
-    force(true)?;
-    let result = exchange(wait, from, to, chat_id, "Lab hello", out).await;
-    force(false)?;
-    result
+    ))
 }
 
 /// `from` sends `text`: it must arrive on `to` and be confirmed within `wait`, with at most one

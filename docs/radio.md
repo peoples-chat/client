@@ -277,8 +277,10 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
 
 - **Ports.** Each fake listens on 127.0.0.1, on a free port unless `Config::port` names one, so tests run in parallel.
 - **Commands.** App start, device query, contacts, sending a direct message and collecting received ones, with the
-  message-waiting and send-confirmed pushes, and sending an advert, which a radio that holds the sender as a contact
-  reports. Any other command gets the "unsupported" error. `lose_next_messages` loses a chosen number of messages.
+  message-waiting and send-confirmed pushes, reading and setting the clock (never backwards), and sending an advert.
+  An advert is stamped with the sender's clock, and a radio that holds the sender as a contact reports it only if it
+  is later than the last one it took. Any other command gets the "unsupported" error. `set_clock` puts a clock off,
+  and `lose_next_messages` loses a chosen number of messages.
 - **Pairs.** `pair` starts two radios that hear each other and hold each other as contacts; `link` does so for two that
   are already running. `add_contact` adds more.
 - **Knobs** (`Config`, per radio):
