@@ -1608,6 +1608,10 @@ mod tests {
 
     /// A core over an empty data folder, with keys in a file and a relay nobody answers on.
     async fn offline_core(data: &std::path::Path) -> Core {
+        // Linux CI has no secret service; use the in-memory store, as the integration tests do.
+        if keyring_core::get_default_store().is_none() {
+            keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+        }
         Core::start(MessagingOptions {
             data_dir: data.to_path_buf(),
             relays: vec!["ws://127.0.0.1:9".to_owned()],
