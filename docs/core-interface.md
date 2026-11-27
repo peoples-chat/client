@@ -239,7 +239,9 @@ no server.
 2. Someone without an account opens the link. `previewInvite(link)` gives the inviter's name and photo from their
    profile; it needs no account.
 3. They create an account, and `addContact(link)` starts the chat. Their core then sends the token in the chat, as an
-   app event of the app's own kind (9910). It isn't text, so White Noise doesn't show it.
+   app event of the app's own kind (9910). peoples.chat doesn't show it. White Noise would show a kind it doesn't know,
+   for Android as a bubble of its raw content and for iOS as an "Unsupported event" card (#123), but that does no harm
+   here: the token goes only to the inviter, whose app is peoples.chat.
 4. The inviter's core gets the token while the chat is still a request. If the token is the user's, unused and less
    than 7 days old, the core marks the invitation as used (`inviteChanged`, with `joinedChatId`) and accepts the chat
    (`invitationRemoved`, then `chatAdded`). A token that came while the app was closed counts when it starts.
