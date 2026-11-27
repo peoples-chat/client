@@ -74,6 +74,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
 | `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
+| `invitationDeliveryChanged` | `chatId`, `undelivered` (optional) | The invitation to a chat the user started couldn't be delivered, or now has been: without `undelivered` | Done (#126) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
 | `contactChanged` | `contact` | A contact's name, photo or radio changed | Done (#93, #94, #34) |
@@ -88,7 +89,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
-| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `undelivered` (optional) |
+| `UndeliveredInvitation` | `since`, `reason` (optional: `tooLarge`); see [When the invitation doesn't arrive](#contacts-and-invitations) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
@@ -141,6 +143,23 @@ mistake.
   other's codes end up in one chat.
 - **When their account can't be found on the relays**, it says "Could not find this person's account. Try again
   later." The lookup can take up to 50 seconds.
+
+**When the invitation doesn't arrive** (#126). The invitation is an MLS Welcome that MDK sends to the other person's
+inbox relays after the chat has opened. If no relay takes it, the other person never sees the chat, while the user's
+messages in it still show "Sent" once a relay has them.
+
+- MDK keeps such an invitation and lists it (`pending_welcome_deliveries`) until a relay takes it. It announces each one
+  once per run with a `WelcomeDeliveryPending` notice. There is no notice when it is delivered.
+- The core reads that list when it starts following the account, right after each chat it starts (the read waits for the
+  invitation's first try), and after each notice. A chat with an invitation in the list has `undelivered`: when it
+  first failed (`since`), and `reason: "tooLarge"` when a relay refused it as too large, the only reason MDK gives.
+- The core sends the listed invitations again every 20 seconds (`REDELIVERY_EVERY` in `core/src/app/undelivered.rs`),
+  and at once when relays are back after an outage. One refused as too large goes again only when relays are back.
+  After each try it reads the list again. A chat whose invitation has left it gets `invitationDeliveryChanged` without
+  `undelivered`.
+- "Delivered" means a relay took it, not that the other person's app has read it: MDK can't tell more.
+- **The interface:** an amber notice above the composer, "Bea hasn't received your invitation yet, so they can't see this
+  chat. The app keeps trying.", with the reason when there is one.
 
 **Receiving and accepting:**
 

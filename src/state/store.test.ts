@@ -107,6 +107,27 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "reachChanged", chatId: "b", reach: "unreachable" })).toBe(next);
   });
 
+  it("issue 126: marks a chat whose invitation hasn't arrived, and clears it once it has", () => {
+    const state = ready([chat("a"), chat("b")]);
+    const undelivered = { since: 1_795_300_170_000 };
+    const marked = applyEvent(state, { type: "invitationDeliveryChanged", chatId: "b", undelivered });
+
+    expect(marked.chats.map((c) => c.undelivered)).toEqual([undefined, undelivered]);
+    expect(marked.chats[0]).toBe(state.chats[0]);
+    expect(applyEvent(marked, { type: "invitationDeliveryChanged", chatId: "b", undelivered: { ...undelivered } })).toBe(marked);
+
+    const tooLarge = applyEvent(marked, {
+      type: "invitationDeliveryChanged",
+      chatId: "b",
+      undelivered: { ...undelivered, reason: "tooLarge" },
+    });
+    expect(tooLarge.chats[1].undelivered?.reason).toBe("tooLarge");
+
+    const delivered = applyEvent(tooLarge, { type: "invitationDeliveryChanged", chatId: "b" });
+    expect(delivered.chats[1].undelivered).toBeUndefined();
+    expect(applyEvent(delivered, { type: "invitationDeliveryChanged", chatId: "b" })).toBe(delivered);
+  });
+
   it("replaces the relays, and changes nothing when they are the same", () => {
     const state = { ...ready(), relays: [relay("wss://a.example", "connected"), relay("wss://b.example", "connected")] };
     const relays = [relay("wss://a.example", "connected"), relay("wss://b.example", "unreachable")];
