@@ -2,7 +2,7 @@ import { useState } from "react";
 import { core } from "../core";
 import type { Contact, RadioIssue, Reach } from "../core/types";
 import { useNavigation } from "../navigation/Navigator";
-import { useAppState } from "../state";
+import { canSend, chatEndedText, useAppState } from "../state";
 import { Avatar } from "../ui/Avatar";
 import { IconButton } from "../ui/Button";
 import { Composer } from "../ui/Composer";
@@ -40,8 +40,11 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
   // With the switch on, everything goes by radio (#40).
   const byRadio = reach === "radio" || radio.forced;
   const joined = invites.some((invite) => invite.joinedChatId === chatId);
+  // A chat that stopped being direct says so; one the contact left takes no more messages (#125).
+  const sendable = canSend(chat);
+  const ended = chatEndedText(chat, first);
   const suggestions =
-    invited && chat.messages.length === 0 ? [`Hi ${first}, I made it`, "What is the radio part?"] : [];
+    sendable && invited && chat.messages.length === 0 ?[`Hi ${first}, I made it`, "What is the radio part?"] : [];
 
   async function send(text: string) {
     setError(null);
@@ -77,7 +80,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
     <div className={layout.screen}>
       <ScreenHeader
         title={name}
-        subtitle={reach === "internet" ? undefined : <ReachLine reach={reach} />}
+        subtitle={!sendable || reach === "internet" ? undefined : <ReachLine reach={reach} />}
         avatar={{ name, tint: tintFor(name), photo: chat.contact.photo }}
         bordered
         onLeading={navigation.back}
@@ -105,13 +108,19 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           />
         }
       />
-      {reach === "internet" && radio.forced && (
+      {ended && (
+        <p className={styles.notice} role="status" data-testid="chat-state-notice">
+          <Icon name={sendable ? "help" : "lock"} size={14} strokeWidth={2.2} />
+          <span>{ended}</span>
+        </p>
+      )}
+      {sendable && reach === "internet" && radio.forced && (
         <button type="button" className={`${styles.notice} ${styles.radio}`} onClick={() => navigation.push({ name: "radioSettings" })}>
           <Icon name="radio" size={14} strokeWidth={2.2} />
           <span>Testing: every message goes by radio.</span>
         </button>
       )}
-      {reach !== "internet" && (
+      {sendable && reach !== "internet" && (
         <button
           type="button"
           className={`${styles.notice} ${reach === "radio" ? styles.radio : ""}`}
@@ -145,7 +154,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           ))}
         </div>
       )}
-      <Composer onSend={send} mode={byRadio ? "radio" : "internet"} longWaits={!radio.forced} />
+      {sendable && <Composer onSend={send} mode={byRadio ? "radio" : "internet"} longWaits={!radio.forced} />}
     </div>
   );
 }

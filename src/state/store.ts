@@ -151,6 +151,23 @@ export function canSend(chat: Chat): boolean {
   return chat.state !== "contactLeft" && chat.state !== "removed";
 }
 
+/**
+ * What the chat says once it is no longer a direct chat (#125), or `null` while it is one.
+ * `first` is the contact's first name.
+ */
+export function chatEndedText(chat: Chat, first: string): string | null {
+  switch (chat.state ?? "direct") {
+    case "direct":
+      return null;
+    case "contactLeft":
+      return `${first} left this chat. Messages can't be sent here any more.`;
+    case "removed":
+      return "You are no longer in this chat. Messages can't be sent here any more.";
+    case "group":
+      return "This is no longer a direct chat: it has a name or more people now.";
+  }
+}
+
 function sameAccount(a: Account, b: Account): boolean {
   return (
     a.name === b.name &&

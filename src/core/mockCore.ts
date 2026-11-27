@@ -333,6 +333,11 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const chat = chatById(chatId);
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
+      // As the core does: nothing goes to a chat that has ended (#125).
+      if (chat.state === "contactLeft") {
+        throw new CoreError(`${chat.contact.name} left this chat. Messages can't be sent here any more.`);
+      }
+      if (chat.state === "removed") throw new CoreError("You are no longer in this chat.");
 
       // As the core does: radio carries short text, also when it is forced (#40). With the
       // switch on, longer text is refused; otherwise it waits for the internet (#46), as
