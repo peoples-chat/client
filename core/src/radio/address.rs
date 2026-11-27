@@ -68,7 +68,7 @@ impl RadioAddress {
         let settings = &info.settings;
         Self {
             v: RADIO_ADDRESS_VERSION,
-            mesh: mesh_name(info.mesh).to_owned(),
+            mesh: info.mesh.name().to_owned(),
             key: info.public_key.to_ascii_lowercase(),
             freq: (settings.frequency_mhz * 1000.0).round() as u32,
             bw: (settings.bandwidth_khz * 1000.0).round() as u32,
@@ -99,7 +99,7 @@ impl RadioAddress {
         }
         let mut record: Self = serde_json::from_str(json)
             .map_err(|error| AddressError::Malformed(error.to_string()))?;
-        if record.mesh != mesh_name(Mesh::MeshCore) {
+        if record.mesh != Mesh::MeshCore.name() {
             return Err(AddressError::UnknownMesh(record.mesh));
         }
         if record.key.len() != 64 || !record.key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -149,12 +149,6 @@ impl RadioAddress {
             coding_rate: self.cr,
             tx_power_dbm: 0,
         }
-    }
-}
-
-fn mesh_name(mesh: Mesh) -> &'static str {
-    match mesh {
-        Mesh::MeshCore => "meshcore",
     }
 }
 

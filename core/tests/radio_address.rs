@@ -31,13 +31,13 @@ async fn knows_radio(core: &Core, chat_id: &str) {
     .await;
 }
 
-/// Waits until the chat has settled on both phones, so that it has radio keys.
+/// Waits until the chat has settled on both phones.
 async fn settled(one: &Core, other: &Core, chat_id: &str) {
     let deadline = Instant::now() + WAIT;
     loop {
         if let (Ok(a), Ok(b)) = (
-            one.radio_keys(chat_id).await,
-            other.radio_keys(chat_id).await,
+            one.chat_membership(chat_id).await,
+            other.chat_membership(chat_id).await,
         ) && a.epoch == b.epoch
         {
             return;

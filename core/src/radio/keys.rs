@@ -1,169 +1,203 @@
-//! Keys for radio messages in a direct chat (#37), derived from the chat's MLS state so that no
-//! extra key exchange is needed.
+//! Keys for radio messages in a direct chat. Each member's app makes a random key of its own for
+//! the chat and sends it there, inside the chat's MLS messages, as an app event of the app's own
+//! kind ([`crate::messaging::RADIO_KEY_KIND`]). The key encrypts what that member sends by radio,
+//! and nothing else. The decision (#128): <https://github.com/peoples-chat/client/issues/128>.
 //!
-//! Both members hold the same exporter secret in the same epoch ([`crate::Messaging::chat_secret`]).
-//! Each derives one key per direction from it, with HKDF-SHA256 and a label of the app's own:
+//! The event's content is a small, versioned record:
 //!
-//! ```text
-//! key(sender) = HKDF-SHA256(salt = none, IKM = exporter secret, info = LABEL || sender's public key)
+//! ```json
+//! {"v":0,"mesh":"meshcore","key":"…64 hex…","n":1,"at":1795300000000}
 //! ```
 //!
-//! A key changes with every epoch. Separate keys for the two directions keep the two senders'
-//! nonces apart, and a packet reflected back to its sender fails to decrypt. The finding behind
-//! this, with the epoch and nonce rules: `docs/spikes/37-radio-keys.md`.
+//! - `mesh` is the radio protocol the key is for, spelled as in the radio address record (#34):
+//!   `meshcore` or `meshtastic`. A record with a mesh the app doesn't know is kept and not used.
+//! - `n` numbers the sender's keys for the chat and mesh. A packet carries its lowest 8 bits, to
+//!   say which key sealed it.
+//! - `at` is when the sender made the key, in milliseconds since the Unix epoch, by the sender's
+//!   clock. The newest key is the member's current one for that mesh.
+//!
+//! Fields a later version adds are ignored; a record of another version is refused. The rules for
+//! packets are in `docs/radio-format-v0.md`, "Where the keys come from".
 
-use hkdf::Hkdf;
-use sha2::Sha256;
-use zeroize::Zeroizing;
+use rand::RngCore;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
-/// The HKDF label. Provisional and unregistered: Marmot assigns its exporter contexts only when a
-/// spec is adopted, and this one has no spec yet.
-pub const RADIO_KEY_LABEL: &[u8] = b"peoples.chat/radio/v0";
-
+/// The record's version.
+pub const RADIO_KEY_VERSION: u8 = 0;
 /// Key length in bytes, for a 256-bit AEAD such as ChaCha20-Poly1305.
 pub const RADIO_KEY_BYTES: usize = 32;
+/// The longest record taken, in bytes. A record is about 130.
+const MAX_RECORD_BYTES: usize = 1024;
+/// The longest mesh name taken, in bytes.
+const MAX_MESH_BYTES: usize = 32;
 
-/// A key for one direction of a chat in one epoch. Wiped when dropped.
+/// A key for what one member sends in one chat over one mesh. Wiped when dropped.
 pub type RadioKey = Zeroizing<[u8; RADIO_KEY_BYTES]>;
 
-/// The radio keys of one direct chat in one MLS epoch.
-pub struct RadioKeys {
-    pub epoch: u64,
-    /// Encrypts what this phone sends.
-    pub send: RadioKey,
-    /// Decrypts what the contact sends.
-    pub receive: RadioKey,
+/// A new random key.
+pub fn new_radio_key() -> RadioKey {
+    let mut key = Zeroizing::new([0; RADIO_KEY_BYTES]);
+    OsRng.fill_bytes(key.as_mut());
+    key
 }
 
-impl std::fmt::Debug for RadioKeys {
+/// A member's radio key, as the chat carries it and the radio store keeps it. `Debug` leaves the
+/// key out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RadioKeyRecord {
+    pub v: u8,
+    /// The radio protocol the key is for. Any name is kept; only known ones are used.
+    pub mesh: String,
+    /// The key, 64 hex digits.
+    pub key: String,
+    /// The key's number among the sender's keys for the chat and mesh.
+    pub n: u64,
+    /// When the key was made, in milliseconds since the Unix epoch.
+    pub at: u64,
+}
+
+impl std::fmt::Debug for RadioKeyRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RadioKeys")
-            .field("epoch", &self.epoch)
+        f.debug_struct("RadioKeyRecord")
+            .field("v", &self.v)
+            .field("mesh", &self.mesh)
+            .field("n", &self.n)
+            .field("at", &self.at)
             .finish_non_exhaustive()
     }
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum RadioKeyError {
-    #[error("the chat's secret is {0} bytes, fewer than {RADIO_KEY_BYTES}")]
-    ShortSecret(usize),
-    #[error("{0:?} is not a public key")]
-    InvalidPublicKey(String),
-    #[error("a chat with oneself has no direction")]
-    SameKey,
-}
-
-impl RadioKeys {
-    /// The keys for the chat whose exporter secret in `epoch` is `chat_secret`, between the
-    /// account `own_public_key` and the contact `contact_public_key` (hex, 32 bytes).
-    pub fn derive(
-        chat_secret: &[u8],
-        epoch: u64,
-        own_public_key: &str,
-        contact_public_key: &str,
-    ) -> Result<Self, RadioKeyError> {
-        if chat_secret.len() < RADIO_KEY_BYTES {
-            return Err(RadioKeyError::ShortSecret(chat_secret.len()));
-        }
-        let own = public_key(own_public_key)?;
-        let contact = public_key(contact_public_key)?;
-        if own == contact {
-            return Err(RadioKeyError::SameKey);
-        }
-        Ok(Self {
-            epoch,
-            send: direction_key(chat_secret, &own),
-            receive: direction_key(chat_secret, &contact),
-        })
+impl Drop for RadioKeyRecord {
+    fn drop(&mut self) {
+        self.key.zeroize();
     }
 }
 
-/// The key for what `sender` sends.
-fn direction_key(chat_secret: &[u8], sender: &[u8; 32]) -> RadioKey {
-    let hkdf = Hkdf::<Sha256>::new(None, chat_secret);
-    let mut info = [0; RADIO_KEY_LABEL.len() + 32];
-    info[..RADIO_KEY_LABEL.len()].copy_from_slice(RADIO_KEY_LABEL);
-    info[RADIO_KEY_LABEL.len()..].copy_from_slice(sender);
-    let mut key = Zeroizing::new([0; RADIO_KEY_BYTES]);
-    hkdf.expand(&info, key.as_mut())
-        .expect("32 bytes is within HKDF-SHA256's output limit");
-    key
+/// Why a record was refused. None of these holds any of the record's text: it holds a key.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RadioKeyError {
+    #[error("the record is not JSON of the known shape")]
+    Malformed,
+    #[error("record version {0} is unknown")]
+    UnknownVersion(u8),
+    #[error("the mesh's name is empty or too long")]
+    InvalidMesh,
+    #[error("the key is not 64 hex digits")]
+    InvalidKey,
 }
 
-fn public_key(hex_key: &str) -> Result<[u8; 32], RadioKeyError> {
-    let mut key = [0; 32];
-    hex::decode_to_slice(hex_key, &mut key)
-        .map_err(|_| RadioKeyError::InvalidPublicKey(hex_key.to_owned()))?;
-    Ok(key)
+impl RadioKeyRecord {
+    /// The record of `key`, number `n` for `mesh`, made at `at`.
+    pub fn new(mesh: &str, key: &RadioKey, n: u64, at: u64) -> Self {
+        Self {
+            v: RADIO_KEY_VERSION,
+            mesh: mesh.to_owned(),
+            key: hex::encode(key.as_slice()),
+            n,
+            at,
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("a record always serializes")
+    }
+
+    /// Reads a record that came in a chat. A mesh the app doesn't know is not an error.
+    pub fn parse(json: &str) -> Result<Self, RadioKeyError> {
+        if json.len() > MAX_RECORD_BYTES {
+            return Err(RadioKeyError::Malformed);
+        }
+        // The version first, so that a later version isn't reported as malformed.
+        #[derive(Deserialize)]
+        struct Version {
+            v: u8,
+        }
+        let version: Version = serde_json::from_str(json).map_err(|_| RadioKeyError::Malformed)?;
+        if version.v != RADIO_KEY_VERSION {
+            return Err(RadioKeyError::UnknownVersion(version.v));
+        }
+        let mut record: Self = serde_json::from_str(json).map_err(|_| RadioKeyError::Malformed)?;
+        if record.mesh.is_empty() || record.mesh.len() > MAX_MESH_BYTES {
+            return Err(RadioKeyError::InvalidMesh);
+        }
+        if record.radio_key().is_none() {
+            return Err(RadioKeyError::InvalidKey);
+        }
+        record.key.make_ascii_lowercase();
+        Ok(record)
+    }
+
+    /// The key itself, if the record's is one.
+    pub fn radio_key(&self) -> Option<RadioKey> {
+        let mut key = Zeroizing::new([0; RADIO_KEY_BYTES]);
+        hex::decode_to_slice(&self.key, key.as_mut()).ok()?;
+        Some(key)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ADA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const BEA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    fn secret() -> Vec<u8> {
-        (0..32).collect()
+    fn key() -> RadioKey {
+        Zeroizing::new(std::array::from_fn(|byte| byte as u8))
     }
 
-    /// Computed separately, with Python's `hmac` and `hashlib` (RFC 5869), from the secret
-    /// 00 01 … 1f, the label and the sender's key.
+    const HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
     #[test]
-    fn matches_the_test_vector() {
-        let keys = RadioKeys::derive(&secret(), 7, ADA, BEA).unwrap();
-        assert_eq!(keys.epoch, 7);
+    fn a_record_is_small_and_reads_back() {
+        let record = RadioKeyRecord::new("meshcore", &key(), 1, 1_795_300_000_000);
+        let json = record.to_json();
         assert_eq!(
-            hex::encode(*keys.send),
-            "805f65bf8627f9d3a3849c2e330d9c6f9f5936495b5212c5597526bcda48ead7"
+            json,
+            format!(r#"{{"v":0,"mesh":"meshcore","key":"{HEX}","n":1,"at":1795300000000}}"#)
         );
-        assert_eq!(
-            hex::encode(*keys.receive),
-            "05e43f1c7156b5f6b36d01742b86cf32a9753e57767d2e1bbc6ee99158d62d5d"
-        );
+        let read = RadioKeyRecord::parse(&json).unwrap();
+        assert_eq!(read, record);
+        assert_eq!(*read.radio_key().unwrap(), *key());
     }
 
     #[test]
-    fn each_side_receives_with_the_key_the_other_sends_with() {
-        let ada = RadioKeys::derive(&secret(), 7, ADA, BEA).unwrap();
-        let bea = RadioKeys::derive(&secret(), 7, BEA, ADA).unwrap();
-        assert_eq!(*ada.send, *bea.receive);
-        assert_eq!(*ada.receive, *bea.send);
-        assert_ne!(*ada.send, *ada.receive);
+    fn takes_meshes_it_doesnt_know_and_refuses_what_it_must() {
+        let json = RadioKeyRecord::new("meshcore", &key(), 1, 1).to_json();
+        for mesh in ["meshtastic", "a-mesh-of-the-future"] {
+            let read = RadioKeyRecord::parse(&json.replace("meshcore", mesh)).unwrap();
+            assert_eq!(read.mesh, mesh);
+        }
+        // A field from a later version of the same shape.
+        assert!(RadioKeyRecord::parse(&json.replace(r#""at":"#, r#""x":2,"at":"#)).is_ok());
+        for (json, error) in [
+            (
+                json.replace(r#""v":0"#, r#""v":1"#),
+                RadioKeyError::UnknownVersion(1),
+            ),
+            (json.replace("meshcore", ""), RadioKeyError::InvalidMesh),
+            (
+                json.replace("meshcore", &"m".repeat(33)),
+                RadioKeyError::InvalidMesh,
+            ),
+            (json.replace(HEX, "abc"), RadioKeyError::InvalidKey),
+            (
+                json.replace(HEX, &"g".repeat(64)),
+                RadioKeyError::InvalidKey,
+            ),
+            ("not json".to_owned(), RadioKeyError::Malformed),
+            (r#"{"v":0}"#.to_owned(), RadioKeyError::Malformed),
+            ("x".repeat(2000), RadioKeyError::Malformed),
+        ] {
+            assert_eq!(RadioKeyRecord::parse(&json).unwrap_err(), error, "{json}");
+        }
     }
 
     #[test]
-    fn another_epoch_s_secret_gives_other_keys() {
-        let mut next = secret();
-        next[0] ^= 1;
-        let now = RadioKeys::derive(&secret(), 7, ADA, BEA).unwrap();
-        let later = RadioKeys::derive(&next, 8, ADA, BEA).unwrap();
-        assert_ne!(*now.send, *later.send);
-        assert_ne!(*now.receive, *later.receive);
-    }
-
-    #[test]
-    fn says_what_is_wrong() {
-        assert_eq!(
-            RadioKeys::derive(&[0; 16], 7, ADA, BEA).unwrap_err(),
-            RadioKeyError::ShortSecret(16)
-        );
-        assert_eq!(
-            RadioKeys::derive(&secret(), 7, "npub1…", BEA).unwrap_err(),
-            RadioKeyError::InvalidPublicKey("npub1…".to_owned())
-        );
-        assert_eq!(
-            RadioKeys::derive(&secret(), 7, ADA, ADA).unwrap_err(),
-            RadioKeyError::SameKey
-        );
-    }
-
-    #[test]
-    fn keys_stay_out_of_logs() {
-        let keys = RadioKeys::derive(&secret(), 7, ADA, BEA).unwrap();
-        let printed = format!("{keys:?}");
-        assert!(!printed.contains("805f65"), "{printed}");
-        assert!(printed.contains("epoch: 7"), "{printed}");
+    fn new_keys_differ_and_stay_out_of_logs() {
+        assert_ne!(*new_radio_key(), *new_radio_key());
+        let record = RadioKeyRecord::new("meshcore", &key(), 1, 1);
+        let printed = format!("{record:?}");
+        assert!(!printed.contains("000102"), "{printed}");
+        assert!(printed.contains("meshcore"), "{printed}");
     }
 }

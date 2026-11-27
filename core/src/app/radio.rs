@@ -13,10 +13,13 @@
 //!   Its relay copy goes as for any radio message, so it still arrives once a relay is back.
 //! - **Addresses (#34).** With a radio, the core shares its radio address record in each direct
 //!   chat, and keeps the records its contacts share as their radios.
+//! - **Keys (#128).** With a radio, the core makes a random key of its own for each direct chat
+//!   and sends it there, and a new one when the chat's membership changes. It keeps the keys its
+//!   contacts send, and opens their packets with them.
 //!
 //! Pairing a radio, and opening it again after its link drops, is in `pairing.rs` (#24).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -29,18 +32,18 @@ use crate::interface::{
     Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioConnection, RadioIssue,
     RadioPreset, RadioStatus, Reach,
 };
-use crate::messaging::{RadioAddressItem, TextMessage};
+use crate::messaging::{ChatMembership, RadioAddressItem, RadioKeyItem, TextMessage};
 use crate::radio::airtime;
 use crate::radio::format::{self, MAX_RADIO_TEXT_BYTES};
 use crate::radio::{
-    EXPECTED_PRESET, Radio, RadioAddress, RadioEvent, RadioInbox, RadioInfo, RadioPorts,
-    ReceivedText, Refusal,
+    ChatKeys, EXPECTED_PRESET, Mesh as RadioMesh, Radio, RadioAddress, RadioEvent, RadioInbox,
+    RadioInfo, RadioKeyRecord, RadioPorts, ReceivedText, Refusal,
 };
 use crate::radio_store::{RadioMessage, RadioStore, Transmission};
 use crate::reach::{Heard, radio_reach};
 
-/// How often the core takes each chat's current radio keys while it has a radio. Keys can't be
-/// had while a chat waits for a relay to confirm a change, so the newest are kept beforehand.
+/// How often the core looks at each chat's membership while it has a radio, and sends the radio
+/// keys and address records that haven't gone yet.
 const KEY_REFRESH: Duration = Duration::from_secs(60);
 /// What the core adds to the radio's own estimate of how long a confirmation may take: the
 /// confirmation still has to come over the link from the radio (#41). Provisional, until
@@ -66,12 +69,11 @@ impl Drop for Attached {
     }
 }
 
-/// What a radio send needs: the radio, the contact's radio, and the chat's newest keys.
+/// What a radio send needs: the radio and the contact's radio. This phone's key for the chat has
+/// been shared.
 pub(super) struct RadioReady {
     radio: Arc<dyn Radio>,
     contact_radio: RadioAddress,
-    epoch: u64,
-    key: crate::radio::RadioKey,
     /// The packet's size and time on air (#51).
     bytes: usize,
     airtime: Duration,
@@ -81,8 +83,12 @@ pub(super) struct RadioReady {
 #[derive(Default)]
 pub(super) struct RadioParts {
     pub(super) attached: std::sync::Mutex<Option<Attached>>,
-    /// The direct chats' radio keys and replay windows.
+    /// The replay windows of the keys that radio receives with.
     pub(super) inbox: std::sync::Mutex<RadioInbox>,
+    /// This phone's keys are made and sent one at a time (#128).
+    pub(super) keys: tokio::sync::Mutex<()>,
+    /// Chat → how many devices a test says the contact has in it (#128).
+    pub(super) contact_devices: std::sync::Mutex<HashMap<String, u32>>,
     /// Chats with a radio send in flight. A new outgoing message of theirs waits for the send to
     /// finish, so that the one it sends shows as radio from the start.
     pub(super) sending: std::sync::Mutex<HashSet<String>>,
@@ -145,9 +151,10 @@ impl Core {
             watcher,
         });
         drop(previous);
-        self.keep_radio_keys().await;
         let status = self.radio_changed();
         self.reach_changed();
+        // The key before the address: a contact who knows the radio then has the key too.
+        self.refresh_radio_keys().await;
         self.share_radio_address(None).await;
         Ok(status)
     }
@@ -285,13 +292,240 @@ impl Core {
     /// A chat is new to the snapshot: the contact's records go into the address book, and the
     /// chat gets this phone's record if it has a radio.
     pub(super) fn radio_chat_added(&self, chat_id: &str) {
+        self.read_radio_keys(chat_id);
         self.read_radio_addresses(chat_id);
         self.reach_changed();
         if self.attached().is_some() {
             let core = self.clone();
             let chat_id = chat_id.to_owned();
-            tokio::spawn(async move { core.share_radio_address(Some(&chat_id)).await });
+            tokio::spawn(async move {
+                core.keep_chat_key(&chat_id).await;
+                core.share_radio_address(Some(&chat_id)).await;
+            });
         }
+    }
+
+    /// MDK changed a chat: its membership may have, which calls for a new radio key (#128).
+    pub(super) fn radio_chat_changed(&self, chat_id: &str) {
+        // One lock at a time.
+        let has_radio = self.attached().is_some();
+        if has_radio && self.chat(chat_id).is_some() {
+            let core = self.clone();
+            let chat_id = chat_id.to_owned();
+            tokio::spawn(async move { core.keep_chat_key(&chat_id).await });
+        }
+    }
+
+    /// Takes a radio key record that came in a chat (#128), and keeps it as a key of the chat's
+    /// contact. One of a mesh the app doesn't know is kept and never used. Records in a chat that
+    /// is still a request are read once it is accepted.
+    pub(super) fn radio_key_received(&self, item: &RadioKeyItem) {
+        let Some(chat) = self.chat(&item.chat_id) else {
+            return;
+        };
+        if item.sender != chat.contact.public_key {
+            return;
+        }
+        let record = match RadioKeyRecord::parse(&item.record) {
+            Ok(record) => record,
+            Err(error) => {
+                log::info!("a radio key record was refused: {error}");
+                return;
+            }
+        };
+        // A key of this phone's own, sent back to it, would open its own packets.
+        if self.inner.radio_store.is_own_key(&record.key) {
+            log::info!("a radio key record was refused: the key is this phone's");
+            return;
+        }
+        if let Err(error) = self
+            .inner
+            .radio_store
+            .add_contact_key(&item.chat_id, record, now_ms())
+        {
+            log::warn!("could not keep a contact's radio key: {error}");
+        }
+    }
+
+    /// Reads the radio key records the contact sent in the chat `chat_id`, for those that came
+    /// while the app was closed or the chat was a request.
+    fn read_radio_keys(&self, chat_id: &str) {
+        let Some(account) = self.state().account.clone() else {
+            return;
+        };
+        match self
+            .inner
+            .messaging
+            .radio_key_records(&account.public_key, chat_id)
+        {
+            Ok(items) => {
+                for item in items {
+                    self.radio_key_received(&item);
+                }
+            }
+            Err(error) => log::info!("could not read a chat's radio keys: {error}"),
+        }
+    }
+
+    /// Looks at each chat's membership while there is a radio: makes this phone's key for a chat
+    /// that has none, or a new one where the membership changed, and sends those not sent yet
+    /// (#128). The core does this itself when a radio is attached, when a chat changes and every
+    /// minute; tests call it so as not to wait.
+    pub async fn refresh_radio_keys(&self) {
+        let chats: Vec<String> = self
+            .state()
+            .chats
+            .iter()
+            .map(|chat| chat.id.clone())
+            .collect();
+        for chat_id in chats {
+            self.keep_chat_key(&chat_id).await;
+        }
+    }
+
+    /// This phone's key for the chat `chat_id` on the mesh of the radio in use: made or replaced
+    /// as the membership calls for, and sent to the chat if it hasn't been. Only a direct chat
+    /// of the account and its contact gets one: never a group.
+    async fn keep_chat_key(&self, chat_id: &str) {
+        let _one_at_a_time = self.inner.radio.keys.lock().await;
+        let Some(mesh) = self
+            .attached()
+            .as_ref()
+            .map(|attached| attached.info.mesh.name())
+        else {
+            return;
+        };
+        // Two statements: each locks the state.
+        let account = self.state().account.clone();
+        let (Some(account), Some(chat)) = (account, self.chat(chat_id)) else {
+            return;
+        };
+        let direct = |members: &[(String, u32)]| {
+            is_direct(members, &account.public_key, &chat.contact.public_key)
+        };
+        // While a change to the chat waits for the relays, its members can't be read, and the
+        // key kept stays.
+        let own = match self.chat_membership(chat_id).await {
+            Ok(membership) => {
+                let kept = self.inner.radio_store.own_key(chat_id, mesh);
+                if kept.is_none() && !direct(&membership.members) {
+                    return;
+                }
+                match self.inner.radio_store.own_key_for(
+                    chat_id,
+                    mesh,
+                    &membership.members,
+                    now_ms(),
+                ) {
+                    Ok(own) => own,
+                    Err(error) => {
+                        log::warn!("could not keep a radio key: {error}");
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                log::info!("a chat's membership can't be read now: {}", error.message);
+                let Some(own) = self.inner.radio_store.own_key(chat_id, mesh) else {
+                    return;
+                };
+                own
+            }
+        };
+        if own.shared || !direct(&own.members) {
+            return;
+        }
+        let sent = self
+            .inner
+            .messaging
+            .send_radio_key(&account.public_key, chat_id, &own.record.to_json())
+            .await;
+        match sent {
+            Ok(()) => {
+                if let Err(error) =
+                    self.inner
+                        .radio_store
+                        .set_key_shared(chat_id, mesh, own.record.n)
+                {
+                    log::warn!("could not note a shared radio key: {error}");
+                }
+            }
+            Err(error) => log::info!("a radio key waits for the next try: {error}"),
+        }
+    }
+
+    /// Who is in the chat `chat_id` now, once it is settled.
+    pub async fn chat_membership(&self, chat_id: &str) -> Result<ChatMembership, CommandError> {
+        let account = self.account()?;
+        let chat = self
+            .chat(chat_id)
+            .ok_or_else(|| CommandError::new("This chat no longer exists."))?;
+        let mut membership = self
+            .inner
+            .messaging
+            .chat_membership(&account.public_key, chat_id)
+            .await
+            .map_err(|error| failed("read the chat's members", error))?;
+        let devices = self.contact_devices().get(chat_id).copied();
+        if let Some(devices) = devices {
+            for (member, count) in &mut membership.members {
+                if *member == chat.contact.public_key {
+                    *count = devices;
+                }
+            }
+        }
+        Ok(membership)
+    }
+
+    /// For tests (#128): from now on the contact has `devices` devices in the chat `chat_id`, as
+    /// far as the radio keys go. It stands in for a membership change, which the app can't make
+    /// in a direct chat.
+    pub fn set_radio_contact_devices(&self, chat_id: &str, devices: u32) {
+        self.contact_devices().insert(chat_id.to_owned(), devices);
+    }
+
+    /// For tests (#128): sends `record` in the chat `chat_id` as a radio key record, as another
+    /// app might.
+    pub async fn send_radio_key_record(
+        &self,
+        chat_id: &str,
+        record: &str,
+    ) -> Result<(), CommandError> {
+        let account = self.account()?;
+        self.inner
+            .messaging
+            .send_radio_key(&account.public_key, chat_id, record)
+            .await
+            .map_err(|error| failed("send the radio key", error))
+    }
+
+    /// This phone's current key for the chat `chat_id` on `mesh`, if it has one (#128). The
+    /// keys are for the core's callers in Rust, never for an interface.
+    pub fn radio_own_key(&self, chat_id: &str, mesh: RadioMesh) -> Option<RadioKeyRecord> {
+        self.inner
+            .radio_store
+            .own_key(chat_id, mesh.name())
+            .map(|own| own.record)
+    }
+
+    /// The keys the contact sent in the chat `chat_id` that are kept, whatever their mesh,
+    /// oldest first (#128).
+    pub fn radio_contact_keys(&self, chat_id: &str) -> Vec<RadioKeyRecord> {
+        self.inner.radio_store.contact_key_records(chat_id)
+    }
+
+    /// The contact's current key in the chat `chat_id` on `mesh`: the one their packets on that
+    /// mesh are opened with (#128).
+    pub fn radio_contact_key(&self, chat_id: &str, mesh: RadioMesh) -> Option<RadioKeyRecord> {
+        let current = self
+            .inner
+            .radio_store
+            .receiving_keys(chat_id, mesh.name(), now_ms())
+            .into_iter()
+            .rfind(|key| key.replaced_at.is_none())?;
+        self.radio_contact_keys(chat_id)
+            .into_iter()
+            .find(|record| record.radio_key().is_some_and(|key| *key == *current.key))
     }
 
     /// The meshes the contact's radios run, as their records say.
@@ -460,13 +694,14 @@ impl Core {
                 chat.contact.name
             )));
         };
-        // The chat's current keys if it is settled, else the newest kept ones.
-        self.keep_chat_keys(chat_id, &chat.contact.public_key).await;
-        let Some((epoch, key)) = self.inbox().sending_key(chat_id) else {
+        // A new key first, if the membership changed: a member who left can't read this.
+        self.keep_chat_key(chat_id).await;
+        let own = self.inner.radio_store.own_key(chat_id, radio.mesh().name());
+        if !own.is_some_and(|own| own.shared) {
             return Err(CommandError::new(
                 "Could not send by radio: the chat's keys aren't ready. Try again.",
             ));
-        };
+        }
         // Within the hour's airtime (#51).
         let Some(settings) = self.attached().as_ref().map(|a| a.info.settings) else {
             return Err(CommandError::new("Pair a radio first."));
@@ -483,8 +718,6 @@ impl Core {
         Ok(RadioReady {
             radio,
             contact_radio,
-            epoch,
-            key,
             bytes,
             airtime,
         })
@@ -580,8 +813,6 @@ impl Core {
         let RadioReady {
             radio,
             contact_radio,
-            epoch,
-            key,
             bytes,
             airtime,
         } = ready;
@@ -607,16 +838,30 @@ impl Core {
             log::info!("a message waits for the internet: a packet can't carry its id");
             return Ok(message);
         }
-        // Stored as used before the packet goes out, so that it is never used twice.
-        let counter = match self.inner.radio_store.take_counter(chat_id, epoch) {
-            Ok(counter) => counter,
+        // The counter is stored as used before the packet goes out, so that it is never used
+        // twice.
+        let sending = match self
+            .inner
+            .radio_store
+            .take_counter(chat_id, radio.mesh().name())
+        {
+            Ok(Some(sending)) => sending,
+            Ok(None) => {
+                log::info!("a message waits for the internet: the new radio key hasn't gone yet");
+                return Ok(message);
+            }
             Err(error) => {
                 log::warn!("a message waits for the internet: {error}");
                 return Ok(message);
             }
         };
-        let packet =
-            format::to_text_message(&format::seal_text(&key, epoch, counter, sent_at, text));
+        let packet = format::to_text_message(&format::seal_text(
+            &sending.key,
+            sending.number,
+            sending.counter,
+            sent_at,
+            text,
+        ));
         match radio.send_text(&contact_radio.key, &packet).await {
             Ok(sent) => {
                 // Logged with its airtime: the hourly cap counts it, and the log shows that only
@@ -783,26 +1028,6 @@ impl Core {
         self.radio_sending().contains(chat_id)
     }
 
-    /// Takes each chat's current radio keys, where the chat is settled.
-    pub(super) async fn keep_radio_keys(&self) {
-        let chats: Vec<(String, String)> = self
-            .state()
-            .chats
-            .iter()
-            .map(|chat| (chat.id.clone(), chat.contact.public_key.clone()))
-            .collect();
-        for (chat_id, contact) in chats {
-            self.keep_chat_keys(&chat_id, &contact).await;
-        }
-    }
-
-    async fn keep_chat_keys(&self, chat_id: &str, contact: &str) {
-        match self.radio_keys(chat_id).await {
-            Ok(keys) => self.inbox().keep_keys(chat_id, contact, keys),
-            Err(error) => log::info!("no new radio keys for a chat now: {}", error.message),
-        }
-    }
-
     async fn on_radio_event(&self, event: RadioEvent) {
         match event {
             RadioEvent::TextReceived { from, text, .. } => {
@@ -851,12 +1076,17 @@ impl Core {
             .and_then(|contact| self.chat_with(&contact))
             .map(|chat| chat.id);
         let mut opened = self.open_packet(&account, &packet, from_chat.as_deref());
-        if matches!(
-            opened,
-            Err(Refusal::UnknownChat | Refusal::UnknownEpoch | Refusal::NotAuthentic)
-        ) {
-            // The chat may have moved to an epoch, or be new, since the keys were taken.
-            self.keep_radio_keys().await;
+        if matches!(opened, Err(Refusal::UnknownKey | Refusal::NotAuthentic)) {
+            // The contact's new key may be in the chat and not taken yet.
+            let chats: Vec<String> = self
+                .state()
+                .chats
+                .iter()
+                .map(|chat| chat.id.clone())
+                .collect();
+            for chat_id in chats {
+                self.read_radio_keys(&chat_id);
+            }
             opened = self.open_packet(&account, &packet, from_chat.as_deref());
         }
         let received = match opened {
@@ -911,7 +1141,30 @@ impl Core {
                     .chat_message(&account.public_key, chat_id, id)
                     .is_some()
         };
-        self.inbox().receive(packet, from_chat, known)
+        // Without a radio there is no mesh to pick keys for, and nothing to have received on.
+        let Some(mesh) = self
+            .attached()
+            .as_ref()
+            .map(|attached| attached.info.mesh.name())
+        else {
+            return Err(Refusal::UnknownChat);
+        };
+        let chats: Vec<(String, String)> = self
+            .state()
+            .chats
+            .iter()
+            .map(|chat| (chat.id.clone(), chat.contact.public_key.clone()))
+            .collect();
+        let now = now_ms();
+        let chats: Vec<ChatKeys> = chats
+            .into_iter()
+            .map(|(chat_id, contact)| ChatKeys {
+                keys: self.inner.radio_store.receiving_keys(&chat_id, mesh, now),
+                chat_id,
+                contact,
+            })
+            .collect();
+        self.inbox().receive(packet, &chats, from_chat, known)
     }
 
     /// The other radio confirmed the message sent with `ack`: its first try or a retry, also
@@ -958,6 +1211,7 @@ impl Core {
     pub(super) fn clear_radio(&self) {
         self.stop_radio();
         self.inbox().clear();
+        self.contact_devices().clear();
         self.heard().clear();
         self.early_confirmations().clear();
         if let Err(error) = self.inner.radio_store.clear() {
@@ -977,6 +1231,14 @@ impl Core {
         self.inner
             .radio
             .inbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn contact_devices(&self) -> MutexGuard<'_, HashMap<String, u32>> {
+        self.inner
+            .radio
+            .contact_devices
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -1004,6 +1266,15 @@ impl Core {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Whether a chat with `members` is the direct chat of `account` and `contact`: those two and
+/// nobody else. Only such a chat gets a radio key (#128).
+fn is_direct(members: &[(String, u32)], account: &str, contact: &str) -> bool {
+    members.len() == 2
+        && [account, contact]
+            .iter()
+            .all(|wanted| members.iter().any(|(member, _)| member == wanted))
 }
 
 /// A radio's settings as an interface shows them, and whether they are the preset the app
@@ -1052,7 +1323,7 @@ async fn await_confirmation(core: Weak<Inner>, awaited: Awaited) {
     }
 }
 
-/// Follows the radio's events, and keeps the chats' radio keys current while it does.
+/// Follows the radio's events, and keeps this phone's radio keys current while it does.
 async fn watch_radio(core: Weak<Inner>, mut events: broadcast::Receiver<RadioEvent>) {
     let mut refresh = tokio::time::interval(KEY_REFRESH);
     refresh.tick().await;
@@ -1068,9 +1339,31 @@ async fn watch_radio(core: Weak<Inner>, mut events: broadcast::Receiver<RadioEve
             },
             _ = refresh.tick() => {
                 let Some(core) = upgrade(&core) else { return };
-                core.keep_radio_keys().await;
+                core.refresh_radio_keys().await;
                 core.share_radio_address(None).await;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_direct;
+
+    #[test]
+    fn issue_128_a_group_gets_no_radio_key() {
+        let members = |names: &[&str]| -> Vec<(String, u32)> {
+            names.iter().map(|name| ((*name).to_owned(), 1)).collect()
+        };
+        assert!(is_direct(&members(&["ada", "bea"]), "ada", "bea"));
+        for group in [
+            &["ada", "bea", "cai"][..],
+            &["ada", "cai"],
+            &["ada"],
+            &["bea", "cai"],
+            &[],
+        ] {
+            assert!(!is_direct(&members(group), "ada", "bea"), "{group:?}");
         }
     }
 }

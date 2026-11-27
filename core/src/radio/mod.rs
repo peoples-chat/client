@@ -26,8 +26,10 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 pub use self::address::{AddressError, EXPECTED_PRESET, RADIO_ADDRESS_VERSION, RadioAddress};
-pub use self::inbox::{KEPT_EPOCHS, REPLAY_WINDOW, RadioInbox, ReceivedText, Refusal};
-pub use self::keys::{RADIO_KEY_BYTES, RADIO_KEY_LABEL, RadioKey, RadioKeyError, RadioKeys};
+pub use self::inbox::{ChatKeys, InboxKey, REPLAY_WINDOW, RadioInbox, ReceivedText, Refusal};
+pub use self::keys::{
+    RADIO_KEY_BYTES, RADIO_KEY_VERSION, RadioKey, RadioKeyError, RadioKeyRecord, new_radio_key,
+};
 pub use self::meshcore::{MAX_TEXT_BYTES, MeshCoreRadio};
 pub use self::mock::{MOCK_SETTINGS, MockMesh, MockPorts, MockRadio};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -42,6 +44,18 @@ const EVENT_BUFFER: usize = 256;
 #[non_exhaustive]
 pub enum Mesh {
     MeshCore,
+    /// No radio of this mesh can be used yet. Radio keys for it are exchanged and kept (#128).
+    Meshtastic,
+}
+
+impl Mesh {
+    /// The mesh's name in the records two apps exchange (#34, #128).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MeshCore => "meshcore",
+            Self::Meshtastic => "meshtastic",
+        }
+    }
 }
 
 /// The radio's identity and settings, as it reports them.

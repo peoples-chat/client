@@ -2,9 +2,10 @@
 //!
 //! - **The paired radio** (#24): which radio it is and where it was plugged in, to open it again.
 //! - **The switch that forces radio**, for testing until the core chooses the transport (#45).
-//! - **The counters** for what this phone sends: each chat's next counter in each epoch. A
-//!   counter is stored before its packet goes out, so that it is never used twice with one key
-//!   (`docs/radio-format-v0.md`).
+//! - **The radio keys** (#128): this phone's current key for each chat and mesh, with its next
+//!   counter, and the keys the contacts sent. A counter is stored before its packet goes out, so
+//!   that it is never used twice with one key (`docs/radio-format-v0.md`). A damaged file loses
+//!   the keys with their counters: this phone then makes new keys.
 //! - **The contacts' radios:** the address book, which their radio address records fill (#34),
 //!   and which record this phone shared in each chat.
 //! - **Every message that travelled by radio,** sent or received, with its id. A received one is
@@ -17,13 +18,52 @@
 //!
 //! The file is small, and written whole on every change.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use crate::radio::RadioAddress;
+use crate::radio::{InboxKey, RadioAddress, RadioKey, RadioKeyRecord, new_radio_key};
+
+/// How long a contact's key still opens packets once a newer one has come: long enough for a
+/// packet, and its retry (#41), already on the way.
+pub const OLD_KEY_GRACE_MS: u64 = 10 * 60 * 1000;
+/// How many of a contact's keys a chat keeps for one mesh, the current one included.
+const KEPT_KEYS: usize = 4;
+/// How many meshes a chat keeps a contact's keys for, known and unknown.
+const KEPT_MESHES: usize = 8;
+
+/// This phone's current key for one chat and mesh (#128).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnKey {
+    pub record: RadioKeyRecord,
+    /// The chat's members, and their device counts, when the key was made: a change to them
+    /// calls for a new key.
+    pub members: Vec<(String, u32)>,
+    /// The counter of the next packet sealed with the key.
+    next_counter: u64,
+    /// The record has been handed to the chat, so the key may seal packets.
+    pub shared: bool,
+}
+
+/// What one packet is sealed with.
+pub struct SendingKey {
+    pub key: RadioKey,
+    pub number: u64,
+    /// Stored as used already.
+    pub counter: u64,
+}
+
+/// A key that the contact sent in a chat.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ContactKey {
+    record: RadioKeyRecord,
+    /// Once a newer key for the mesh has come: when the contact made it, by their clock, and
+    /// when this phone got it, both in milliseconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replaced: Option<(u64, u64)>,
+}
 
 /// A message that travelled by radio.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,32 +132,18 @@ const KEEP_TRANSMISSIONS_MS: u64 = 48 * 60 * 60 * 1000;
 /// The window the airtime cap counts over (#51).
 pub const AIRTIME_WINDOW_MS: u64 = 60 * 60 * 1000;
 
-/// Why no counter can be had.
-#[derive(Debug, thiserror::Error)]
-pub enum CounterError {
-    /// The file was damaged, so the counters it held are lost. The chat sends again from its
-    /// next epoch, whose key has never been used.
-    #[error("the radio counters were lost; the chat sends again from epoch {0}")]
-    Lost(u64),
-    #[error("could not store the counter: {0}")]
-    Store(#[from] std::io::Error),
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Data {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pairing: Option<Pairing>,
     #[serde(default)]
     forced: bool,
-    /// Chat → epoch → the next counter.
+    /// Chat → mesh → this phone's current key.
     #[serde(default)]
-    counters: BTreeMap<String, BTreeMap<u64, u64>>,
-    /// Set once a damaged file was found: a chat may then send only in epochs from
-    /// `send_from`, which it gets on its first try.
+    own_keys: BTreeMap<String, BTreeMap<String, OwnKey>>,
+    /// Chat → the keys its contact sent, oldest first within each mesh.
     #[serde(default)]
-    counters_lost: bool,
-    #[serde(default)]
-    send_from: BTreeMap<String, u64>,
+    contact_keys: BTreeMap<String, Vec<ContactKey>>,
     /// Contact's account key → their radio's newest record.
     #[serde(default)]
     contacts: BTreeMap<String, RadioAddress>,
@@ -142,41 +168,33 @@ pub struct RadioStore {
 }
 
 impl RadioStore {
-    /// The store in `data_dir`. A damaged file is kept aside as `radio.json.damaged`. What it
-    /// held is lost, and so are the counters: no chat sends again in an epoch it may have sent
-    /// in before.
+    /// The store in `data_dir`. A damaged file is kept aside as `radio.json.damaged`, and what it
+    /// held is lost.
     pub fn open(data_dir: &Path) -> Self {
         let path = data_dir.join("radio.json");
         let data = match std::fs::read(&path) {
             Ok(json) => serde_json::from_slice(&json).unwrap_or_else(|error| {
-                log::error!("the radio store is damaged, and its counters are lost: {error}");
+                // Only where it went wrong: the message could quote a key.
+                log::error!(
+                    "the radio store is damaged at line {}, column {}",
+                    error.line(),
+                    error.column()
+                );
                 if let Err(error) = std::fs::rename(&path, path.with_extension("json.damaged")) {
                     log::warn!("could not keep the damaged radio store aside: {error}");
                 }
-                Data {
-                    counters_lost: true,
-                    ..Data::default()
-                }
+                Data::default()
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Data::default(),
             Err(error) => {
-                // Unreadable is as bad as damaged for the counters.
-                log::error!("could not read the radio store, and its counters are lost: {error}");
-                Data {
-                    counters_lost: true,
-                    ..Data::default()
-                }
+                log::error!("could not read the radio store: {error}");
+                Data::default()
             }
         };
-        let lost = data.counters_lost;
-        let store = Self {
+        Self {
             path,
             data: Mutex::new(data),
-        };
-        if lost && let Err(error) = store.save(&store.lock()) {
-            log::warn!("could not note that the radio counters are lost: {error}");
         }
-        store
     }
 
     /// The radio paired over a cable, if any (#24).
@@ -204,30 +222,182 @@ impl RadioStore {
         self.save(&data)
     }
 
-    /// The counter for the next packet in the chat `chat_id` in `epoch`, stored as used before
-    /// this returns.
-    pub fn take_counter(&self, chat_id: &str, epoch: u64) -> Result<u64, CounterError> {
+    /// This phone's current key for the chat `chat_id` and `mesh`.
+    pub fn own_key(&self, chat_id: &str, mesh: &str) -> Option<OwnKey> {
+        self.lock().own_keys.get(chat_id)?.get(mesh).cloned()
+    }
+
+    /// This phone's key for the chat `chat_id` and `mesh`, whose members are `members` now: the
+    /// one kept, or a new random one if there is none or the members have changed since it was
+    /// made. Kept before this returns.
+    pub fn own_key_for(
+        &self,
+        chat_id: &str,
+        mesh: &str,
+        members: &[(String, u32)],
+        now_ms: u64,
+    ) -> std::io::Result<OwnKey> {
         let mut data = self.lock();
-        if data.counters_lost {
-            let from = *data
-                .send_from
-                .entry(chat_id.to_owned())
-                .or_insert(epoch + 1);
-            if epoch < from {
-                self.save(&data)?;
-                return Err(CounterError::Lost(from));
-            }
+        let kept = data.own_keys.get(chat_id).and_then(|keys| keys.get(mesh));
+        if let Some(kept) = kept
+            && kept.members == members
+        {
+            return Ok(kept.clone());
         }
-        let next = data
-            .counters
+        // Later than the key before it, also if the clock went back.
+        let (number, at) = kept.map_or((1, now_ms), |kept| {
+            (kept.record.n + 1, now_ms.max(kept.record.at + 1))
+        });
+        let made = OwnKey {
+            record: RadioKeyRecord::new(mesh, &new_radio_key(), number, at),
+            members: members.to_vec(),
+            next_counter: 0,
+            shared: false,
+        };
+        data.own_keys
             .entry(chat_id.to_owned())
             .or_default()
-            .entry(epoch)
-            .or_insert(0);
-        let counter = *next;
-        *next += 1;
+            .insert(mesh.to_owned(), made.clone());
         self.save(&data)?;
-        Ok(counter)
+        Ok(made)
+    }
+
+    /// Notes that the record of the key `number` has been handed to the chat.
+    pub fn set_key_shared(&self, chat_id: &str, mesh: &str, number: u64) -> std::io::Result<()> {
+        let mut data = self.lock();
+        let Some(key) = data
+            .own_keys
+            .get_mut(chat_id)
+            .and_then(|keys| keys.get_mut(mesh))
+            .filter(|key| key.record.n == number)
+        else {
+            return Ok(());
+        };
+        key.shared = true;
+        self.save(&data)
+    }
+
+    /// The key and counter for the next packet in the chat `chat_id` over `mesh`, the counter
+    /// stored as used before this returns. Nothing while the current key hasn't been shared.
+    pub fn take_counter(&self, chat_id: &str, mesh: &str) -> std::io::Result<Option<SendingKey>> {
+        let mut data = self.lock();
+        let Some(own) = data
+            .own_keys
+            .get_mut(chat_id)
+            .and_then(|keys| keys.get_mut(mesh))
+            .filter(|own| own.shared)
+        else {
+            return Ok(None);
+        };
+        let Some(key) = own.record.radio_key() else {
+            return Ok(None);
+        };
+        let sending = SendingKey {
+            key,
+            number: own.record.n,
+            counter: own.next_counter,
+        };
+        own.next_counter += 1;
+        self.save(&data)?;
+        Ok(Some(sending))
+    }
+
+    /// Keeps `record`, a key the contact sent in the chat `chat_id`. The newest by the contact's
+    /// clock is current for its mesh; the ones before it are replaced from `now_ms`. Returns
+    /// whether it was kept: not a key kept already, nor one older than all those kept.
+    pub fn add_contact_key(
+        &self,
+        chat_id: &str,
+        record: RadioKeyRecord,
+        now_ms: u64,
+    ) -> std::io::Result<bool> {
+        let mut data = self.lock();
+        let keys = data.contact_keys.entry(chat_id.to_owned()).or_default();
+        let known = keys
+            .iter()
+            .any(|kept| kept.record.mesh == record.mesh && kept.record.key == record.key);
+        let meshes: BTreeSet<&str> = keys.iter().map(|kept| kept.record.mesh.as_str()).collect();
+        if known || (meshes.len() >= KEPT_MESHES && !meshes.contains(record.mesh.as_str())) {
+            return Ok(false);
+        }
+        let mesh = record.mesh.clone();
+        let made = (record.at, record.n);
+        keys.push(ContactKey {
+            record,
+            replaced: None,
+        });
+        keys.sort_by_key(|kept| (kept.record.at, kept.record.n));
+        // Each key but the newest of the mesh was replaced by the one after it.
+        let mut newer: Option<u64> = None;
+        let mut of_mesh = 0;
+        let mut dropped = Vec::new();
+        for (index, kept) in keys.iter_mut().enumerate().rev() {
+            if kept.record.mesh != mesh {
+                continue;
+            }
+            of_mesh += 1;
+            if let Some(newer) = newer {
+                let since = kept.replaced.map_or(now_ms, |(_, since)| since);
+                kept.replaced = Some((newer, since));
+            }
+            newer = Some(kept.record.at);
+            if of_mesh > KEPT_KEYS {
+                dropped.push(index);
+            }
+        }
+        let was_dropped = dropped
+            .iter()
+            .any(|index| (keys[*index].record.at, keys[*index].record.n) == made);
+        // From the back, so that the places stay right.
+        for index in dropped {
+            keys.remove(index);
+        }
+        self.save(&data)?;
+        Ok(!was_dropped)
+    }
+
+    /// Every key the contact sent in the chat `chat_id` that is kept, whatever its mesh.
+    pub fn contact_key_records(&self, chat_id: &str) -> Vec<RadioKeyRecord> {
+        self.lock()
+            .contact_keys
+            .get(chat_id)
+            .map_or_else(Vec::new, |keys| {
+                keys.iter().map(|kept| kept.record.clone()).collect()
+            })
+    }
+
+    /// The contact's keys that open packets in the chat `chat_id` over `mesh` at `now_ms`: the
+    /// current one, and those replaced less than [`OLD_KEY_GRACE_MS`] ago.
+    pub fn receiving_keys(&self, chat_id: &str, mesh: &str, now_ms: u64) -> Vec<InboxKey> {
+        let data = self.lock();
+        data.contact_keys
+            .get(chat_id)
+            .into_iter()
+            .flatten()
+            .filter(|kept| kept.record.mesh == mesh)
+            .filter(|kept| {
+                kept.replaced
+                    .is_none_or(|(_, since)| now_ms < since.saturating_add(OLD_KEY_GRACE_MS))
+            })
+            .filter_map(|kept| {
+                Some(InboxKey {
+                    number: kept.record.n,
+                    key: kept.record.radio_key()?,
+                    replaced_at: kept
+                        .replaced
+                        .map(|(at, _)| u32::try_from(at / 1000).unwrap_or(u32::MAX)),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether `key`, in hex, is one of this phone's own current keys.
+    pub fn is_own_key(&self, key: &str) -> bool {
+        self.lock()
+            .own_keys
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|own| own.record.key == key)
     }
 
     /// The radio of the contact whose account key is `contact`.
@@ -452,7 +622,12 @@ impl RadioStore {
         // Written whole and synced, then moved into place, so that a crash leaves the old file
         // or the new one: a counter that went out is never forgotten.
         let temporary = self.path.with_extension("json.tmp");
-        let mut file = std::fs::File::create(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        // It holds the radio keys: for this user only.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&temporary)?;
         std::io::Write::write_all(&mut file, &json)?;
         file.sync_all()?;
         std::fs::rename(&temporary, &self.path)
@@ -563,48 +738,161 @@ mod tests {
         assert!(!timed_out("awaited") && !timed_out("confirmed") && !timed_out("received"));
     }
 
-    #[test]
-    fn counters_go_up_per_chat_and_epoch_and_survive_a_restart() {
-        let data = tempfile::tempdir().unwrap();
-        let store = RadioStore::open(data.path());
-        assert_eq!(store.take_counter("a", 7).unwrap(), 0);
-        assert_eq!(store.take_counter("a", 7).unwrap(), 1);
-        assert_eq!(store.take_counter("a", 8).unwrap(), 0);
-        assert_eq!(store.take_counter("b", 7).unwrap(), 0);
+    fn members(contact_devices: u32) -> Vec<(String, u32)> {
+        vec![("ada".to_owned(), 1), ("bea".to_owned(), contact_devices)]
+    }
 
-        let reopened = RadioStore::open(data.path());
-        assert_eq!(reopened.take_counter("a", 7).unwrap(), 2);
-        assert_eq!(reopened.take_counter("a", 8).unwrap(), 1);
+    /// The counter of the next packet in the chat `a`, and its key.
+    fn take(store: &RadioStore) -> (u64, [u8; 32], u64) {
+        let sending = store.take_counter("a", "meshcore").unwrap().unwrap();
+        (sending.number, *sending.key, sending.counter)
     }
 
     #[test]
-    fn a_damaged_file_stops_sending_until_the_next_epoch() {
+    fn issue_128_own_keys_keep_their_counters_across_restarts_and_change_with_the_members() {
         let data = tempfile::tempdir().unwrap();
-        std::fs::write(data.path().join("radio.json"), b"{not json").unwrap();
         let store = RadioStore::open(data.path());
-        assert!(data.path().join("radio.json.damaged").exists());
-        // Epoch 7 may have been used before the damage, with counters now lost.
-        assert!(matches!(
-            store.take_counter("a", 7),
-            Err(CounterError::Lost(8))
-        ));
-        assert!(matches!(
-            store.take_counter("a", 7),
-            Err(CounterError::Lost(8))
-        ));
-        assert_eq!(store.take_counter("a", 8).unwrap(), 0);
-        // Each chat on its own: b's first try is in epoch 3.
-        assert!(matches!(
-            store.take_counter("b", 3),
-            Err(CounterError::Lost(4))
-        ));
-        // Also after a restart.
+        let first = store
+            .own_key_for("a", "meshcore", &members(1), 1_000)
+            .unwrap();
+        assert_eq!(first.record.n, 1);
+        // Nothing is sealed with a key the chat doesn't have.
+        assert!(store.take_counter("a", "meshcore").unwrap().is_none());
+        store.set_key_shared("a", "meshcore", 1).unwrap();
+        let (number, key, counter) = take(&store);
+        assert_eq!((number, counter), (1, 0));
+        assert_eq!(take(&store), (1, key, 1));
+
+        // Another chat, and another mesh, have keys of their own.
+        let other_chat = store
+            .own_key_for("b", "meshcore", &members(1), 1_000)
+            .unwrap();
+        let other_mesh = store
+            .own_key_for("a", "meshtastic", &members(1), 1_000)
+            .unwrap();
+        assert_ne!(other_chat.record.key, first.record.key);
+        assert_ne!(other_mesh.record.key, first.record.key);
+
+        // The same key and the next counter after a restart.
         let reopened = RadioStore::open(data.path());
-        assert!(matches!(
-            reopened.take_counter("a", 7),
-            Err(CounterError::Lost(8))
-        ));
-        assert_eq!(reopened.take_counter("a", 8).unwrap(), 1);
+        let kept = reopened
+            .own_key_for("a", "meshcore", &members(1), 2_000)
+            .unwrap();
+        assert_eq!(kept.record, first.record);
+        assert_eq!(take(&reopened), (1, key, 2));
+
+        // The members change: a new key, made later even with the clock gone back.
+        let next = reopened
+            .own_key_for("a", "meshcore", &members(2), 500)
+            .unwrap();
+        assert_eq!((next.record.n, next.record.at), (2, 1_001));
+        assert_ne!(next.record.key, first.record.key);
+        assert!(!next.shared);
+        assert!(reopened.take_counter("a", "meshcore").unwrap().is_none());
+        // A late note about the old key doesn't count for the new one.
+        reopened.set_key_shared("a", "meshcore", 1).unwrap();
+        assert!(reopened.take_counter("a", "meshcore").unwrap().is_none());
+        reopened.set_key_shared("a", "meshcore", 2).unwrap();
+        assert_eq!(take(&reopened).2, 0);
+    }
+
+    #[test]
+    fn issue_128_a_damaged_file_means_new_keys() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let first = store
+            .own_key_for("a", "meshcore", &members(1), 1_000)
+            .unwrap();
+        std::fs::write(data.path().join("radio.json"), b"{not json").unwrap();
+        let reopened = RadioStore::open(data.path());
+        assert!(data.path().join("radio.json.damaged").exists());
+        // The counters are lost, and the key with them, so no nonce repeats.
+        assert_eq!(reopened.own_key("a", "meshcore"), None);
+        let next = reopened
+            .own_key_for("a", "meshcore", &members(1), 2_000)
+            .unwrap();
+        assert_ne!(next.record.key, first.record.key);
+    }
+
+    fn contact_key(mesh: &str, number: u64) -> RadioKeyRecord {
+        let key = new_radio_key();
+        RadioKeyRecord::new(mesh, &key, number, number * 1_000_000)
+    }
+
+    fn numbers(store: &RadioStore, mesh: &str, now_ms: u64) -> Vec<(u64, Option<u32>)> {
+        store
+            .receiving_keys("a", mesh, now_ms)
+            .iter()
+            .map(|key| (key.number, key.replaced_at))
+            .collect()
+    }
+
+    #[test]
+    fn issue_128_a_replaced_key_is_kept_for_packets_on_the_way_then_not_used() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let first = contact_key("meshcore", 1);
+        assert!(store.add_contact_key("a", first.clone(), 100).unwrap());
+        assert!(!store.add_contact_key("a", first.clone(), 100).unwrap());
+        assert!(
+            store
+                .add_contact_key("a", contact_key("meshcore", 2), 5_000)
+                .unwrap()
+        );
+
+        let reopened = RadioStore::open(data.path());
+        // Just replaced: it still opens what was sent before the newer key was made.
+        assert_eq!(
+            numbers(&reopened, "meshcore", 5_000),
+            vec![(1, Some(2_000)), (2, None)]
+        );
+        // Later it opens nothing, and reading the chat's history again changes nothing.
+        let later = 5_000 + OLD_KEY_GRACE_MS;
+        assert!(!reopened.add_contact_key("a", first, later).unwrap());
+        assert_eq!(numbers(&reopened, "meshcore", later), vec![(2, None)]);
+
+        // Only the newest few are kept; an old one that comes again stays out.
+        for number in 3..=6 {
+            reopened
+                .add_contact_key("a", contact_key("meshcore", number), later)
+                .unwrap();
+        }
+        let kept: Vec<u64> = reopened
+            .contact_key_records("a")
+            .iter()
+            .map(|record| record.n)
+            .collect();
+        assert_eq!(kept, vec![3, 4, 5, 6]);
+        assert!(
+            !reopened
+                .add_contact_key("a", contact_key("meshcore", 1), later)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn issue_128_each_mesh_has_its_own_current_key() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        for (mesh, number) in [("meshcore", 1), ("meshtastic", 2), ("future-mesh", 3)] {
+            assert!(
+                store
+                    .add_contact_key("a", contact_key(mesh, number), 100)
+                    .unwrap()
+            );
+        }
+        // None replaced another.
+        for (mesh, number) in [("meshcore", 1), ("meshtastic", 2)] {
+            assert_eq!(numbers(&store, mesh, u64::MAX), vec![(number, None)]);
+        }
+        assert_eq!(store.contact_key_records("a").len(), 3);
+        // A chat doesn't keep keys for ever more meshes.
+        for number in 0..20 {
+            store
+                .add_contact_key("a", contact_key(&format!("mesh-{number}"), 4), 100)
+                .unwrap();
+        }
+        assert_eq!(store.contact_key_records("a").len(), KEPT_MESHES);
     }
 
     fn record(key: &str, at: u64) -> RadioAddress {
@@ -673,7 +961,7 @@ mod tests {
         let cleared = RadioStore::open(data.path());
         assert!(!cleared.forced());
         assert!(cleared.message("m1").is_none());
-        assert_eq!(cleared.take_counter("chat", 1).unwrap(), 0);
+        assert!(cleared.contact_key_records("chat").is_empty());
     }
 
     #[test]

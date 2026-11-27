@@ -39,17 +39,13 @@ const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
 const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 /// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
 const HISTORY_LIMIT: usize = 200;
-/// MDK's name for `MLS-Exporter("marmot", "group-event", 32)`, one of the three exporter secrets
-/// it computes for every epoch and lets the app read.
-const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
-const EXPORTER_BYTES: usize = 32;
 /// The surface that MDK's audit log records for a key export: a fixed label, never a person or a
 /// key.
 const EXPORT_CALLER: &str = "peoples_chat_core::Core::export_account_key";
-/// How often [`Messaging::chat_secret`] tries while the chat is changing, and how long it waits
-/// in between.
-const SECRET_ATTEMPTS: usize = 5;
-const SECRET_RETRY: Duration = Duration::from_millis(100);
+/// How often [`Messaging::chat_membership`] tries while the chat is changing, and how long it
+/// waits in between.
+const MEMBERSHIP_ATTEMPTS: usize = 5;
+const MEMBERSHIP_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
@@ -59,6 +55,9 @@ pub const INVITE_TOKEN_KIND: u64 = 9_910;
 /// The app's own kind for a radio address record (#34), which each app sends in its direct
 /// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
 pub const RADIO_ADDRESS_KIND: u64 = 9_911;
+/// The app's own kind for a radio key record (#128), which each app sends in its direct chats
+/// when it has a radio, and again when the chat's membership changes. Provisional, like 9910.
+pub const RADIO_KEY_KIND: u64 = 9_912;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -293,12 +292,43 @@ fn radio_address(record: &TimelineMessageRecord) -> Option<RadioAddressItem> {
     )
 }
 
+/// A radio key record that another member sent in a chat (#128), as it came: the core reads it.
+/// `Debug` leaves the record out, as it holds a key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RadioKeyItem {
+    pub chat_id: String,
+    /// The sender's public key, in hex, as MLS authenticated it.
+    pub sender: String,
+    pub record: String,
+}
+
+impl std::fmt::Debug for RadioKeyItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RadioKeyItem")
+            .field("chat_id", &self.chat_id)
+            .field("sender", &self.sender)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The radio key record in `record`, if it is one another member sent.
+fn radio_key(record: &TimelineMessageRecord) -> Option<RadioKeyItem> {
+    (record.kind == RADIO_KEY_KIND && record.direction == "received" && !record.deleted).then(
+        || RadioKeyItem {
+            chat_id: record.group_id_hex.clone(),
+            sender: record.sender.clone(),
+            record: record.plaintext.clone(),
+        },
+    )
+}
+
 /// What can come in a chat, as the core follows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    RadioKey(RadioKeyItem),
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -306,6 +336,7 @@ fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
         .map(ChatItem::Text)
         .or_else(|| invite_token(record).map(ChatItem::InviteToken))
         .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
+        .or_else(|| radio_key(record).map(ChatItem::RadioKey))
 }
 
 /// What comes in the account's chats as it is added or changes: text messages, for example
@@ -439,21 +470,13 @@ pub enum MessagingError {
     PhotoDownload(String),
 }
 
-/// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
-pub struct ChatSecret {
+/// Who is in a chat in one MLS epoch (#128).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatMembership {
     pub epoch: u64,
-    /// `MLS-Exporter("marmot", "group-event", 32)`. MDK derives the key for the chat's events on
-    /// the relays from it, so it never leaves the core.
-    pub secret: Zeroizing<Vec<u8>>,
-}
-
-impl std::fmt::Debug for ChatSecret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatSecret")
-            .field("epoch", &self.epoch)
-            .field("secret", &"<redacted>")
-            .finish()
-    }
+    /// Each member account's public key, in hex, and how many of its devices are in the chat.
+    /// Sorted by key.
+    pub members: Vec<(String, u32)>,
 }
 
 impl MessagingError {
@@ -942,6 +965,46 @@ impl Messaging {
         Ok(())
     }
 
+    /// The radio key records the other members sent in the chat `chat_id` (#128), oldest first.
+    pub fn radio_key_records(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<RadioKeyItem>, MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        Ok(page.messages.iter().filter_map(radio_key).collect())
+    }
+
+    /// Sends this phone's radio key record in the chat `chat_id` (#128): an app event inside the
+    /// chat's MLS messages, and nowhere else.
+    pub async fn send_radio_key(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        record: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .send_custom_event(
+                account_hex,
+                &group_id(chat_id)?,
+                RADIO_KEY_KIND,
+                Vec::new(),
+                record.to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
     /// chat without a request (#95).
     pub async fn send_invite_token(
@@ -1003,38 +1066,38 @@ impl Messaging {
         }
     }
 
-    /// The secret both members of the chat `chat_id` hold in its current MLS epoch (#37).
+    /// Who is in the chat `chat_id` in its current MLS epoch (#128).
     ///
-    /// MDK lets the app read three exporter secrets of a chat, all of the current epoch; this is
-    /// the one for group events. While the account has a change to the chat that the relays
-    /// haven't confirmed yet, MDK gives the secret of the epoch that change starts but reports
-    /// the epoch before it, so this reads only while the chat is settled, and fails if it doesn't
-    /// settle within half a second. `docs/spikes/37-radio-keys.md` explains the choice.
-    pub async fn chat_secret(
+    /// This reads only while the chat is settled: while the account has a change to the chat that
+    /// the relays haven't confirmed yet, the change isn't the chat's yet. It fails if the chat
+    /// doesn't settle within half a second.
+    pub async fn chat_membership(
         &self,
         account_hex: &str,
         chat_id: &str,
-    ) -> Result<ChatSecret, MessagingError> {
+    ) -> Result<ChatMembership, MessagingError> {
         let group_id = group_id(chat_id)?;
-        let accounts = self.runtime.accounts();
         let settled =
             |state: &AppGroupMlsState| state.lifecycle_state == AppGroupLifecycleState::Stable;
-        for attempt in 0..SECRET_ATTEMPTS {
+        for attempt in 0..MEMBERSHIP_ATTEMPTS {
             if attempt > 0 {
-                tokio::time::sleep(SECRET_RETRY).await;
+                tokio::time::sleep(MEMBERSHIP_RETRY).await;
             }
             let before = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if !settled(&before) {
                 continue;
             }
-            let secret = accounts
-                .exporter_secret(account_hex, &group_id, GROUP_EVENT_EXPORTER, EXPORTER_BYTES)
-                .await?;
+            let members = self.runtime.group_members(account_hex, &group_id).await?;
             let after = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if settled(&after) && before.epoch == after.epoch {
-                return Ok(ChatSecret {
+                let mut members: Vec<(String, u32)> = members
+                    .into_iter()
+                    .map(|member| (member.member_id_hex, member.device_count))
+                    .collect();
+                members.sort();
+                return Ok(ChatMembership {
                     epoch: after.epoch,
-                    secret,
+                    members,
                 });
             }
         }
