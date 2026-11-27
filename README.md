@@ -101,5 +101,13 @@ pnpm test
 pnpm build
 ```
 
+## Releases
+
+`pnpm release:android` and `pnpm release:ios` build unsigned release artefacts into `target/release-artifacts/`, and
+`pnpm version:check` checks that every file carries the same version. Version numbers, signing and the proposed release
+workflow are in [docs/release/README.md](docs/release/README.md).
+
+## Radio lab
+
 With the radio lab's hardware plugged in, `pnpm verify:radio` runs the checks that need it
 ([docs/radio-lab.md](docs/radio-lab.md)).
