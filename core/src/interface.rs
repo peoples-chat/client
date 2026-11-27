@@ -150,6 +150,29 @@ pub struct Chat {
     /// Why the chat isn't reachable by radio, when it is `unreachable` (#44).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radio_issue: Option<RadioIssue>,
+    /// The user started the chat, and the invitation hasn't reached the contact yet: they don't
+    /// have the chat (#126). The core keeps sending it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undelivered: Option<UndeliveredInvitation>,
+}
+
+/// An invitation to a chat that the core couldn't deliver to the contact yet (#126).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndeliveredInvitation {
+    /// When delivery first failed, in milliseconds since the Unix epoch.
+    pub since: u64,
+    /// Why, when MDK knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<UndeliveredReason>,
+}
+
+/// Why an invitation couldn't be delivered (#126).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UndeliveredReason {
+    /// A relay refused it as too large.
+    TooLarge,
 }
 
 /// One of the relays the account's messages travel through (#88).
@@ -352,6 +375,13 @@ pub enum CoreEvent {
         /// Why the chat isn't reachable by radio, when it is `unreachable`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radio_issue: Option<RadioIssue>,
+    },
+    /// The invitation to a chat the user started couldn't be delivered, or now has been (#126).
+    /// Without `undelivered`, the contact has it.
+    InvitationDeliveryChanged {
+        chat_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        undelivered: Option<UndeliveredInvitation>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {

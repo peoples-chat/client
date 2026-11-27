@@ -22,7 +22,7 @@ use crate::invite;
 use crate::invites::{InviteRecord, Invites};
 use crate::messaging::{
     ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
-    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
+    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, UndeliveredInvitation, canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
@@ -33,6 +33,7 @@ use crate::transport::{Route, route};
 
 mod pairing;
 mod radio;
+mod undelivered;
 mod waiting;
 
 /// How many events a listener may fall behind before it misses some.
@@ -77,6 +78,11 @@ struct Inner {
     outbox: Outbox,
     /// Chats whose waiting messages are being sent.
     flushing: Mutex<std::collections::HashSet<String>>,
+    /// Invitations the user sent that haven't reached the contact yet, as MDK last listed them
+    /// (#126). Whoever holds both locks takes `state` first.
+    undelivered: Mutex<Vec<UndeliveredInvitation>>,
+    /// Wakes the invitations' watcher to send undelivered ones again: relays are back.
+    invitation_wake: Arc<tokio::sync::Notify>,
 }
 
 impl Core {
@@ -131,6 +137,8 @@ impl Core {
                 radio: radio::RadioParts::default(),
                 outbox,
                 flushing: Mutex::new(std::collections::HashSet::new()),
+                undelivered: Mutex::new(Vec::new()),
+                invitation_wake: Arc::new(tokio::sync::Notify::new()),
             }),
         };
         // The switch, and the paired radio until the shell gives the core its ports (#24).
@@ -436,6 +444,7 @@ impl Core {
         log::info!("account deleted");
         *self.state() = Snapshot::default();
         *self.reach() = Reachability::default();
+        self.undelivered().clear();
         if let Err(error) = self.inner.avatars.clear() {
             log::warn!("could not remove the avatars: {error}");
         }
@@ -499,6 +508,8 @@ impl Core {
             relays: Vec::new(),
         };
         self.apply(&started, name, now_ms());
+        // Whether the invitation reached the contact's relays (#126).
+        self.read_undelivered_soon();
         // A personal invitation's token goes back to the inviter, whose app then opens the chat
         // without a request (#95). Without it, the chat still works: as a request.
         if let Some(token) = &invite.token
@@ -870,6 +881,10 @@ impl Core {
                 None
             }
         };
+        // The invitations that haven't reached their contacts, before the chats, so that the
+        // chats start out showing them (#126). Notices from here on reach the watcher.
+        let invitation_failures = self.inner.messaging.follow_invitation_failures(account_hex);
+        self.read_undelivered().await;
         let mut unnamed = Vec::new();
         for chat in chats.current() {
             self.reach().set_chat_relays(&chat.id, &chat.relays);
@@ -926,7 +941,17 @@ impl Core {
                 tokio::time::sleep(CONTACT_REFRESH).await;
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
+        let invitation_watcher = tokio::spawn(undelivered::watch_invitations(
+            Arc::downgrade(&self.inner),
+            invitation_failures,
+            Arc::clone(&self.inner.invitation_wake),
+        ));
+        let mut watchers = vec![
+            chat_watcher,
+            message_watcher,
+            contact_watcher,
+            invitation_watcher,
+        ];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
@@ -1046,6 +1071,7 @@ impl Core {
                 reach: self.reach().reach(&chat.id, Instant::now()),
                 // The radio's part follows right after, from `radio_chat_added`.
                 radio_issue: None,
+                undelivered: undelivered::view_for(&self.undelivered(), &chat.id),
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
@@ -1124,6 +1150,8 @@ impl Core {
             // chats' reach shouldn't wait for it.
             let core = self.clone();
             tokio::spawn(async move { core.inner.messaging.connectivity_restored().await });
+            // Invitations that couldn't be delivered go again now too (#126).
+            self.inner.invitation_wake.notify_one();
         }
         self.refresh_reach(now)
     }

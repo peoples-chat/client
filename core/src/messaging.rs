@@ -19,11 +19,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
-    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, MarmotDeployment, RelayLiveness,
-    RelayLivenessStatus, RuntimeChatsSubscription, RuntimeRelayLivenessSubscription,
-    RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
-    TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
-    UserProfileMetadata,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime, MarmotDeployment,
+    PendingWelcomeDelivery, RelayLiveness, RelayLivenessStatus, RuntimeChatsSubscription,
+    RuntimeEventsSubscription, RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
+    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
+    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
 
@@ -397,6 +397,57 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
             .map(|relay| canonical_relay(relay))
             .collect(),
     })
+}
+
+/// An invitation to a chat, an MLS Welcome, that MDK could not deliver to the other person's
+/// inbox relays yet (#126). MDK keeps it and can send it again; it lists it until a relay has
+/// taken it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UndeliveredInvitation {
+    /// The chat it invites to.
+    pub chat_id: String,
+    /// MDK's handle for sending it again.
+    pub message_id: String,
+    /// When MDK recorded that it couldn't deliver it, in milliseconds since the Unix epoch.
+    pub since: u64,
+    /// A relay refused it as too large. MDK says nothing more specific about a failure.
+    pub too_large: bool,
+}
+
+fn undelivered_invitation(pending: PendingWelcomeDelivery) -> UndeliveredInvitation {
+    UndeliveredInvitation {
+        chat_id: pending.group_id_hex,
+        message_id: pending.message_id_hex,
+        // MDK records seconds.
+        since: pending.recorded_at.saturating_mul(1000),
+        too_large: pending.size_class.is_some(),
+    }
+}
+
+/// MDK's notices that an invitation the account sent could not be delivered (#126). MDK sends
+/// each notice once per run of the app, and drops notices a slow listener missed, so they say
+/// when to read [`Messaging::undelivered_invitations`] again rather than standing on their own.
+pub struct InvitationFailures {
+    account_hex: String,
+    subscription: RuntimeEventsSubscription,
+}
+
+impl InvitationFailures {
+    /// The chat of the next invitation that could not be delivered. `None` once messaging has
+    /// stopped.
+    pub async fn next(&mut self) -> Option<String> {
+        loop {
+            if let MarmotAppEvent::WelcomeDeliveryPending {
+                account_id_hex,
+                group_id,
+                ..
+            } = self.subscription.recv().await?
+                && account_id_hex == self.account_hex
+            {
+                return Some(group_id.to_string());
+            }
+        }
+    }
 }
 
 /// One of the account's relays, and whether the account's connection to it is open.
@@ -1052,6 +1103,43 @@ impl Messaging {
             subscription,
             ready: VecDeque::new(),
         })
+    }
+
+    /// The invitations the account sent that haven't reached the other person's inbox relays yet,
+    /// oldest first (#126). Right after a chat starts, this waits for the invitation's first
+    /// attempt.
+    pub async fn undelivered_invitations(
+        &self,
+        account_hex: &str,
+    ) -> Result<Vec<UndeliveredInvitation>, MessagingError> {
+        Ok(self
+            .runtime
+            .pending_welcome_deliveries(account_hex)
+            .await?
+            .into_iter()
+            .map(undelivered_invitation)
+            .collect())
+    }
+
+    /// Sends an invitation that couldn't be delivered again, the same one: nothing in the chat
+    /// changes (#126). Fails if no relay takes it this time either; MDK then keeps it listed.
+    pub async fn redeliver_invitation(
+        &self,
+        account_hex: &str,
+        message_id: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .redeliver_welcome(account_hex, message_id)
+            .await?;
+        Ok(())
+    }
+
+    /// Follows MDK's notices about the account's invitations that couldn't be delivered (#126).
+    pub fn follow_invitation_failures(&self, account_hex: &str) -> InvitationFailures {
+        InvitationFailures {
+            account_hex: account_hex.to_owned(),
+            subscription: self.runtime.subscribe_events(),
+        }
     }
 
     /// Follows the account's connections to its relays: the relays its relay lists name and the

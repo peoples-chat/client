@@ -113,8 +113,23 @@
           "name": "Jonas Kjær"
         },
         "messages": [],
-        "reach": "internet"
+        "reach": "internet",
+        "undelivered": {
+          "since": 1795300170000
+        }
       }
+    },
+    {
+      "type": "invitationDeliveryChanged",
+      "chatId": "chat-2",
+      "undelivered": {
+        "since": 1795300170000,
+        "reason": "tooLarge"
+      }
+    },
+    {
+      "type": "invitationDeliveryChanged",
+      "chatId": "chat-2"
     },
     {
       "type": "messageAdded",
