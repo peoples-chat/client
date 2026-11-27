@@ -32,6 +32,8 @@ fn options(data_dir: &Path, relay: &str, keychain_service: &str) -> MessagingOpt
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),
+        chat_media_servers: Vec::new(),
+        lookup_relays: Vec::new(),
     }
 }
 

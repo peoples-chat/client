@@ -20,6 +20,7 @@ lower `marmot-session` crate.
 | `wait_until_published` | polls `account_setup_readiness` until `NetworkReady` |
 | `start_direct_chat` | `Directory::fetch_account_relay_list_status_for_account_id` (relay hints), `start_direct_conversation` |
 | `accept_direct_chat` | `accept_group_invite` |
+| `media_servers_in_chat` | `group_conversation_snapshot` (`encrypted_media`) |
 | `follow_direct_chats` | `subscribe_chats` |
 | `known_name`, `contact_name`, `fetch_name` | `display_name_for_account_id`, `fetch_current_user_profile_for_account_id`, `default_profile_pseudonym` |
 | `own_about`, `known_picture`, `update_profile`, `set_picture` | `MarmotApp::directory().directory_entry_for_account_id` (the cached profile), `publish_user_profile_using_account_relays` |
@@ -47,7 +48,22 @@ Choices:
 - **Keys in the platform's key store**, one entry per account under the service name the app passes in. MDK's other
   store, a plain-text key file, is meant for development and is not used. See [The account key](#the-account-key).
 - **Neutral configuration** (`MarmotAppConfig::default()`): no public indexers and no ranking service, unlike White
-  Noise's configuration.
+  Noise's configuration. Three settings are filled in (#120):
+  - **Media servers for new chats** (`MarmotDeployment::new_group_media_endpoints`, from
+    `MessagingOptions::chat_media_servers`). MDK signs them into a chat's state when it founds the chat, as the
+    encrypted-media component. Without any, the chat carries no photos or files for anyone in it, for good:
+    `replace_encrypted_media_blob_endpoints` can replace servers but not add the component. White Noise for iOS then
+    greys out attachments ("Media is not available in this group"). On the defaults these are `CHAT_MEDIA_SERVERS`, the
+    two White Noise founds its chats with (`blossom.divine.video`, `blossom.ditto.pub`), provisionally until #11.
+    `media_servers_in_chat` reads a chat's back.
+  - **The KeyPackage `client` tag** (`key_package_client_name`): `peoples.chat` (`CLIENT_NAME`), as White Noise's
+    KeyPackages name White Noise. Display metadata only.
+  - **Lookup relays** (`directory_relay_urls`, from `MessagingOptions::lookup_relays`). On the defaults, people are
+    also looked up on `WHITE_NOISE_RELAYS`, where White Noise users publish their relay lists and KeyPackages. MDK
+    uses the directory relays *instead of* the app's relays, so the core lists ours first; with no lookup relays it
+    sets none and MDK looks on ours alone.
+  - A build with relays of its own gets no media servers and no lookup relays (`chat_media_servers`, `lookup_relays`),
+    so it stays off public servers, as for profile copies. Its chats carry no media.
 - **The profile name from the start.** `create_identity` would first publish a pseudonym derived from the key; the
   initial-profile variant publishes the user's name instead.
 - **Account setup in two steps.** The account exists locally as soon as `create_account` returns. Publishing its relay
