@@ -54,6 +54,9 @@ pub struct Config {
     /// How long the radio takes to answer its app. meshcore-rs listens for an answer only
     /// after it has written the command, so an instant answer can be missed.
     pub reply_latency: Duration,
+    /// How long the radio takes to restart when its app tells it to. Meanwhile it answers no
+    /// one.
+    pub restart_time: Duration,
 }
 
 impl Default for Config {
@@ -67,6 +70,7 @@ impl Default for Config {
             max_contacts: 350,
             seed: 0,
             reply_latency: Duration::from_millis(20),
+            restart_time: Duration::from_millis(300),
         }
     }
 }
@@ -108,8 +112,13 @@ struct Shared {
 }
 
 struct State {
-    /// Frames for the app that is connected, if one is.
-    app: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    /// Frames for the app that is connected, if one is, with the number of its link.
+    app: Option<(u64, mpsc::UnboundedSender<Vec<u8>>)>,
+    /// Counts the links. A link with an older number has gone quiet: the radio neither reads
+    /// nor writes it any more, and doesn't close it either.
+    link: u64,
+    /// The radio is restarting until then, and answers no one.
+    off_until: Option<Instant>,
     contacts: Vec<(Contact, u32)>,
     /// Message frames waiting for the app to collect them.
     waiting: VecDeque<Waiting>,
@@ -207,6 +216,8 @@ impl FakeRadio {
         let addr = listener.local_addr()?;
         let state = State {
             app: None,
+            link: 0,
+            off_until: None,
             contacts: Vec::new(),
             waiting: VecDeque::new(),
             unconfirmed: HashMap::new(),
@@ -241,6 +252,13 @@ impl FakeRadio {
         self.shared.add_contact(contact)
     }
 
+    /// The link to the app goes quiet, the way a Bluetooth link is lost: nothing comes from the
+    /// radio any more, what the app writes goes nowhere, and nobody closes anything. An app
+    /// that connects again is served as usual.
+    pub fn go_quiet(&self) {
+        self.shared.state().link += 1;
+    }
+
     /// The app's commands that didn't follow the fixture being replayed.
     pub fn replay_mismatches(&self) -> Vec<Vec<u8>> {
         let state = self.shared.state();
@@ -268,9 +286,9 @@ impl Drop for FakeRadio {
 /// whose table is full still hears the other, but doesn't hold it: it can't send to it, and
 /// drops its messages, which it couldn't decrypt.
 pub fn link(a: &FakeRadio, b: &FakeRadio) -> Result<(), TableFull> {
+    put_in_range(a, b);
     let mut result = Ok(());
     for (one, other) in [(a, b), (b, a)] {
-        one.shared.state().peers.push(Arc::downgrade(&other.shared));
         let added = one.add_contact(Contact {
             public_key: other.public_key(),
             name: other.shared.config.name.clone(),
@@ -280,6 +298,15 @@ pub fn link(a: &FakeRadio, b: &FakeRadio) -> Result<(), TableFull> {
         result = result.and(added);
     }
     result
+}
+
+/// Puts two radios in range of each other without making them contacts: each adds the other
+/// when it hears it announce itself (`SEND_SELF_ADVERT`), as radios that add contacts by
+/// themselves do.
+pub fn put_in_range(a: &FakeRadio, b: &FakeRadio) {
+    for (one, other) in [(a, b), (b, a)] {
+        one.shared.state().peers.push(Arc::downgrade(&other.shared));
+    }
 }
 
 /// Starts two linked radios. Fails if either has no room for the other; start them and
@@ -310,10 +337,11 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
 async fn converse(stream: TcpStream, shared: Arc<Shared>) {
     let (mut from_app, mut to_app) = stream.into_split();
     let (sender, mut outgoing) = mpsc::unbounded_channel::<Vec<u8>>();
-    let greeting = {
+    let (link, greeting) = {
         let mut state = shared.state();
-        state.app = Some(sender);
-        state.replay.as_mut().map(Replay::radio_frames)
+        state.link += 1;
+        state.app = Some((state.link, sender));
+        (state.link, state.replay.as_mut().map(Replay::radio_frames))
     };
     let write = async {
         while let Some(frame) = outgoing.recv().await {
@@ -330,6 +358,9 @@ async fn converse(stream: TcpStream, shared: Arc<Shared>) {
         }
         while let Ok(command) = frames::read(&mut from_app).await {
             tokio::time::sleep(shared.config.reply_latency).await;
+            if !shared.hears(link) {
+                continue;
+            }
             let (answer, packet) = shared.answer(&command);
             // The answer goes first, so a confirmation can't overtake its SENT.
             shared.to_app(answer);
@@ -350,10 +381,41 @@ impl Shared {
     }
 
     fn to_app(&self, frames: Vec<Vec<u8>>) {
-        if let Some(app) = &self.state().app {
+        let state = self.state();
+        if let Some((link, app)) = &state.app
+            && *link == state.link
+        {
             for frame in frames {
                 let _ = app.send(frame);
             }
+        }
+    }
+
+    /// Whether the radio reads what arrives on the link with this number: not on one that went
+    /// quiet, and not while it restarts.
+    fn hears(&self, link: u64) -> bool {
+        let state = self.state();
+        link == state.link && state.off_until.is_none_or(|until| Instant::now() >= until)
+    }
+
+    /// REBOOT: the link goes quiet, and the radio is away for a while.
+    fn restart(&self) {
+        let mut state = self.state();
+        state.link += 1;
+        state.off_until = Some(Instant::now() + self.config.restart_time);
+    }
+
+    /// SEND_SELF_ADVERT: the radios in range hear it, and add this one to their contacts if
+    /// they have room.
+    fn announce(&self) {
+        let peers = self.state().peers.clone();
+        for peer in peers.iter().filter_map(Weak::upgrade) {
+            let _ = peer.add_contact(Contact {
+                public_key: self.public_key,
+                name: self.config.name.clone(),
+                kind: 1,
+                last_advert: now(),
+            });
         }
     }
 
@@ -397,6 +459,16 @@ impl Shared {
                 .map_or_else(frames::no_more_messages, |m| {
                     frames::message(&m.from, m.sent_at, &m.text)
                 }),
+            frames::CMD_SEND_SELF_ADVERT => {
+                self.announce();
+                frames::ok()
+            }
+            frames::CMD_GET_BATT_AND_STORAGE => frames::battery(),
+            // The firmware restarts only when the command spells it out, and never answers.
+            frames::CMD_REBOOT if body == b"reboot" => {
+                self.restart();
+                return (Vec::new(), None);
+            }
             _ => frames::error(frames::ERR_UNSUPPORTED),
         };
         (vec![answer], None)

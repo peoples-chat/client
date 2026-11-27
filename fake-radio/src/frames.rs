@@ -11,7 +11,10 @@ use crate::Contact;
 pub const CMD_APP_START: u8 = 1;
 pub const CMD_SEND_TXT_MSG: u8 = 2;
 pub const CMD_GET_CONTACTS: u8 = 4;
+pub const CMD_SEND_SELF_ADVERT: u8 = 7;
 pub const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
+pub const CMD_REBOOT: u8 = 19;
+pub const CMD_GET_BATT_AND_STORAGE: u8 = 20;
 pub const CMD_DEVICE_QUERY: u8 = 22;
 
 // Error codes.
@@ -48,8 +51,21 @@ pub async fn write(stream: &mut (impl AsyncWrite + Unpin), payload: &[u8]) -> io
     stream.write_all(&frame).await
 }
 
+pub fn ok() -> Vec<u8> {
+    vec![0]
+}
+
 pub fn error(code: u8) -> Vec<u8> {
     vec![1, code]
+}
+
+/// BATT_AND_STORAGE: 4.1 V, and 120 of 1024 kB of storage used.
+pub fn battery() -> Vec<u8> {
+    let mut frame = vec![12];
+    frame.extend_from_slice(&4100u16.to_le_bytes());
+    frame.extend_from_slice(&120u32.to_le_bytes());
+    frame.extend_from_slice(&1024u32.to_le_bytes());
+    frame
 }
 
 pub fn contacts_start(count: usize) -> Vec<u8> {

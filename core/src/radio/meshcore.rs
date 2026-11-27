@@ -1,8 +1,12 @@
-//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops.
+//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops
+//! and, on a Mac, over Bluetooth too (#135).
 //!
 //! meshcore-rs speaks the MeshCore companion protocol. This adapter turns its commands and
 //! events into [`Radio`]. On phones the crate is built without a link of its own, and a link the
 //! app runs itself, such as Bluetooth (#23), uses [`MeshCoreRadio::over`].
+//!
+//! A Bluetooth link can end without anyone saying so: nothing arrives any more, and what is
+//! written goes nowhere. [`MeshCoreRadio::watch_link`] notices that.
 //!
 //! Notes on meshcore-rs 0.2.0 that this code works around are in `docs/radio.md`.
 
@@ -30,6 +34,20 @@ const BAUD_RATE: u32 = 115_200;
 /// MeshCore's text type for plain messages. CLI replies from repeaters and signed room posts use
 /// others.
 const TXT_PLAIN: u8 = 0;
+/// How often a Bluetooth link is checked, as long as nothing else says that it ended.
+#[cfg(target_os = "macos")]
+const BLE_WATCH_EVERY: Duration = Duration::from_secs(10);
+/// How long to wait before scanning for a Bluetooth radio again. A scan itself takes 2 seconds.
+#[cfg(target_os = "macos")]
+const BLE_SCAN_PAUSE: Duration = Duration::from_millis(500);
+/// How long a radio may take to answer a link check, at most.
+const LINK_CHECK_REPLY: Duration = Duration::from_secs(5);
+/// How many link checks in a row a radio may leave unanswered before its link counts as lost.
+/// A busy radio can lose one answer.
+const MISSED_CHECKS: u32 = 2;
+/// MeshCore's command for the battery level and storage: what a link check asks for. It changes
+/// nothing on the radio and puts nothing on the air.
+const CMD_GET_BATT_AND_STORAGE: u8 = 20;
 
 /// A MeshCore companion radio.
 pub struct MeshCoreRadio {
@@ -39,6 +57,8 @@ pub struct MeshCoreRadio {
     link: Option<meshcore_rs::MeshCore>,
     /// Turns meshcore-rs's events into [`RadioEvent`]s.
     pump: JoinHandle<()>,
+    /// Checks the link, when someone asked for that ([`MeshCoreRadio::watch_link`]).
+    watch: Mutex<Option<JoinHandle<()>>>,
 }
 
 struct Shared {
@@ -76,6 +96,36 @@ impl MeshCoreRadio {
         Self::start(commands, &dispatcher, Some(link)).await
     }
 
+    /// Finds the companion radio that advertises `name` over Bluetooth, such as
+    /// `MeshCore-E49B86FC784A`, and connects to it through meshcore-rs's own Bluetooth link
+    /// (#135). It keeps scanning until `within` has passed: a radio that has just restarted takes
+    /// a few seconds to advertise again. The link is watched from the start
+    /// ([`MeshCoreRadio::watch_link`]).
+    ///
+    /// The radio must already be paired with this Mac, and macOS must allow the program to use
+    /// Bluetooth: a program that asks without that permission gets a system prompt, or is ended.
+    #[cfg(target_os = "macos")]
+    pub async fn connect_ble(name: &str, within: Duration) -> Result<Self, RadioError> {
+        let deadline = tokio::time::Instant::now() + within;
+        let link = loop {
+            match meshcore_rs::MeshCore::ble_connect(name).await {
+                Ok(link) => break link,
+                Err(error) if tokio::time::Instant::now() >= deadline => {
+                    return Err(RadioError::Link(format!(
+                        "no Bluetooth link to {name}: {error}"
+                    )));
+                }
+                Err(error) => log::info!("no Bluetooth link to {name} yet: {error}"),
+            }
+            tokio::time::sleep(BLE_SCAN_PAUSE).await;
+        };
+        let commands = link.commands().clone();
+        let dispatcher = link.dispatcher().clone();
+        let radio = Self::start(commands, &dispatcher, Some(link)).await?;
+        radio.watch_link(BLE_WATCH_EVERY);
+        Ok(radio)
+    }
+
     /// A radio over meshcore-rs's command handler and event dispatcher, for a link the app runs
     /// itself: it writes the handler's frames to the radio and passes the radio's frames to the
     /// dispatcher's reader. Tests use it with a fake radio.
@@ -106,6 +156,7 @@ impl MeshCoreRadio {
             state,
             link,
             pump,
+            watch: Mutex::new(None),
         };
         if let Err(error) = radio.greet().await {
             // Lets go of the port, so that it can be opened again (#24).
@@ -131,6 +182,43 @@ impl MeshCoreRadio {
         Ok(())
     }
 
+    /// Checks the link every `every` from now on, for links that can end silently, as Bluetooth
+    /// does (#135). A check asks the radio for its battery level. When the radio leaves two
+    /// checks in a row unanswered, the link counts as lost: [`RadioEvent::Disconnected`] follows,
+    /// and the core opens the radio again as after any lost link (#24). An answer of any kind
+    /// counts, also a refusal.
+    pub fn watch_link(&self, every: Duration) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let watch = runtime.spawn(watch(every, self.commands.clone(), self.state.clone()));
+        let previous = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(watch);
+        if let Some(previous) = previous {
+            previous.abort();
+        }
+    }
+
+    /// Has the radio announce itself to the radios in direct range, which is how MeshCore radios
+    /// come to hold each other as contacts. It changes none of the radio's settings.
+    pub async fn advertise(&self) -> Result<(), RadioError> {
+        self.ensure_connected()?;
+        let commands = self.commands.lock().await;
+        commands.send_advert(false).await.map_err(command_error)?;
+        Ok(())
+    }
+
+    /// Restarts the radio, which ends its link. Its settings and contacts stay as they are. The
+    /// radio lab uses it to drop a Bluetooth link (#135); the app never does.
+    pub async fn restart(&self) -> Result<(), RadioError> {
+        self.ensure_connected()?;
+        let commands = self.commands.lock().await;
+        commands.reboot().await.map_err(command_error)
+    }
+
     fn ensure_connected(&self) -> Result<(), RadioError> {
         if self.state.connected.load(Ordering::SeqCst) {
             Ok(())
@@ -143,6 +231,10 @@ impl MeshCoreRadio {
 impl Drop for MeshCoreRadio {
     fn drop(&mut self) {
         self.pump.abort();
+        let watch = self.watch.get_mut().unwrap_or_else(PoisonError::into_inner);
+        if let Some(watch) = watch.take() {
+            watch.abort();
+        }
         // A link this radio opened holds the serial port until it ends (#24).
         if let Some(link) = self.link.take()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
@@ -309,6 +401,44 @@ async fn pump(
             }
             (EventType::Disconnected, _) => state.disconnected(),
             _ => {}
+        }
+    }
+}
+
+/// Checks the link every `every` until it is lost or ended ([`MeshCoreRadio::watch_link`]).
+async fn watch(
+    every: Duration,
+    commands: Arc<tokio::sync::Mutex<CommandHandler>>,
+    state: Arc<Shared>,
+) {
+    let mut missed = 0;
+    loop {
+        tokio::time::sleep(every).await;
+        if !state.connected.load(Ordering::SeqCst) {
+            return;
+        }
+        // meshcore-rs's own battery query waits for the battery level only, so a radio that
+        // refuses would look like one that is gone.
+        let answer = commands
+            .lock()
+            .await
+            .send_multi(
+                &[CMD_GET_BATT_AND_STORAGE],
+                &[EventType::Battery, EventType::Error],
+                every.min(LINK_CHECK_REPLY),
+            )
+            .await;
+        match answer {
+            Ok(_) => missed = 0,
+            Err(error) => {
+                missed += 1;
+                log::info!("the radio left a link check unanswered ({missed}): {error}");
+                if missed >= MISSED_CHECKS {
+                    log::warn!("the radio's link is lost: it stopped answering");
+                    state.disconnected();
+                    return;
+                }
+            }
         }
     }
 }
