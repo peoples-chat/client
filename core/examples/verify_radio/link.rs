@@ -41,6 +41,16 @@ const ALLOWED_COMMANDS: &[u8] = &[
     22, // DEVICE_QUERY
 ];
 
+/// What the path spike (#140) needs besides: sends on its two other paths, and a private
+/// channel in a free slot, which it empties at the end. Still nothing that changes firmware,
+/// frequency, preset or power.
+pub const SPIKE_COMMANDS: &[u8] = &[
+    25, // SEND_RAW_DATA
+    31, // GET_CHANNEL
+    32, // SET_CHANNEL
+    62, // SEND_CHANNEL_DATA
+];
+
 /// A byte stream to a radio.
 pub trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Io for T {}
@@ -97,7 +107,15 @@ impl FrameLog {
 /// says about its Bluetooth PIN and anyone's position is zeroed. Lengths stay the same.
 fn redacted(direction: &str, frame: &[u8]) -> Vec<u8> {
     let mut frame = frame.to_vec();
+    if direction == "from_radio"
+        && let Some(position) = logged_advert_position(&frame)
+    {
+        frame[position].fill(0);
+        return frame;
+    }
     let secret = match (direction, frame.first()) {
+        // CHANNEL_INFO and SET_CHANNEL: the channel's secret.
+        ("from_radio", Some(18)) | ("to_radio" | "blocked", Some(32)) => 34..50,
         // DEVICE_INFO: the Bluetooth PIN.
         ("from_radio", Some(13)) => 4..8,
         // SELF_INFO: latitude and longitude.
@@ -113,6 +131,33 @@ fn redacted(direction: &str, frame: &[u8]) -> Vec<u8> {
         frame[secret.start..end].fill(0);
     }
     frame
+}
+
+/// Where the position sits in LOG_RX_DATA of an advert, if the advert gives one. The frame is
+/// `0x88 | SNR | RSSI | packet`, the packet `header | [transport codes] | path byte | path |
+/// payload`, and an advert's payload `key (32) | timestamp (4) | signature (64) | flags |
+/// [latitude, longitude] | …`.
+fn logged_advert_position(frame: &[u8]) -> Option<std::ops::Range<usize>> {
+    const ADVERT: u8 = 4;
+    const HAS_POSITION: u8 = 0x10;
+    if frame.first() != Some(&0x88) {
+        return None;
+    }
+    let header = *frame.get(3)?;
+    if (header >> 2) & 0x0f != ADVERT {
+        return None;
+    }
+    // Route types 0 and 3 carry 4 bytes of transport codes.
+    let transport = if matches!(header & 3, 0 | 3) { 4 } else { 0 };
+    let path_at = 4 + transport;
+    let path_byte = *frame.get(path_at)?;
+    let path = usize::from(path_byte & 0x3f) * (usize::from(path_byte >> 6) + 1);
+    let flags_at = path_at + 1 + path + 32 + 4 + 64;
+    if frame.get(flags_at)? & HAS_POSITION == 0 {
+        return None;
+    }
+    let end = frame.len().min(flags_at + 9);
+    Some(flags_at + 1..end)
 }
 
 fn now_ms() -> u64 {
@@ -135,6 +180,17 @@ impl Link {
         log: Arc<FrameLog>,
         reply_timeout: Duration,
     ) -> Self {
+        Self::open_allowing(label, stream, log, reply_timeout, &[])
+    }
+
+    /// Like [`Link::open`], letting the commands in `also` through as well.
+    pub fn open_allowing(
+        label: &str,
+        stream: Box<dyn Io>,
+        log: Arc<FrameLog>,
+        reply_timeout: Duration,
+        also: &'static [u8],
+    ) -> Self {
         let (to_radio, from_app) = mpsc::channel::<Vec<u8>>(64);
         let dispatcher = Arc::new(EventDispatcher::new());
         let reader = Arc::new(MessageReader::new(dispatcher.clone()));
@@ -142,7 +198,13 @@ impl Link {
         handler.set_default_timeout(reply_timeout);
         let (read, write) = tokio::io::split(stream);
         let tasks = vec![
-            tokio::spawn(write_frames(label.to_owned(), from_app, write, log.clone())),
+            tokio::spawn(write_frames(
+                label.to_owned(),
+                from_app,
+                write,
+                log.clone(),
+                also,
+            )),
             tokio::spawn(read_frames(
                 label.to_owned(),
                 read,
@@ -180,11 +242,12 @@ async fn write_frames(
     mut frames: mpsc::Receiver<Vec<u8>>,
     mut port: impl AsyncWrite + Unpin,
     log: Arc<FrameLog>,
+    also: &'static [u8],
 ) {
     while let Some(frame) = frames.recv().await {
         if !frame
             .first()
-            .is_some_and(|command| ALLOWED_COMMANDS.contains(command))
+            .is_some_and(|command| ALLOWED_COMMANDS.contains(command) || also.contains(command))
         {
             log.record(&label, "blocked", &frame);
             eprintln!(
@@ -270,6 +333,30 @@ mod tests {
         assert_eq!(next_frame(&mut buffer), Some(vec![7, 8]));
         assert_eq!(next_frame(&mut buffer), Some(vec![9]));
         assert_eq!(next_frame(&mut buffer), None);
+    }
+
+    #[test]
+    fn issue_140_logged_frames_hide_channel_secrets_and_advertised_positions() {
+        assert_eq!(redacted("from_radio", &[18; 50])[34..], [0; 16]);
+        assert_eq!(redacted("to_radio", &[32; 50])[34..], [0; 16]);
+        // LOG_RX_DATA of a zero-hop advert with a position: 0x88, SNR, RSSI, header, path byte,
+        // key, timestamp, signature, flags, latitude, longitude, name.
+        let mut advert = vec![0x88, 29, 0xd8, (4 << 2) | 2, 0];
+        advert.extend_from_slice(&[7; 100]);
+        advert.push(0x91);
+        advert.extend_from_slice(&[9; 8]);
+        advert.extend_from_slice(b"R1");
+        let logged = redacted("from_radio", &advert);
+        let position = 106..114;
+        assert_eq!(logged[position], [0; 8]);
+        assert_eq!(logged[..106], advert[..106]);
+        assert_eq!(logged[114..], *b"R1");
+        // Without a position, and for other packets, nothing changes.
+        advert[105] = 0x81;
+        assert_eq!(redacted("from_radio", &advert), advert);
+        advert[3] = (2 << 2) | 2;
+        advert[105] = 0x91;
+        assert_eq!(redacted("from_radio", &advert), advert);
     }
 
     #[test]

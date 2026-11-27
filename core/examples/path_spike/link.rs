@@ -11,7 +11,7 @@ use tokio::sync::{Notify, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::frames::{self, SYNC_NEXT_MESSAGE};
+use super::frames::{self, SYNC_NEXT_MESSAGE};
 
 /// MeshCore companion radios talk at this rate over USB serial.
 const BAUD_RATE: u32 = 115_200;
@@ -92,7 +92,13 @@ pub struct Link {
     tasks: Vec<JoinHandle<()>>,
     /// The serial link, when this link opened it.
     serial: Option<MeshCore>,
+    /// Closes a link run elsewhere, such as the lab harness's. Dropping it unpolled drops that
+    /// link too.
+    closer: Option<Closer>,
 }
+
+/// What ends a link run elsewhere.
+pub type Closer = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 impl Link {
     /// Opens a companion radio on a USB serial port.
@@ -123,7 +129,15 @@ impl Link {
             log,
             tasks: vec![recorder, collector],
             serial: None,
+            closer: None,
         }
+    }
+
+    /// Has [`Link::close`] run `closer` too: it closes the link this one runs over.
+    #[allow(dead_code)] // The lab harness (`verify:radio`) uses it; the example alone doesn't.
+    pub fn closing(mut self, closer: Closer) -> Self {
+        self.closer = Some(closer);
+        self
     }
 
     /// Greets the radio as companion apps do, and asks what it is. Asking for the device
@@ -188,6 +202,9 @@ impl Link {
             && let Err(error) = serial.disconnect().await
         {
             eprintln!("closing radio {}'s link: {error}", self.label);
+        }
+        if let Some(closer) = self.closer.take() {
+            closer.await;
         }
     }
 }

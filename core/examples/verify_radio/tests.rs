@@ -19,7 +19,7 @@ use crate::lab::{Lab, Timing, Usb};
 use crate::link::{FrameLog, Io, Link};
 use crate::lock::LabLock;
 use crate::power::{Power, Uhubctl};
-use crate::{End, Paths, locked, verify};
+use crate::{End, Paths, Task, locked, verify};
 
 const FIRMWARE: &str = "v1.18.0-81dbae5";
 
@@ -314,7 +314,8 @@ fn issue_133_a_missing_lab_file_fails_cleanly_and_takes_no_lock() {
         uhubctl: "uhubctl".into(),
     };
     let mut out = Vec::new();
-    let End::Failed(error) = verify(&paths, false, &mut out) else {
+    let check = Task::Check { dry_run: false };
+    let End::Failed(error) = verify(&paths, check, &mut out) else {
         panic!("a run without a lab file passed");
     };
     assert!(error.contains("No radio lab file at"), "{error}");

@@ -8,8 +8,8 @@ use peoples_chat_core::radio::format::{
 };
 use peoples_chat_core::radio::{RadioKeys, RadioSettings};
 
-use crate::airtime::time_on_air;
-use crate::frames::{self, Expected, Kind, Route};
+use super::airtime::time_on_air;
+use super::frames::{self, Expected, Kind, Route};
 
 pub const USAGE: &str = "\
 Measures the three MeshCore paths for the app's radio packets between two companion radios on

@@ -10,10 +10,11 @@ use meshcore_rs::commands::CommandHandler;
 use meshcore_rs::events::EventDispatcher;
 use meshcore_rs::reader::MessageReader;
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::mpsc;
 
-use crate::frames::{CHANNEL_DATA_RECV, MAX_CHANNEL_DATA, MAX_FRAME, MAX_TEXT};
-use crate::link::Link;
+use super::frames::{CHANNEL_DATA_RECV, MAX_CHANNEL_DATA, MAX_FRAME, MAX_TEXT};
+use super::link::Link;
 
 /// Channel slots per radio.
 const CHANNELS: u8 = 8;
@@ -44,6 +45,45 @@ impl FakeMesh {
 
     pub fn link_b(&self) -> Link {
         self.radios[1].link("B")
+    }
+
+    /// Radio 0 (A) or 1 (B) as a serial port: frames both ways with a start byte and a length,
+    /// as the lab harness's link speaks. Opening it again replaces the earlier port.
+    #[allow(dead_code)] // The lab harness's tests use it.
+    pub fn serial(&self, radio: usize) -> DuplexStream {
+        let (app, device) = tokio::io::duplex(8192);
+        let (mut from_app, mut to_app) = tokio::io::split(device);
+        let (sender, mut outgoing) = mpsc::unbounded_channel::<Vec<u8>>();
+        let radio = self.radios[radio].clone();
+        radio.connect(App::Serial(sender));
+        tokio::spawn(async move {
+            while let Some(frame) = outgoing.recv().await {
+                let mut framed = vec![b'>'];
+                framed.extend_from_slice(&(frame.len() as u16).to_le_bytes());
+                framed.extend_from_slice(&frame);
+                if to_app.write_all(&framed).await.is_err() {
+                    break;
+                }
+            }
+        });
+        tokio::spawn(async move {
+            let mut header = [0; 3];
+            while from_app.read_exact(&mut header).await.is_ok() {
+                let mut command = vec![0; usize::from(u16::from_le_bytes([header[1], header[2]]))];
+                if from_app.read_exact(&mut command).await.is_err() {
+                    break;
+                }
+                radio.take(command).await;
+            }
+        });
+        app
+    }
+
+    /// Radio 0 (A) or 1 (B) advertises, and the other hears it.
+    #[allow(dead_code)] // The lab harness's tests use it.
+    pub async fn advertise(&self, radio: usize) {
+        let from = self.radios[radio].clone();
+        from.peer().hear(&from, Air::Advert).await;
     }
 
     /// The name in a channel slot of radio 0 (A) or 1 (B).
@@ -85,15 +125,25 @@ enum Air {
         flood: bool,
         data: Vec<u8>,
     },
+    Advert,
 }
 
 struct FakeRadio {
     key: [u8; 32],
     name: &'static str,
     /// Where frames for the app go.
-    app: OnceLock<Arc<MessageReader>>,
+    app: Mutex<Option<App>>,
     peer: OnceLock<Weak<FakeRadio>>,
     state: Mutex<State>,
+}
+
+/// The app a radio is connected to.
+#[derive(Clone)]
+enum App {
+    /// meshcore-rs's reader, without any framing.
+    Reader(Arc<MessageReader>),
+    #[allow(dead_code)] // The lab harness's tests use it.
+    Serial(mpsc::UnboundedSender<Vec<u8>>),
 }
 
 #[derive(Default)]
@@ -112,7 +162,7 @@ impl FakeRadio {
         Arc::new(Self {
             key,
             name,
-            app: OnceLock::new(),
+            app: Mutex::new(None),
             peer: OnceLock::new(),
             state: Mutex::new(State::default()),
         })
@@ -139,32 +189,52 @@ impl FakeRadio {
             dispatcher.clone(),
             reader.clone(),
         )));
-        let _ = self.app.set(reader);
+        self.connect(App::Reader(reader));
         let radio = self.clone();
         tokio::spawn(async move {
-            while let Some(mut command) = from_app.recv().await {
-                // meshcore-rs listens for the answer only after it has written the command.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                // The radio's serial reader cuts a longer frame.
-                command.truncate(MAX_FRAME);
-                let (replies, air) = radio.answer(&command);
-                for reply in replies {
-                    radio.to_app(reply).await;
-                }
-                if let Some(air) = air {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    radio.peer().hear(&radio, air).await;
-                }
+            while let Some(command) = from_app.recv().await {
+                radio.take(command).await;
             }
         });
         Link::over(label, commands, &dispatcher)
     }
 
+    fn connect(&self, app: App) {
+        *self.app.lock().unwrap_or_else(PoisonError::into_inner) = Some(app);
+    }
+
+    /// Takes one command from the app.
+    async fn take(self: &Arc<Self>, mut command: Vec<u8>) {
+        // meshcore-rs listens for the answer only after it has written the command.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // The radio's serial reader cuts a longer frame.
+        command.truncate(MAX_FRAME);
+        let (replies, air) = self.answer(&command);
+        for reply in replies {
+            self.to_app(reply).await;
+        }
+        if let Some(air) = air {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.peer().hear(self, air).await;
+        }
+    }
+
     async fn to_app(&self, frame: Vec<u8>) {
-        let app = self.app.get().expect("the radio has a link");
-        app.handle_rx(frame)
-            .await
-            .expect("the reader takes any frame");
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match app.expect("the radio has a link") {
+            App::Reader(reader) => reader
+                .handle_rx(frame)
+                .await
+                .expect("the reader takes any frame"),
+            // A closed port loses what is pushed to it.
+            App::Serial(port) => {
+                let _ = port.send(frame);
+            }
+        }
     }
 
     fn answer(&self, command: &[u8]) -> (Vec<Vec<u8>>, Option<Air>) {
@@ -268,6 +338,7 @@ impl FakeRadio {
                     }),
                 )
             }
+            7 => (vec![OK.to_vec()], Some(Air::Advert)),
             _ => refuse(1),
         }
     }
@@ -275,6 +346,11 @@ impl FakeRadio {
     /// Takes a packet `from` the other radio, as the firmware does.
     async fn hear(&self, from: &FakeRadio, air: Air) {
         match air {
+            // Key, timestamp, signature, flags: a chat node without a position.
+            Air::Advert => {
+                let payload = [&from.key[..], &[0; 4], &[0; 64], &[0x01]].concat();
+                self.log_on_air(4, false, &payload).await;
+            }
             Air::Text {
                 timestamp,
                 text,

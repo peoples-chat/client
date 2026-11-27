@@ -9,7 +9,7 @@
 
 use meshcore_rs::events::LogData;
 
-use crate::airtime::meshcore_text_bytes;
+use super::airtime::meshcore_text_bytes;
 
 /// `CMD_SEND_TXT_MSG`.
 const SEND_TXT_MSG: u8 = 2;

@@ -103,7 +103,7 @@ impl std::fmt::Debug for Station {
 }
 
 impl Station {
-    async fn close(self) {
+    pub async fn close(self) {
         let _ = self.radio.disconnect().await;
         drop(self.radio);
         self.link.close().await;
@@ -256,6 +256,19 @@ impl Lab<'_> {
     /// The whole run. Every USB radio is checked before any test starts. A dry run lists what it
     /// finds, and never touches a radio's power.
     pub async fn run(&self, dry_run: bool, out: &mut (dyn Write + Send)) -> Result<(), String> {
+        for station in self.stations(dry_run, out).await? {
+            station.close().await;
+        }
+        Ok(())
+    }
+
+    /// Every USB radio of the lab file, found and checked, and (unless it's a dry run) asked
+    /// whether it responds. Hardware tests start from these.
+    pub async fn stations(
+        &self,
+        dry_run: bool,
+        out: &mut (dyn Write + Send),
+    ) -> Result<Vec<Station>, String> {
         let preset = &self.config.lab;
         let _ = writeln!(
             out,
@@ -325,10 +338,7 @@ impl Lab<'_> {
             }
             stations = checked;
         }
-        for station in stations {
-            station.close().await;
-        }
-        Ok(())
+        Ok(stations)
     }
 }
 

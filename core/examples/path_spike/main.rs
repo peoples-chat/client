@@ -18,11 +18,11 @@
 #[path = "../../src/radio/airtime.rs"]
 mod airtime;
 #[cfg(test)]
-mod fake;
+pub(crate) mod fake;
 mod frames;
-mod link;
-mod plan;
-mod report;
+pub(crate) mod link;
+pub(crate) mod plan;
+pub(crate) mod report;
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -38,11 +38,11 @@ use peoples_chat_core::radio::format::from_text_message;
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use crate::airtime::{HOURLY_AIRTIME, time_on_air};
-use crate::frames::{ChannelDatagram, DATA_TYPE_DEV, Expected, Kind, Route};
-use crate::link::{Link, Logged};
-use crate::plan::{CHECK_TEXT, Command, Keys, Options, Step, Variant};
-use crate::report::{ROUNDS, Row, millis};
+use self::airtime::{HOURLY_AIRTIME, time_on_air};
+use self::frames::{ChannelDatagram, DATA_TYPE_DEV, Expected, Kind, Route};
+use self::link::{Link, Logged};
+use self::plan::{CHECK_TEXT, Command, Keys, Options, Step, Variant};
+use self::report::{ROUNDS, Row, millis};
 
 /// The name of the private channel the spike sets up on both radios.
 const CHANNEL_NAME: &str = "pc-spike";
@@ -84,8 +84,26 @@ async fn run(options: Options) -> Result<(), String> {
     let (port_a, port_b) = options.ports.clone().ok_or("a run needs two ports")?;
     let a = Link::serial("A", &port_a).await?;
     let b = Link::serial("B", &port_b).await?;
-    let mut spike = Spike::setup(a, b, &options).await?;
-    let outline = plan::outline(&options, &spike.settings);
+    let stop = stop_on_ctrl_c();
+    run_over(a, b, &options, &stop, || Link::serial("B", &port_b))
+        .await
+        .map(|_| ())
+}
+
+/// A whole run over two open links, from radio A to radio B. `reopen_b` opens radio B's link
+/// again after the check that closes it. Returns every send.
+pub(crate) async fn run_over<Reopened>(
+    a: Link,
+    b: Link,
+    options: &Options,
+    stop: &AtomicBool,
+    reopen_b: impl FnOnce() -> Reopened,
+) -> Result<Vec<Row>, String>
+where
+    Reopened: std::future::Future<Output = Result<Link, String>>,
+{
+    let mut spike = Spike::setup(a, b, options).await?;
+    let outline = plan::outline(options, &spike.settings);
     println!(
         "\n{} sends, {} of them on air ({} floods), {:.0} s on air in all: about {} minutes at \
          {}% of the time. Ctrl-C stops after the current send and still writes the results.\n",
@@ -96,23 +114,22 @@ async fn run(options: Options) -> Result<(), String> {
         outline.duration.as_secs().div_ceil(60),
         options.duty_cycle
     );
-    let stop = stop_on_ctrl_c();
-    let mut rows = spike.rounds(&options, &stop).await;
+    let mut rows = spike.rounds(options, stop).await;
     if options.offline && !stop.load(Ordering::SeqCst) {
-        match spike.receiver_away(&port_b, &options).await {
+        match spike.receiver_away(reopen_b, options).await {
             Ok(more) => rows.extend(more),
             Err(error) => eprintln!("The receiver-away check stopped: {error}"),
         }
     }
     spike.put_back_b().await;
     if options.radio_off && !stop.load(Ordering::SeqCst) {
-        rows.extend(spike.radio_off(&options).await);
+        rows.extend(spike.radio_off(options).await);
     }
     spike.put_back_a().await;
-    report(&rows, &spike, &options);
+    report(&rows, &spike, options);
     spike.a.close().await;
     spike.b.close().await;
-    Ok(())
+    Ok(rows)
 }
 
 /// The first Ctrl-C asks the run to stop after its current send; a second ends it at once.
@@ -615,7 +632,14 @@ impl Spike {
 
     /// The check with radio B's link closed: its radio keeps running, and what it queued
     /// arrives when the link opens again.
-    async fn receiver_away(&mut self, port_b: &str, options: &Options) -> Result<Vec<Row>, String> {
+    async fn receiver_away<Reopened>(
+        &mut self,
+        reopen_b: impl FnOnce() -> Reopened,
+        options: &Options,
+    ) -> Result<Vec<Row>, String>
+    where
+        Reopened: std::future::Future<Output = Result<Link, String>>,
+    {
         println!("\nClosing radio B's link; the radio keeps running.");
         self.b.close().await;
         let mut sends = Vec::new();
@@ -640,7 +664,7 @@ impl Spike {
             sends.push((row, sent));
         }
         println!("Opening radio B's link again.");
-        self.b = Link::serial("B", port_b).await?;
+        self.b = reopen_b().await?;
         self.b.hello().await?;
         let opened = Instant::now();
         self.b.collect().await;
@@ -1033,9 +1057,9 @@ fn unix_now() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::fake::FakeMesh;
+    use super::report::budgets;
     use super::*;
-    use crate::fake::FakeMesh;
-    use crate::report::budgets;
 
     fn options() -> Options {
         Options {
