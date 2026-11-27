@@ -11,6 +11,7 @@ use crate::Contact;
 pub const CMD_APP_START: u8 = 1;
 pub const CMD_SEND_TXT_MSG: u8 = 2;
 pub const CMD_GET_CONTACTS: u8 = 4;
+pub const CMD_SEND_SELF_ADVERT: u8 = 7;
 pub const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
 pub const CMD_DEVICE_QUERY: u8 = 22;
 
@@ -120,6 +121,16 @@ pub fn no_more_messages() -> Vec<u8> {
 /// SEND_CONFIRMED push: the ACK code and the round trip.
 pub fn send_confirmed(ack: [u8; 4], round_trip_ms: u32) -> Vec<u8> {
     [&[0x82u8][..], &ack, &round_trip_ms.to_le_bytes()].concat()
+}
+
+/// OK, the answer to a command with nothing to say.
+pub fn ok() -> Vec<u8> {
+    vec![0]
+}
+
+/// ADVERT push: a contact the radio holds announced itself.
+pub fn advert(from: &[u8; 32]) -> Vec<u8> {
+    [&[0x80u8][..], from].concat()
 }
 
 /// MSG_WAITING push.

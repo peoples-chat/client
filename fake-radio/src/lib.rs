@@ -119,6 +119,8 @@ struct State {
     peers: Vec<Weak<Shared>>,
     rng: StdRng,
     replay: Option<Replay>,
+    /// How many of the next messages are lost on the air.
+    lose_texts: usize,
 }
 
 struct Waiting {
@@ -175,6 +177,9 @@ enum Packet {
         to: [u8; 32],
         ack: [u8; 4],
     },
+    Advert {
+        from: [u8; 32],
+    },
 }
 
 impl FakeRadio {
@@ -213,6 +218,7 @@ impl FakeRadio {
             peers: Vec::new(),
             rng: StdRng::seed_from_u64(config.seed),
             replay,
+            lose_texts: 0,
         };
         let shared = Arc::new(Shared {
             config,
@@ -239,6 +245,12 @@ impl FakeRadio {
     /// Adds a contact, or updates the one with its key.
     pub fn add_contact(&self, contact: Contact) -> Result<(), TableFull> {
         self.shared.add_contact(contact)
+    }
+
+    /// Loses the next `count` messages this radio puts on the air, whatever
+    /// [`Config::loss`] says: for tests that need a certain loss.
+    pub fn lose_next_messages(&self, count: usize) {
+        self.shared.state().lose_texts = count;
     }
 
     /// The app's commands that didn't follow the fixture being replayed.
@@ -390,6 +402,12 @@ impl Shared {
                 let (answer, packet) = self.send_text(body);
                 return (vec![answer], packet);
             }
+            frames::CMD_SEND_SELF_ADVERT => {
+                let advert = Packet::Advert {
+                    from: self.public_key,
+                };
+                return (vec![frames::ok()], Some(advert));
+            }
             frames::CMD_SYNC_NEXT_MESSAGE => self
                 .state()
                 .waiting
@@ -460,7 +478,11 @@ impl Shared {
     fn transmit(&self, packet: Packet) {
         let (copies, peers) = {
             let mut state = self.state();
-            let lost = state.rng.gen_bool(self.config.loss);
+            let mut lost = state.rng.gen_bool(self.config.loss);
+            if matches!(packet, Packet::Text { .. }) && state.lose_texts > 0 {
+                state.lose_texts -= 1;
+                lost = true;
+            }
             let twice = state.rng.gen_bool(self.config.duplication);
             let copies = if lost { 0 } else { 1 + usize::from(twice) };
             (copies, state.peers.clone())
@@ -506,6 +528,17 @@ impl Shared {
                 }
                 self.to_app(vec![frames::message_waiting()]);
                 self.transmit(Packet::Ack { to: from, ack });
+            }
+            Packet::Advert { from } => {
+                // Only contacts: the fake adds none by itself.
+                let known = self
+                    .state()
+                    .contacts
+                    .iter()
+                    .any(|(c, _)| c.public_key == from);
+                if known {
+                    self.to_app(vec![frames::advert(&from)]);
+                }
             }
             Packet::Ack { to, ack } => {
                 if to != self.public_key {
