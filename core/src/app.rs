@@ -1505,6 +1505,7 @@ fn failed(action: &str, error: impl std::fmt::Display) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messaging::DEFAULT_RELAYS;
 
     #[test]
     fn the_projects_relays_come_first_and_say_who_runs_them() {
@@ -1541,6 +1542,33 @@ mod tests {
                     RelayStatus::Connecting
                 ),
             ]
+        );
+    }
+
+    /// #90: on the default relays, Settings → Privacy → Relays and servers shows the project's
+    /// relay first, as run by peoples.chat, and the three others as independent.
+    #[test]
+    fn issue_90_the_default_relays_show_the_projects_own_first() {
+        let relays = DEFAULT_RELAYS
+            .iter()
+            .rev()
+            .map(|relay| ((*relay).to_owned(), RelayStatus::Connected))
+            .collect();
+        let views = relay_views(relays, PROJECT_RELAYS);
+        let shown: Vec<_> = views
+            .iter()
+            .map(|relay| (relay.url.as_str(), relay.operator))
+            .collect();
+        assert_eq!(
+            shown[0],
+            ("wss://relay.peoples.chat", RelayOperator::PeoplesChat)
+        );
+        assert_eq!(shown.len(), 4);
+        assert!(
+            shown[1..]
+                .iter()
+                .all(|(_, operator)| *operator == RelayOperator::Independent),
+            "{shown:?}"
         );
     }
 }

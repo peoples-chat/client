@@ -134,9 +134,10 @@ on the screen that shows it.
 
 ## Relays
 
-**Defaults.** New accounts use three public, general-purpose relays: `wss://relay.damus.io`, `wss://nos.lol` and
-`wss://relay.primal.net` (`DEFAULT_RELAYS` in `core/src/messaging.rs`). Who runs the project's own relays is decided
-later (#11). Building with `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) replaces them; see
+**Defaults.** New accounts use the project's relay, `wss://relay.peoples.chat` (#90, `relay/`), and three public,
+general-purpose relays: `wss://relay.damus.io`, `wss://nos.lol` and `wss://relay.primal.net` (`DEFAULT_RELAYS` in
+`core/src/messaging.rs`). No two share an operator. Accounts created before 27 November 2026 keep the three they were
+set up with. Building with `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) replaces them; see
 [core-interface.md](core-interface.md#running-the-app-with-the-real-core).
 
 **How other clients find an account.**
@@ -352,7 +353,7 @@ connecting, offline or not tried yet.
   example.
 - Each relay's own status goes to the interface too (#88): connected; connecting while it opens or during a drop
   shorter than `DOWN_AFTER`; unreachable after that. Who runs a relay comes from `PROJECT_RELAYS`
-  (`core/src/messaging.rs`), which stays empty until the project runs one (#11).
+  (`core/src/messaging.rs`): the project runs `wss://relay.peoples.chat` (#90).
 
 **Timing.** Blocking the relays makes a chat `unreachable` 10 seconds after MDK sees the connections close. Unblocking
 makes it `internet` again with MDK's next attempt, within 5 seconds.

@@ -453,8 +453,8 @@ demo ports: a radio on the expected preset, one on another preset, and a device 
 The snapshot lists the account's relays, and `relaysChanged` carries all of them whenever one changes (#88):
 
 - `url`: the relay's address, such as `wss://nos.lol`.
-- `operator`: `peoplesChat` for a relay the project runs, `independent` for any other. The project runs none yet (#11),
-  so every relay is `independent` for now. The core's list of them is `PROJECT_RELAYS` in `core/src/messaging.rs`.
+- `operator`: `peoplesChat` for a relay the project runs, `independent` for any other. The project runs one,
+  `wss://relay.peoples.chat` (#90, `relay/`). The core's list of them is `PROJECT_RELAYS` in `core/src/messaging.rs`.
 - `status`:
   - `connected`;
   - `connecting` while the connection opens, or during a drop shorter than 10 seconds;
