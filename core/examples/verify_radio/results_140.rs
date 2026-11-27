@@ -259,4 +259,33 @@ fn issue_140_the_page_names_the_lab_preset_recommends_a_path_and_notes_adverts()
     ] {
         assert!(page.contains(says), "docs/radio-paths.md lacks: {says}");
     }
+    for placeholder in ["ADVERTS", "COMMENT_LINK", "TODO", "TBD"] {
+        assert!(
+            !page.contains(placeholder),
+            "docs/radio-paths.md still holds {placeholder}"
+        );
+    }
+}
+
+/// Neither radio's capture of the R1 to R2 run holds an advert it heard (`0x88 | SNR | RSSI |
+/// header`, payload type 4) or an advert command (7) from the app, as the page says.
+#[test]
+fn issue_140_the_captures_hold_no_unprompted_advert() {
+    for radio in ["R1", "R2"] {
+        let capture = repository(&format!(
+            "fake-radio/tests/fixtures/lab-path-spike-{radio}.frames"
+        ));
+        let heard = capture
+            .lines()
+            .filter_map(|line| line.strip_prefix("radio 88"))
+            .map(|hex| hex::decode(hex).unwrap())
+            .filter(|frame| (frame[2] >> 2) & 0x0f == 4)
+            .count();
+        let prompted = capture
+            .lines()
+            .filter(|line| line.starts_with("app 07"))
+            .count();
+        assert_eq!((heard, prompted), (0, 0), "{radio}");
+    }
+    assert_in_page(&["| R1 to R2 | 14.7 min | 0 | 0 |".to_owned()]);
 }

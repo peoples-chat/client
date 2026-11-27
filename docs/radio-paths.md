@@ -238,11 +238,30 @@ The longest chat text that arrived intact every time, zero hop, on the lab prese
 would need a proposal (#58). The other way to gain the 4 bytes is a smaller overhead in the format, which this
 measurement doesn't look into.
 
-Posted on #36: COMMENT_LINK
+Posted [on #36](https://github.com/peoples-chat/client/issues/36#issuecomment-7213712045).
 
 ## Adverts the radios send on their own
 
-ADVERTS
+For #44's one-hour window. Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm), not EU/UK Narrow.
+
+**Neither radio sent an advert on its own in 22 minutes.** This comes from the frame logs of the two path-spike runs
+above, which were back to back from 09:12:52 to 09:35:12 on 27 November 2026. Both radios' links were open the whole
+time, apart from the short `--offline` gaps.
+
+- **How it was counted.** Each radio reports every packet it hears as `LOG_RX_DATA` (code `0x88`). An advert is a
+  packet of type 4, so its header byte is `0x10` to `0x13`. None of the frames had one, from R1, R2 or any other radio.
+  The same count finds the 26 text packets in the table above, so the count is sound.
+- **Nothing prompted one.** The harness sent no advert command (code 7) during the runs.
+
+| Run | Listened | Adverts heard by R1 | Adverts heard by R2 |
+| --- | --- | --- | --- |
+| R1 to R2 | 14.7 min | 0 | 0 |
+| R2 to R1 | 7.4 min | 0 | 0 |
+
+**Still to do: the full hour.** `pnpm verify:radio --adverts 75` listens on both radios for 75 minutes. It then has
+each radio send one advert, and fails unless the other radio hears it. That last step shows the listening works. It
+hasn't run yet: the factory doesn't allow `verify:radio` with arguments (#140). Until it runs, #44 can't count on an
+unprompted advert within its hour. It must not count on one either, because none came in 22 minutes.
 
 ## Choosing the path
 
