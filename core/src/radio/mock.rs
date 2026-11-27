@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use super::{
-    ContactKind, EVENT_BUFFER, Mesh, Port, Radio, RadioContact, RadioError, RadioEvent, RadioInfo,
-    RadioPorts, RadioSettings, Sent, check_text, key_prefix,
+    ContactKind, EVENT_BUFFER, Mesh, MeshtasticInfo, Port, Radio, RadioContact, RadioError,
+    RadioEvent, RadioInfo, RadioPorts, RadioSettings, Sent, check_text, key_prefix,
 };
 
 /// The settings a mock radio reports unless it is given others: MeshCore's EU/UK narrow preset.
@@ -19,6 +19,14 @@ pub const MOCK_SETTINGS: RadioSettings = RadioSettings {
     bandwidth_khz: 62.5,
     spreading_factor: 8,
     coding_rate: 8,
+    tx_power_dbm: 22,
+};
+/// The settings of a mock Meshtastic radio: the LongFast preset in the EU_868 region.
+const MOCK_MESHTASTIC_SETTINGS: RadioSettings = RadioSettings {
+    frequency_mhz: 869.525,
+    bandwidth_khz: 250.0,
+    spreading_factor: 11,
+    coding_rate: 5,
     tx_power_dbm: 22,
 };
 /// How long a mock radio says a confirmation may take.
@@ -40,6 +48,7 @@ struct MeshState {
 }
 
 struct Node {
+    mesh: Mesh,
     name: String,
     settings: RadioSettings,
     events: broadcast::Sender<RadioEvent>,
@@ -61,6 +70,17 @@ impl MockMesh {
     /// messages whatever the settings; telling which radios can hear each other is the core's
     /// job.
     pub fn radio_with(&self, name: &str, settings: RadioSettings) -> MockRadio {
+        self.add(Mesh::MeshCore, name, settings)
+    }
+
+    /// Adds a connected radio called `name` that says it runs Meshtastic (#128), for records and
+    /// keys: the core sends nothing through it. The mock mesh still hands it whatever is sent to
+    /// it.
+    pub fn meshtastic_radio(&self, name: &str) -> MockRadio {
+        self.add(Mesh::Meshtastic, name, MOCK_MESHTASTIC_SETTINGS)
+    }
+
+    fn add(&self, mesh: Mesh, name: &str, settings: RadioSettings) -> MockRadio {
         let mut state = self.state();
         let mut key = [0u8; 32];
         let number = u64::try_from(state.radios.len()).unwrap_or(u64::MAX) + 1;
@@ -73,6 +93,7 @@ impl MockMesh {
         state.radios.insert(
             public_key.clone(),
             Node {
+                mesh,
                 name: name.to_owned(),
                 settings,
                 events,
@@ -153,20 +174,27 @@ impl MockRadio {
 #[async_trait]
 impl Radio for MockRadio {
     fn mesh(&self) -> Mesh {
-        Mesh::MeshCore
+        self.mesh.state().radios[&self.public_key].mesh
     }
 
     async fn info(&self) -> Result<RadioInfo, RadioError> {
         let state = self.mesh.state();
         self.connected(&state)?;
         let node = &state.radios[&self.public_key];
+        let meshtastic = (node.mesh == Mesh::Meshtastic).then(|| MeshtasticInfo {
+            // The radio's place on the mesh, which its key starts with.
+            node_num: u32::from_str_radix(&self.public_key[8..16], 16).unwrap_or_default(),
+            preset: Some("LONG_FAST".to_owned()),
+            region: Some("EU_868".to_owned()),
+        });
         Ok(RadioInfo {
-            mesh: Mesh::MeshCore,
+            mesh: node.mesh,
             public_key: self.public_key.clone(),
             name: node.name.clone(),
             settings: node.settings,
             firmware: Some("mock".to_owned()),
             model: Some("Mock radio".to_owned()),
+            meshtastic,
         })
     }
 

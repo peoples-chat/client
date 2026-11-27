@@ -21,8 +21,8 @@ use crate::interface::{
 use crate::invite;
 use crate::invites::{InviteRecord, Invites};
 use crate::messaging::{
-    ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
-    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
+    ChatItem, DirectChat, EpochChange, InviteToken, Messaging, MessagingError, MessagingOptions,
+    NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
@@ -823,6 +823,9 @@ impl Core {
     /// and keeps them up to date. Chats whose contacts' names are known go in now; the rest
     /// arrive as events once their names are. Follows the relays too, for each chat's reach.
     async fn follow(&self, account_hex: &str) {
+        // Chats' new epochs from before the chats are read, so that no change to a chat's state
+        // is missed (#128).
+        let mut epochs = self.inner.messaging.follow_epochs();
         // Messages first: a message that arrives while the chats are being read is then either
         // in a chat's history already or among the messages followed from here.
         let messages = self.inner.messaging.follow_messages(account_hex).await;
@@ -890,7 +893,6 @@ impl Core {
                     ChatItem::Text(message) => core.apply_message(&message),
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
                     ChatItem::RadioAddress(address) => core.radio_address_received(&address),
-                    ChatItem::RadioKey(key) => core.radio_key_received(&key),
                 }
             }
         });
@@ -903,7 +905,22 @@ impl Core {
                 tokio::time::sleep(CONTACT_REFRESH).await;
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
+        let core = Arc::downgrade(&self.inner);
+        let epoch_watcher = tokio::spawn(async move {
+            while let Some(change) = epochs.next().await {
+                let Some(core) = upgrade(&core) else { return };
+                match change {
+                    EpochChange::Chat(chat_id) => core.radio_chat_changed(&chat_id),
+                    EpochChange::Missed => core.refresh_radio_records().await,
+                }
+            }
+        });
+        let mut watchers = vec![
+            chat_watcher,
+            message_watcher,
+            contact_watcher,
+            epoch_watcher,
+        ];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),

@@ -16,10 +16,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use cgka_traits::engine::GroupEvent;
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
-    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, RelayLiveness,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime, RelayLiveness,
     RelayLivenessStatus, RuntimeChatsSubscription, RuntimeRelayLivenessSubscription,
     RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
     TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
@@ -52,12 +53,9 @@ const CHAT_KIND: u64 = 9;
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
 /// It isn't text, so White Noise doesn't show it as a message.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
-/// The app's own kind for a radio address record (#34), which each app sends in its direct
-/// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
-pub const RADIO_ADDRESS_KIND: u64 = 9_911;
-/// The app's own kind for a radio key record (#128), which each app sends in its direct chats
-/// when it has a radio, and again when the chat's membership changes. Provisional, like 9910.
-pub const RADIO_KEY_KIND: u64 = 9_912;
+/// The app event that carried a version 0 radio address record (#34), in builds before the
+/// records moved into the chat's state (#128). Still read, never sent.
+const RADIO_ADDRESS_KIND: u64 = 9_911;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -292,43 +290,12 @@ fn radio_address(record: &TimelineMessageRecord) -> Option<RadioAddressItem> {
     )
 }
 
-/// A radio key record that another member sent in a chat (#128), as it came: the core reads it.
-/// `Debug` leaves the record out, as it holds a key.
-#[derive(Clone, PartialEq, Eq)]
-pub struct RadioKeyItem {
-    pub chat_id: String,
-    /// The sender's public key, in hex, as MLS authenticated it.
-    pub sender: String,
-    pub record: String,
-}
-
-impl std::fmt::Debug for RadioKeyItem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RadioKeyItem")
-            .field("chat_id", &self.chat_id)
-            .field("sender", &self.sender)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The radio key record in `record`, if it is one another member sent.
-fn radio_key(record: &TimelineMessageRecord) -> Option<RadioKeyItem> {
-    (record.kind == RADIO_KEY_KIND && record.direction == "received" && !record.deleted).then(
-        || RadioKeyItem {
-            chat_id: record.group_id_hex.clone(),
-            sender: record.sender.clone(),
-            record: record.plaintext.clone(),
-        },
-    )
-}
-
 /// What can come in a chat, as the core follows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
-    RadioKey(RadioKeyItem),
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -336,7 +303,6 @@ fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
         .map(ChatItem::Text)
         .or_else(|| invite_token(record).map(ChatItem::InviteToken))
         .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
-        .or_else(|| radio_key(record).map(ChatItem::RadioKey))
 }
 
 /// What comes in the account's chats as it is added or changes: text messages, for example
@@ -390,6 +356,39 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
             .map(|relay| canonical_relay(relay))
             .collect(),
     })
+}
+
+/// The chats that move to new MLS epochs, from when following began.
+pub struct EpochChanges {
+    events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
+}
+
+/// What [`EpochChanges::next`] saw.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EpochChange {
+    /// The chat with this id is in a new epoch.
+    Chat(String),
+    /// Some changes were missed: any chat may be in a new epoch.
+    Missed,
+}
+
+impl EpochChanges {
+    /// The next change. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<EpochChange> {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            match self.events.recv().await {
+                Ok(MarmotAppEvent::GroupEvent(group)) => {
+                    if let GroupEvent::EpochChanged { group_id, .. } = &group.event {
+                        return Some(EpochChange::Chat(group_id.to_string()));
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => return Some(EpochChange::Missed),
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
 }
 
 /// One of the account's relays, and whether the account's connection to it is open.
@@ -946,65 +945,6 @@ impl Messaging {
         Ok(page.messages.iter().filter_map(radio_address).collect())
     }
 
-    /// Sends this phone's radio address record in the chat `chat_id` (#34).
-    pub async fn send_radio_address(
-        &self,
-        account_hex: &str,
-        chat_id: &str,
-        record: &str,
-    ) -> Result<(), MessagingError> {
-        self.runtime
-            .send_custom_event(
-                account_hex,
-                &group_id(chat_id)?,
-                RADIO_ADDRESS_KIND,
-                Vec::new(),
-                record.to_owned(),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// The radio key records the other members sent in the chat `chat_id` (#128), oldest first.
-    pub fn radio_key_records(
-        &self,
-        account_hex: &str,
-        chat_id: &str,
-    ) -> Result<Vec<RadioKeyItem>, MessagingError> {
-        let page = self.runtime.timeline_messages_with_query(
-            account_hex,
-            TimelineMessageQuery {
-                group_id_hex: Some(chat_id.to_owned()),
-                pagination: TimelinePagination {
-                    limit: Some(HISTORY_LIMIT),
-                    ..TimelinePagination::default()
-                },
-                ..TimelineMessageQuery::default()
-            },
-        )?;
-        Ok(page.messages.iter().filter_map(radio_key).collect())
-    }
-
-    /// Sends this phone's radio key record in the chat `chat_id` (#128): an app event inside the
-    /// chat's MLS messages, and nowhere else.
-    pub async fn send_radio_key(
-        &self,
-        account_hex: &str,
-        chat_id: &str,
-        record: &str,
-    ) -> Result<(), MessagingError> {
-        self.runtime
-            .send_custom_event(
-                account_hex,
-                &group_id(chat_id)?,
-                RADIO_KEY_KIND,
-                Vec::new(),
-                record.to_owned(),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
     /// chat without a request (#95).
     pub async fn send_invite_token(
@@ -1124,6 +1064,45 @@ impl Messaging {
             )?),
             None => self.runtime.reveal_nsec(account_hex, EXPORT_CALLER)?,
         })
+    }
+
+    /// The app component `component` in the state of the chat `chat_id`, as this device's copy
+    /// has it now (#128). `None` when absent. A change of this account's that waits for the
+    /// relays isn't in it yet.
+    pub async fn app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+    ) -> Result<Option<Vec<u8>>, MessagingError> {
+        Ok(self
+            .runtime
+            .group_app_component(account_hex, &group_id(chat_id)?, component)
+            .await?)
+    }
+
+    /// Replaces the app component `component` in the state of the chat `chat_id` with `data`, by
+    /// an MLS commit: nothing shows in the chat (#128). Only an admin of the chat can. Without a
+    /// relay, MDK keeps the change and publishes it later by itself.
+    pub async fn set_app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+        data: Vec<u8>,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_app_component(account_hex, &group_id(chat_id)?, component, data)
+            .await?;
+        Ok(())
+    }
+
+    /// Follows the chats' moves to new MLS epochs from now on: the sign that a chat's state, or
+    /// its membership, may have changed (#128).
+    pub fn follow_epochs(&self) -> EpochChanges {
+        EpochChanges {
+            events: self.runtime.subscribe(),
+        }
     }
 
     /// Updates the account's own key in the chat `chat_id`, which starts a new MLS epoch once
