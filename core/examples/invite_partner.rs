@@ -44,6 +44,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),
+        chat_media_servers: Vec::new(),
+        lookup_relays: Vec::new(),
     })
     .await?;
     let mut events = core.subscribe();
