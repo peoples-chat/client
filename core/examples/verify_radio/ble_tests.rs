@@ -3,6 +3,8 @@
 //! same against the lab's radios is `pnpm verify:radio`.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use peoples_chat_core::radio::{MeshCoreRadio, Port, Radio};
@@ -10,10 +12,13 @@ use peoples_chat_fake_radio::{self as fake, FakeRadio};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 
+use crate::checks_and_tests;
 use crate::config::{self, Config};
 use crate::lab::{Lab, Timing, Usb};
 use crate::link::{FrameLog, Io};
+use crate::messages::Waits;
 use crate::power::Power;
+use crate::support;
 
 #[path = "../../tests/support/bridge.rs"]
 mod bridge;
@@ -62,21 +67,30 @@ fn timing() -> Timing {
     }
 }
 
-/// R1's USB port: a TCP link to its fake.
-struct Cable(SocketAddr);
+/// The computer's USB ports: TCP links to fakes, by serial number.
+struct Cables(Vec<(&'static str, SocketAddr)>);
 
 #[async_trait]
-impl Usb for Cable {
+impl Usb for Cables {
     async fn list(&self) -> Result<Vec<Port>, String> {
-        Ok(vec![Port {
-            path: "/dev/cu.usbmodem1101".to_owned(),
-            description: None,
-            serial_number: Some("AAAA1111".to_owned()),
-        }])
+        Ok(self
+            .0
+            .iter()
+            .map(|(serial, _)| Port {
+                path: format!("/dev/cu.fake-{serial}"),
+                description: None,
+                serial_number: Some((*serial).to_owned()),
+            })
+            .collect())
     }
 
-    fn open(&self, _path: &str) -> Result<Box<dyn Io>, String> {
-        let stream = std::net::TcpStream::connect(self.0).map_err(|error| error.to_string())?;
+    fn open(&self, path: &str) -> Result<Box<dyn Io>, String> {
+        let (_, addr) = self
+            .0
+            .iter()
+            .find(|(serial, _)| path.ends_with(serial))
+            .ok_or("no such port")?;
+        let stream = std::net::TcpStream::connect(addr).map_err(|error| error.to_string())?;
         stream
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;
@@ -117,7 +131,7 @@ impl Bench {
         let folder = TempDir::new().unwrap();
         let lab = Lab {
             config,
-            usb: &Cable(self.r1.addr()),
+            usb: Arc::new(Cables(vec![("AAAA1111", self.r1.addr())])),
             power: &NoPower,
             log: FrameLog::create(folder.path()).unwrap(),
             timing: timing(),
@@ -209,6 +223,64 @@ async fn issue_135_messages_pass_both_ways_and_a_dropped_link_comes_back() {
         "{dropped}"
     );
     assert!(dropped.contains("arrived over the new link"), "{dropped}");
+}
+
+/// The whole lab at once, as on the Mac: R1 and R2 on USB (#134), R3 behind the bridge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue_135_one_run_covers_the_bluetooth_radio_and_the_two_usb_radios() {
+    let _turn = support::take_turn().await;
+    let bench = Bench::new(fake::Config::default()).await;
+    let r2 = FakeRadio::start(fake::Config::default()).await.unwrap();
+    fake::link(&bench.r1, &r2).unwrap();
+    // R1's clock is behind, as the lab's were.
+    bench.r1.set_clock(1_715_824_653);
+    let mut config = config(&bench.bridge);
+    let mut second = config.radios[0].clone();
+    second.label = "R2".to_owned();
+    second.usb_serial = Some("BBBB2222".to_owned());
+    config.radios.insert(1, second);
+    let folder = TempDir::new().unwrap();
+    let lab = Lab {
+        config: &config,
+        usb: Arc::new(Cables(vec![
+            ("AAAA1111", bench.r1.addr()),
+            ("BBBB2222", r2.addr()),
+        ])),
+        power: &NoPower,
+        log: FrameLog::create(folder.path()).unwrap(),
+        timing: Timing {
+            reply: Timing::default().reply,
+            ..timing()
+        },
+        bluetooth: true,
+    };
+    let waits = Waits {
+        delivery: Duration::from_secs(30),
+        advert: Duration::from_secs(5),
+        app: Duration::from_secs(60),
+        closed: Duration::from_secs(2),
+        reconnect: Duration::from_secs(30),
+    };
+    let mut out = Vec::new();
+    let result = checks_and_tests(&lab, waits, false, &mut out).await;
+    let out = String::from_utf8(out).unwrap();
+    result.unwrap_or_else(|error| panic!("{error}\n{out}"));
+    let mut rest = out.as_str();
+    for expected in [
+        "ok R1: clock set",
+        "ok R2: clock ",
+        "ok R1 (USB) to R3 (Bluetooth)",
+        "ok R3 (Bluetooth) to R1 (USB)",
+        "ok R3: the bridge dropped the Bluetooth link",
+        "Over the air: R1 and R2",
+        "ok R1: heard R2's advert",
+        "ok \"Lab message 2\" from R1 to R2",
+    ] {
+        let at = rest
+            .find(expected)
+            .unwrap_or_else(|| panic!("missing {expected:?} in:\n{out}"));
+        rest = &rest[at + expected.len()..];
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

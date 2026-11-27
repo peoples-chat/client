@@ -287,8 +287,11 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
 
 - **Ports.** Each fake listens on 127.0.0.1, on a free port unless `Config::port` names one, so tests run in parallel.
 - **Commands.** App start, device query, contacts, sending a direct message and collecting received ones, with the
-  message-waiting and send-confirmed pushes; the battery level and announcing itself (#135). Any other command gets
-  the "unsupported" error.
+  message-waiting and send-confirmed pushes, reading and setting the clock (never backwards), sending an advert (#134)
+  and the battery level (#135). An advert is stamped with the sender's clock. A radio that holds the sender as a contact
+  reports it only if it is later than the last one it took; one that doesn't adds the sender, if it has room. Any other
+  command gets the "unsupported" error. `set_clock` puts a clock off, and `lose_next_messages` loses a chosen number of
+  messages.
 - **Pairs.** `pair` starts two radios that hear each other and hold each other as contacts; `link` does so for two that
   are already running. `add_contact` adds more. `put_in_range` makes two radios hear each other without making them
   contacts: each adds the other when it hears it announce itself.
@@ -310,7 +313,7 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
   file with one frame per line, in order: `app` or `radio`, a space, then the payload in hex without the stream
   framing. `#` starts a comment line. The app's commands are compared by their first byte only; `replay_mismatches` and
   `replay_remaining` tell whether the app followed the capture.
-- **What it isn't.** One hop, no routes, channels or airtime, and no advert pushes. The signal strength is always 7.25 dB. Its
+- **What it isn't.** One hop, no routes, channels or airtime, and no push for a new contact. The signal strength is always 7.25 dB. Its
   frames follow the layouts above, not a comparison with a real radio, and the fixture in `fake-radio/tests/fixtures`
   is built by hand until real captures exist (#133).
 
