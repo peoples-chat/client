@@ -27,10 +27,11 @@ The recommendation is in [Recommendation](#recommendation). The work is split in
 
 - **Web pages** were all read on 27 November 2026. Each claim links to the page it comes from.
 - **How far to trust it:**
-  - The White Noise and Marmot claims the recommendation rests on were read line by line for this document: the files
-    marked ✔ in [question 6](#6-white-noise-and-other-marmot-apps) and the spec lines in
-    [question 7](#7-groups). The other White Noise citations come from a first pass that had no full-text search in
-    the checkouts, so "not found" there means "not in the files read".
+  - The White Noise and Marmot citations marked ✔ in [question 6](#6-white-noise-and-other-marmot-apps) and
+    [question 7](#7-groups) were opened at the cited lines and read for this document. The few without a mark come
+    from a first pass and were not opened again.
+  - The checkouts could be read file by file but not searched. So "White Noise has no …" means "not in the files
+    read", and each such claim says which files those were.
   - Web pages were read through a tool that returns page text, sometimes shortened. Quotes are as the tool gave them.
     Check a quote against its page before reusing it elsewhere.
   - **Unverified** marks what no primary source confirmed. Nothing in the recommendation depends on an unverified
@@ -109,7 +110,7 @@ Sources:
 - **Nostr has no link format for inviting a person.** No NIP in
   [the index](https://raw.githubusercontent.com/nostr-protocol/nips/master/README.md) defines one. The Marmot spec
   defines none either: "Human formats such as `npub` are presentation formats and do not appear in Marmot protocol
-  bytes" (`foundation/identity.md:9-10`).
+  bytes unless a document says so" (`foundation/identity.md:9-10`).
 
 Two families show. Telegram, WhatsApp, Threema and njump put a short identifier in the path, and the server resolves
 it. Signal, Matrix and SimpleX put everything after the `#`, and the server learns little or nothing. Only the first
@@ -471,9 +472,10 @@ Files marked ✔ were read for this document. The rest come from the first pass 
 - **iOS, NIP-05** ✔ `whitenoise-ios/Recipients/Nip05Resolver.swift:46-50` builds the same lookup address.
 - **Linux** ✔ `app/deeplink.odin:25-38` takes `marmot://profile/<ref>` only. ✔ `app/nostr_ref.odin:36-44` allows the
   prefixes `@`, `nostr:`, `https://primal.net/e/` and `https://njump.me/` before a key. NIP-05 lookups are in
-  `app/nip05.odin:57-87`, used from the group member fields (`app/handlers.odin:2035`, `2350-2353`).
-- **wn-tui** has no parsing of its own: it passes what is typed to the `wn` command (`src/main.rs:939`,
-  `src/app.rs:1310-1319`).
+  ✔ `app/nip05.odin:57-87`, which asks `https://<domain>/.well-known/nostr.json?name=<name>` and refuses redirects.
+  They are used from the group member fields (✔ `app/handlers.odin:2035`, `2350-2353`).
+- **wn-tui** has no parsing of its own: it passes what is typed to the `wn` command, as a user search
+  (✔ `src/main.rs:935-939`) or as the member to add (✔ `src/app.rs:1310-1319`).
 
 ### QR codes
 
@@ -481,13 +483,13 @@ Files marked ✔ were read for this document. The rest come from the first pass 
 | --- | --- | --- |
 | Android | `marmot://profile/<npub>?from=qr` (✔ `ProfileLink.kt:16-20`) | What `ProfileLink.parse` takes, or text that starts with `npub1` or `nprofile1`, with or without `nostr:` (✔ `…/ui/qr/QrScanResult.kt:77-107`) |
 | iOS | `marmot://profile/<npub>` (✔ `whitenoise-ios/Settings/ShareAndConnectView.swift:35-37`, ✔ `Shared/DeepLink.swift:53-72`) | The same forms as pasting (✔ `Shared/DeepLink.swift:112-123`) |
-| Linux | `marmot://profile/<npub>?from=qr` (`app/pane_widgets.odin:55-65`) | It has no scanner |
+| Linux | `marmot://profile/<npub>?from=qr` (✔ `app/pane_widgets.odin:55-65`) | No scanner in the files read |
 | wn-tui | None | None |
 
 A web link in a QR code is refused by both scanners. Android's test says so:
 `assertEquals(QrScanOutcome.Invalid, viewProfile("https://example.com"))`
 (✔ `app/src/test/java/dev/ipf/whitenoise/android/ui/qr/QrScanResultTest.kt:93`). iOS answers "That QR code isn't a
-White Noise profile." (`whitenoise-ios/Chats/NewChatFlowView.swift:140-145`).
+White Noise profile." (✔ `whitenoise-ios/Chats/NewChatFlowView.swift:140-145`).
 
 ### Links that open White Noise
 
@@ -495,20 +497,27 @@ White Noise profile." (`whitenoise-ios/Chats/NewChatFlowView.swift:140-145`).
   host, no `autoVerify`, no `nostr:`.
 - **iOS** ✔ `Config/Production.xcconfig:6-7`: `marmot` and `whitenoise`. No universal links: the entitlements have no
   associated domains (✔ `whitenoise-ios/whitenoise-ios.entitlements`).
-- **Linux:** `x-scheme-handler/marmot` (`assets/whitenoise-linux.desktop:6,10`).
-- **Routes:** `profile/<npub>` opens the profile. `chat/<group id>` opens a chat the user is already in
-  (✔ `Shared/DeepLink.swift:14-15`, `92-97`; Android `core/ChatLink.kt:16-53`). Neither joins anything.
+- **Linux:** `x-scheme-handler/marmot` (✔ `assets/whitenoise-linux.desktop:6,10`).
+- **Routes:** `profile/<ref>` and `chat/<group id>` (✔ `Shared/DeepLink.swift:14-15`, `86-97`; Android
+  ✔ `core/ChatLink.kt:16-53`).
+  - Android makes chat links too: "The canonical link for a chat, in the form [parse] reads back; shared from chat
+    details" (✔ `core/ChatLink.kt:30-31`).
+  - A chat link holds the group's id and nothing else: no key, no token, nobody to ask. Since nobody can add
+    themselves to a group ([question 7](#7-groups)), it can only lead to a chat the person is already in. The code
+    that handles an opened chat link was not read, so what a non-member sees is **unverified**.
 - `https://whitenoise.chat/.well-known/assetlinks.json` and `apple-app-site-association` answered 404 on 27 November
   2026, which agrees with the code.
 
 ### Sharing, and the profile
 
-- **Share** gives `marmot://profile/<npub>` on both phones (Android `ui/settings/ShareConnectScreen.kt:184-191`;
-  iOS ✔ `ShareAndConnectView.swift:75-80`). Copy gives the bare npub.
-- **NIP-05 on a profile** is shown by all four apps. Android and iOS check it and show a verified mark when the
-  resolved key matches (Android `ui/chats/newchat/RecipientResolution.kt:310-318`; iOS
-  `whitenoise-ios/Profile/ProfileAddressVerificationModel.swift:22-56`). iOS takes a local part of `[a-z0-9._+-]`
-  (`Shared/ContentSanitizer.swift:183-189`); the handle rules above fit inside that.
+- **Share** gives `marmot://profile/<npub>` on both phones (Android ✔ `ui/settings/ShareConnectScreen.kt:184-191`,
+  which shares the link, or the bare npub when there is none; iOS ✔ `ShareAndConnectView.swift:75-80`). That Copy
+  gives the bare npub is from the first pass.
+- **NIP-05 on a profile.** Android and iOS check the address and mark it verified when it resolves to the same key
+  (Android ✔ `ui/chats/newchat/RecipientResolution.kt:310-318`; iOS
+  ✔ `whitenoise-ios/Profile/ProfileAddressVerificationModel.swift:22-56`). iOS takes a local part of `a-z`, `0-9`,
+  `.`, `_`, `-` and `+`, up to 64 characters (✔ `Shared/ContentSanitizer.swift:337-347`); the handle rules above fit
+  inside that. That Linux and wn-tui show the address as well is from the first pass.
 - **Finding the account** is a separate matter from links: White Noise looks a new contact up on its own two relays
   (✔ `core/MarmotClient.kt:59-63`; #76). The app already copies profiles there and looks people up there (#113, #120).
   Whether relay lists and key packages are copied too is #76, still open. A link that reaches White Noise is only
@@ -541,8 +550,8 @@ examined.
 
 - **Only by being added.** An inviter fetches the person's key packages, commits an Add, and sends a Welcome:
   "Later, an inviter fetches them, adds a leaf for each KeyPackage it selects ... and sends each selected device a
-  Welcome" (`foundation/key-packages.md:9-11`). The Welcome travels as a gift wrap to the person's inbox relays
-  (`transports/nostr.md:226-231`).
+  Welcome" (✔ `foundation/key-packages.md:9-11`). The Welcome travels as a gift wrap addressed to the person's key
+  (✔ `transports/nostr.md:226-231`).
 - **Only an admin can add someone else.** "The following non-component operations also require an active admin to
   commit: invite a new member; remove another member" (✔ `app-components/admin-policy-v1.md:100-103`). The one
   exception is a member adding their own other devices (✔ 107-112).
@@ -553,21 +562,26 @@ examined.
   non-admin `new_member_commit` External Commit path" (✔ `protocol-core/group-messaging.md:55-57`).
 - **But a request is allowed, as an app's own feature.** "A request for an admin-gated group-state change is an
   application payload or feature-owned request flow, not a standalone MLS proposal" (✔ 60-61). The spec defines no
-  such flow, and no group link. Its `ideas/` folder lists three ideas, none of them about joining
-  (`ideas/README.md:19-21`).
-- **MDK has the adding and nothing else:** `invite_members` (`crates/marmot-app/src/runtime/commands.rs:1320`). No
-  join request and no group link were found in its API reference.
-- **White Noise has no group links either.** Members are added by a member who supplies their key
-  (Android `state/AppStateProfileGroups.kt:179-200`; iOS `whitenoise-ios/Group/AddMembersSheet.swift:247-256`).
+  such flow, and no group link. Its `ideas/` folder lists three ideas: several devices, account sync and agents in
+  chats (✔ `ideas/README.md:19-21`). None is about joining by a link.
+- **MDK has the adding:** `invite_members` (✔ `crates/marmot-app/src/runtime/commands.rs:1320-1325`). The first pass
+  found no join request and no group link in its API reference; that file is too long to have been read whole, so
+  this is **unverified**.
+- **White Noise has no link that lets someone join.** Members are added by someone in the group who supplies their
+  key: Android calls `inviteMembersDetailed` with the person's reference (✔ `state/AppStateProfileGroups.kt:179-200`),
+  and iOS says "Paste an npub or scan a QR code to add someone you haven't chatted with yet."
+  (✔ `whitenoise-ios/Group/AddMembersSheet.swift:157`). Its `marmot://chat/<group id>` links carry only the group's
+  id ([question 6](#links-that-open-white-noise)).
 
 ### What a link can't carry
 
 - **Not the group's id.** "That id is private group security state and MUST NOT be published through a transport
   envelope" (✔ `protocol-core/group-setup.md:21-22`).
 - **Better not its relay address either.** "An outsider can learn the Nostr routing handle and send envelopes that
-  reach validation and trial decryption" (`security-considerations.md:203`).
-- **The group's name and picture are not public.** They live in the group's encrypted state
-  (`app-components/group-profile-v1.md:9`). A page can only show what the link's maker hands the service.
+  reach validation and trial decryption" (✔ `security-considerations.md:203`).
+- **The group's name and picture are not public.** They live in the group's own state, which members hold:
+  "Location: GroupContext `app_data_dictionary`" (✔ `app-components/group-profile-v1.md:9`). A page can only show
+  what the link's maker hands the service.
 
 ### What a group link can realistically do
 
