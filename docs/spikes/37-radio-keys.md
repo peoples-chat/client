@@ -2,6 +2,9 @@
 
 **Result: works, without changes to MDK.** Tested 22 November 2026 with MDK v0.18.0.
 
+**Corrected by #128:** the secret the keys come from is one Marmot reserves for another use. It stays for the proof of
+concept only ([The keys](#the-keys)).
+
 Both members of a direct chat derive the same radio keys from the chat's MLS state, so radio needs no key exchange of
 its own:
 
@@ -52,16 +55,20 @@ way round. This keeps the two senders' nonces apart, and a packet reflected back
 
 **The label is provisional and unregistered.** Marmot assigns exporter contexts only when a spec is adopted.
 
-- A registered context, or the safe exporter, can replace the group-event secret later.
-- Proposing one belongs with the radio format proposal (#56, #58).
+**The group-event secret is not ours to use** (#128, found after the spike). Marmot registers it for the outer
+encryption of kind-445 events only, and forbids its reuse for other feature keys. The spike called it safe to build on
+without knowing that rule.
 
-**Why the group-event secret is safe to build on:**
-
-- HKDF with a label of our own keeps the radio keys separate from MDK's key for relay events. Knowing a radio key
-  reveals neither the secret nor that key.
-- Anyone who has the secret is a member of the chat, or got it from one: the same boundary the chat already has.
-- In a two-person chat, being a member means being one of the two. This is the member-level authentication the spec
-  asks for.
+- **What holds:** HKDF with a label of our own keeps the radio keys separate from MDK's key for relay events. Knowing
+  a radio key reveals neither the secret nor that key. In a two-person chat, a member is one of the two: the
+  member-level authentication the spec asks for.
+- **What doesn't:** "anyone who has the secret is a member" is not the boundary Marmot draws. Its threat model lets an
+  attacker hold a chat's outer key and still not read its messages, because MLS encrypts them again. That attacker
+  can derive the radio keys, and read and forge the radio packets of that epoch.
+- **The decision:** v0 keeps the secret for the proof of concept. An exporter with a radio label and context of its
+  own replaces it before the format is proposed to Marmot or released, which needs MDK to export a label the app
+  chooses (#58). The safe exporter is ruled out. The options and the reasons:
+  [radio-format-v0.md](../radio-format-v0.md#where-the-keys-come-from).
 
 **Code:**
 
@@ -128,9 +135,10 @@ fallback if storing the counter proves fragile.
 ## Answers to the issue
 
 - **Does MDK let the app run an MLS exporter?** Partly. The app can read three fixed exporter secrets of the current
-  epoch, but can't choose its own label. That is enough: a key derived from the group-event secret.
-- **The smallest change, if needed.** None for the PoC. Later, ask Marmot for a registered radio context or for safe
-  exporter support in direct chats (#58).
+  epoch, but can't choose its own label. That is enough for the PoC only: a key derived from the group-event secret,
+  which Marmot reserves for another use (#128).
+- **The smallest change, if needed.** None for the PoC. Before the format is proposed or released: MDK exports a label
+  the app chooses (#58), and Marmot assigns a radio context.
 - **A provisional context.** `peoples.chat/radio/v0`, as the HKDF label, marked unregistered.
 - **Which epoch, when the phones last synced at different epochs.** The sender's newest kept epoch, with an 8-bit hint.
   The receiver keeps four epochs and drops what it has no key for. The relay copy follows.

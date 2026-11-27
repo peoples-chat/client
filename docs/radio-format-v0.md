@@ -18,7 +18,8 @@ requires an independent security review before public release.
   ([radio.md](radio.md#meshcore-facts-that-shape-the-poc)). Another path changes only the carrier and the budget.
 - **Direct chats only:** a chat with exactly two members.
 - **Keys come from the chat's MLS state:** one per direction, per epoch
-  ([spikes/37-radio-keys.md](spikes/37-radio-keys.md)).
+  ([spikes/37-radio-keys.md](spikes/37-radio-keys.md)). v0 takes them from a secret that Marmot reserves for
+  another use: see [Where the keys come from](#where-the-keys-come-from).
 
 ## The packet
 
@@ -50,6 +51,75 @@ be reconsidered with #36's measurements.
 **What opening proves.** A packet that opens with key(e, contact) comes from someone who holds the chat's secret in
 epoch e: a member. In a two-person chat that is the contact, since a packet reflected back to its sender doesn't open
 with the other direction's key. This is the member-level authentication the spec promises, and no more.
+
+## Where the keys come from
+
+**Decision (#128): v0 keeps the group-event secret, as a known break of a Marmot rule. The format can't be proposed
+to Marmot, or released, with it.**
+
+```text
+secret(e)   = MLS-Exporter("marmot", "group-event", 32) in epoch e
+key(e, S)   = HKDF-SHA256(salt: none, IKM: secret(e), info: "peoples.chat/radio/v0" || S's public key), 32 bytes
+```
+
+**The rule.** Marmot registers that secret for one use, the outer encryption of the chat's kind-445 events on the
+relays: "It MUST NOT be reused for app payloads, media, stream records, or other feature keys"
+([transports/nostr.md](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/transports/nostr.md#L119-L120)).
+A feature that needs an epoch secret must use an exporter label and context of its own
+([foundation/mls-protocol.md](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/foundation/mls-protocol.md#L93-L103)).
+The radio keys are a feature key, so v0 breaks the rule. The HKDF label of our own doesn't mend it: it keeps the radio
+keys apart from MDK's key, but both still hang on the one secret.
+
+**What the break costs.** Marmot's threat model has an attacker who gets a chat's outer key. That attacker can remove
+the outer layer of the chat's relay events, and still can't read its messages, because MLS encrypts them again
+underneath
+([SC-033](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/security-considerations.md#L989-L1000)).
+A radio packet has no second layer. With the group-event secret of epoch e, that attacker can derive both radio keys
+of epoch e, and so can:
+
+- read every radio packet of the chat in that epoch;
+- forge packets in either direction, since the key is all that a packet proves
+  ([What opening proves](#encryption)).
+
+Other epochs, and the messages that went over the internet, stay as safe as Marmot keeps them.
+
+**Why v0 keeps it anyway:**
+
+- **Nothing else works with MDK v0.18.0** without a change to MDK or to the chat (the table below).
+- **The proof of concept doesn't depend on the difference.** It is one direct chat between two phones of our own.
+  White Noise never sees a radio packet, and internet chats are unchanged.
+- **The swap is small.** Only `secret(e)` changes. The packet, the HKDF step, the counters and the epoch rules stay,
+  and `Messaging::chat_secret` is the one place in the core that reads the secret.
+
+**The options that were weighed:**
+
+| Option | Verdict | Why |
+| --- | --- | --- |
+| Keep the group-event secret | **v0 only** | It works today. It breaks the rule above, at the cost above |
+| An exporter of our own: `MLS-Exporter` with a label and context for radio | **The target** | It is what Marmot's rule asks for, and it needs nothing from the other member's app. MDK computes three fixed exporters and refuses other labels, so MDK must first export a label the app chooses (#58) |
+| MDK's safe exporter (`safe_export_secret`), for an app component of ours | No | It works only for a component the chat requires, and every member's app must then support it. White Noise doesn't |
+| No derived key: the message, or the key, travels as an ordinary MLS message of a new kind | No | See below |
+
+**Why not an ordinary MLS message.** A comment on #128 asks why radio needs keys of its own at all. There are two ways
+to read that:
+
+- **The radio message as an MLS message.** It doesn't fit. An MLS message carries its framing and a signature, around
+  a signed event, and that leaves no room for text in a 120-byte packet ([The text budget](#the-text-budget)). This is
+  why the spec asks for a compact format with keys from the chat's MLS state.
+- **A random radio key, sent in the chat as a message of a new kind.** It avoids the exporter, but it brings back the
+  key exchange that deriving the keys avoids. The key must reach the contact over the relays before the outage, a new
+  one must follow each epoch change to keep MLS's key renewal, and the two phones must agree on which of them sends
+  it. The new kind is also an identifier for Marmot to assign, as an exporter context is, so it needs a proposal just
+  the same.
+
+**Before the radio transport proposal (#8) or a public release:**
+
+1. MDK exports a secret under a label and context that the app chooses (#58).
+2. `secret(e)` becomes that exporter, under a provisional radio context until Marmot assigns one.
+3. The format's version goes up, since v0 packets no longer open, and the test vectors are made again.
+
+`core/tests/issue_128_radio_key_source.rs` keeps this section and the code in step. It fails if the core reads
+another secret or uses another label than the ones named here.
 
 ## The message id
 
@@ -234,4 +304,6 @@ so the fuzzer looks for panics, and a sanitizer would only slow it down and reac
 - messages in more than one packet;
 - texts with mentions;
 - delivery confirmations, reactions and locations, which have their types reserved;
+- keys from an exporter of radio's own: v0 reuses the group-event secret
+  ([Where the keys come from](#where-the-keys-come-from));
 - an independent security review.
