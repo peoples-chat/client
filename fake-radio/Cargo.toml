@@ -1,0 +1,19 @@
+[package]
+name = "peoples-chat-fake-radio"
+description = "A fake MeshCore companion radio over TCP, for tests without hardware"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Everything here is already in the workspace's build.
+[dependencies]
+hex = "0.4"
+rand = "0.8"
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+hex = "0.4"
+# The real client, as released. `tcp` is how it reaches the fake.
+meshcore-rs = { version = "=0.2.0", default-features = false, features = ["tcp"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -56,6 +56,9 @@ meshcore-rs = { version = "=0.2.0", default-features = false }
 [dev-dependencies]
 # Replaces the OS keychain in tests.
 keyring-core = "1"
+# Fake companion radios over TCP (#132), and meshcore-rs's TCP link to reach them.
+peoples-chat-fake-radio = { path = "../fake-radio" }
+meshcore-rs = { version = "=0.2.0", default-features = false, features = ["tcp"] }
 # A Nostr relay inside the test process, as MDK's own tests use.
 nostr-relay-builder = "0.44"
 # Reads the published events back. The same fork and revision MDK pins.

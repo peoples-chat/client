@@ -262,7 +262,47 @@ These come from the firmware source at `companion-v1.18.0`.
 [radio-paths.md](radio-paths.md) compares the three in detail, from the firmware source. The `path_spike` example
 measures them between two radios.
 
+## Fake radios over TCP
+
+`fake-radio/` (`peoples-chat-fake-radio`, #132) is a companion radio in software, for testing radio code without
+hardware. meshcore-rs connects to it with `MeshCore::tcp` (its `tcp` feature), and the core's radio then works over that
+link:
+
+```rust
+let (ada, bea) = pair(Config::default(), Config::default()).await?;
+let addr = ada.addr();
+let link = MeshCore::tcp(&addr.ip().to_string(), addr.port()).await?;
+let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).await?; // keep `link`
+```
+
+- **Ports.** Each fake listens on 127.0.0.1, on a free port unless `Config::port` names one, so tests run in parallel.
+- **Commands.** App start, device query, contacts, sending a direct message and collecting received ones, with the
+  message-waiting and send-confirmed pushes. Any other command gets the "unsupported" error.
+- **Pairs.** `pair` starts two radios that hear each other and hold each other as contacts; `link` does so for two that
+  are already running. `add_contact` adds more.
+- **Knobs** (`Config`, per radio):
+
+  | Field | Effect |
+  | --- | --- |
+  | `loss` | Chance that a packet this radio sends over the air is lost: its messages, and its confirmations of what it received |
+  | `duplication` | Chance that such a packet arrives twice. The app hears of a confirmation once |
+  | `delay` | How long such a packet takes to arrive |
+  | `max_contacts` | Size of the contact table. Reported halved, as firmware does |
+  | `seed` | Repeats the same choice of what is lost or duplicated |
+  | `reply_latency` | How long the radio takes to answer its app, 20 ms by default (see [meshcore-rs](#meshcore-rs)) |
+
+- **Fixtures.** `Fixture::load` reads captured frames and `FakeRadio::replay` answers with them. A fixture is a text
+  file with one frame per line, in order: `app` or `radio`, a space, then the payload in hex without the stream
+  framing. `#` starts a comment line. The app's commands are compared by their first byte only; `replay_mismatches` and
+  `replay_remaining` tell whether the app followed the capture.
+- **What it isn't.** One hop, no routes, adverts, channels or airtime. The signal strength is always 7.25 dB. Its
+  frames follow the layouts above, not a comparison with a real radio, and the fixture in `fake-radio/tests/fixtures`
+  is built by hand until real captures exist (#133).
+
 ## Tests
+
+`fake-radio/tests/issue_132_fake_radio.rs` runs meshcore-rs against the fake: each command, a pair, each knob and the
+replay. `core/tests/issue_132_radio_over_tcp.rs` runs `MeshCoreRadio` over a pair.
 
 `core/tests/radio.rs`:
 
