@@ -154,7 +154,8 @@ MAX_CARRIER_CHARS = 160
 
 
 def radio_key(chat_secret, sender_hex):
-    """Spike #37: the key for what `sender` sends in the chat, in one epoch."""
+    """The vectors' fixed key for what `sender` sends. A real radio key is random (#128); these
+    are made as spike #37 once made them, so that the vectors stay as they were."""
     return hkdf(chat_secret, LABEL + bytes.fromhex(sender_hex))
 
 

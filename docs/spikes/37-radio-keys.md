@@ -1,5 +1,12 @@
 # Spike #37: radio keys from the chat's MLS state
 
+> **Replaced on 27 November 2026 ([#128](https://github.com/peoples-chat/client/issues/128)).** Radio keys no longer
+> come from the chat's MLS state. Each member's app makes a random key and sends it inside the chat's MLS messages, as
+> an app event of our own kind, 9912: [radio-format-v0.md, "Where the keys come
+> from"](../radio-format-v0.md#where-the-keys-come-from). The secret this spike used,
+> `MLS-Exporter("marmot", "group-event", 32)`, is reserved by Marmot for the outer encryption of kind-445 events. What
+> follows is the spike as it was, kept for what it found about MDK. The code and the tests it names are gone.
+
 **Result: works, without changes to MDK.** Tested 22 November 2026 with MDK v0.18.0.
 
 Both members of a direct chat derive the same radio keys from the chat's MLS state, so radio needs no key exchange of
@@ -55,7 +62,7 @@ way round. This keeps the two senders' nonces apart, and a packet reflected back
 - A registered context, or the safe exporter, can replace the group-event secret later.
 - Proposing one belongs with the radio format proposal (#56, #58).
 
-**Why the group-event secret is safe to build on:**
+**Why the spike thought the group-event secret safe to build on** (wrong: see the note at the top):
 
 - HKDF with a label of our own keeps the radio keys separate from MDK's key for relay events. Knowing a radio key
   reveals neither the secret nor that key.

@@ -31,7 +31,8 @@ lower `marmot-session` crate.
 | `follow_messages` | `subscribe_timeline_messages` |
 | `follow_relays` | `subscribe_relay_liveness` |
 | `connectivity_restored` | `notify_connectivity_restored` |
-| `chat_secret` | `group_mls_state`, `AccountManager::exporter_secret` (`marmot/group-event`) |
+| `chat_membership` | `group_mls_state`, `group_members` |
+| `send_radio_key`, `radio_key_records` | `send_custom_event`, `timeline_messages_with_query` |
 | `update_own_key` | `schedule_manual_self_update`, `run_due_maintenance` |
 | `export_key` | `export_encrypted_secret_key` (NIP-49), `reveal_nsec` |
 | `close` | `shutdown_and_close` |
@@ -314,12 +315,12 @@ every 5 minutes after, from our relays.
 
 ## App events
 
-**Personal invitations' tokens** (#95) and **radio address records** (#34) travel as app events: `send_custom_event`
-sends an event of a kind the app chooses, inside the chat's encryption.
+**Personal invitations' tokens** (#95), **radio address records** (#34) and **radio key records** (#128) travel as app
+events: `send_custom_event` sends an event of a kind the app chooses, inside the chat's encryption.
 
 - MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
-  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens and 9911 (`RADIO_ADDRESS_KIND`) for
-  records. Both are provisional: Marmot assigns kinds only to adopted specs.
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens, 9911 (`RADIO_ADDRESS_KIND`) for address
+  records and 9912 (`RADIO_KEY_KIND`) for key records. All are provisional: Marmot assigns kinds only to adopted specs.
 - The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
   notification.
 - It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
@@ -450,11 +451,11 @@ orientation, dropping the metadata, transparency and refusals.
 - without a relay the profile doesn't change, and the error says why;
 - the error messages, and the limits counted in characters.
 
-`core/tests/radio_keys.rs` has two contacts derive their chat's radio keys (#37):
+`core/tests/issue_128_radio_keys.rs` has two contacts with mock radios exchange their radio keys (#128):
 
-- what one sends with, the other receives with, and a restart keeps the keys;
-- a slow test, ignored unless asked for (`--include-ignored`), checks that both move to new keys after MDK's
-  post-join key update and after one asked for. Each took about 100 seconds.
+- the keys go by themselves, radio text works both ways, and a restart keeps them;
+- a membership change brings a new key, and the old one opens no new packets;
+- each mesh has its own key, and a record of an unknown mesh is kept and not used.
 
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.

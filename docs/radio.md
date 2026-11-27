@@ -30,9 +30,10 @@ anything:
 - **What shows.** A contact with a radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under "Your
   contacts by mesh".
 
-**Keys.** Radio messages are encrypted with keys derived from the chat's MLS state (#37), with one key per direction.
-`core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
-including the rules for epochs and nonces.
+**Keys** (#128). Radio messages are encrypted with the sender's own random key for the chat, which their app sends
+inside the chat's MLS messages as an app event of kind 9912, and replaces when the chat's membership changes.
+`core/src/radio/keys.rs` has the record, and [radio-format-v0.md](radio-format-v0.md#where-the-keys-come-from) the
+rules.
 
 **The format.** [radio-format-v0.md](radio-format-v0.md) describes a chat message in one packet (#38), with test
 vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements it (#39), and `core/fuzz` fuzzes its
