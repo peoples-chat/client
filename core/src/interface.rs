@@ -104,6 +104,41 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
+    /// Who sent it: on incoming messages in a chat that is no longer direct, where it can be
+    /// someone other than the contact (#125).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<Sender>,
+}
+
+/// Who sent a message (#125).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sender {
+    pub public_key: String,
+    /// Their profile name as this device knows it, or the pseudonym derived from their key.
+    pub name: String,
+}
+
+/// What a chat is now (#125). Only a `direct` chat sends by radio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatState {
+    /// The user and the contact, and nobody else.
+    #[default]
+    Direct,
+    /// The contact left the chat, or deleted their account. Nothing can be sent there.
+    ContactLeft,
+    /// The chat got a name or another member, in another app. Messages say who sent them.
+    Group,
+    /// The user is no longer in the chat: they left it or were removed, in another app.
+    /// Nothing can be sent there.
+    Removed,
+}
+
+impl ChatState {
+    pub fn is_direct(&self) -> bool {
+        *self == Self::Direct
+    }
 }
 
 /// How a chat's messages can travel now (#43).
@@ -137,12 +172,15 @@ pub enum RadioIssue {
     AirtimeUsed,
 }
 
-/// A direct chat with one contact.
+/// A direct chat with one contact, or one that was direct (#125).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
     pub id: String,
     pub contact: Contact,
+    /// What the chat is now. Left out while it is `direct`.
+    #[serde(default, skip_serializing_if = "ChatState::is_direct")]
+    pub state: ChatState,
     /// Oldest first.
     pub messages: Vec<Message>,
     #[serde(default)]
@@ -319,6 +357,12 @@ pub enum CoreEvent {
     },
     AccountDeleted,
     ChatAdded {
+        chat: Chat,
+    },
+    /// A chat stopped being a direct chat, or ended: the contact left, it got a name or another
+    /// member, or the user is no longer in it (#125). Carries the whole chat, which replaces the
+    /// one with its id: in a chat that is no longer direct, messages say who sent them.
+    ChatChanged {
         chat: Chat,
     },
     InvitationReceived {

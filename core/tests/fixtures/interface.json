@@ -117,6 +117,31 @@
       }
     },
     {
+      "type": "chatChanged",
+      "chat": {
+        "id": "chat-3",
+        "contact": {
+          "publicKey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+          "name": "Dana Berg"
+        },
+        "state": "group",
+        "messages": [
+          {
+            "id": "msg-6",
+            "direction": "in",
+            "text": "I added Frida.",
+            "sentAt": 1795300200000,
+            "transport": "internet",
+            "sender": {
+              "publicKey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+              "name": "Dana Berg"
+            }
+          }
+        ],
+        "reach": "internet"
+      }
+    },
+    {
       "type": "messageAdded",
       "chatId": "chat-2",
       "message": {

@@ -70,6 +70,10 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
       return { ...state, chats: [...state.chats, event.chat] };
 
+    case "chatChanged":
+      // The whole chat replaces the one with its id (#125).
+      return updateChat(state, event.chat.id, (chat) => (sameChat(chat, event.chat) ? chat : event.chat));
+
     case "invitationReceived":
       if (state.invitations.some((i) => i.id === event.invitation.id)) return state;
       return { ...state, invitations: [...state.invitations, event.invitation] };
@@ -135,6 +139,16 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
         : { ...state, invites: [...state.invites, event.invite] };
     }
   }
+}
+
+/** Whether two chats show the same. Both come from the core as JSON. */
+function sameChat(a: Chat, b: Chat): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Whether messages can still be sent in the chat (#125). */
+export function canSend(chat: Chat): boolean {
+  return chat.state !== "contactLeft" && chat.state !== "removed";
 }
 
 function sameAccount(a: Account, b: Account): boolean {
