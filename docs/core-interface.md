@@ -86,7 +86,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
-| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
+| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `npub`, `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
 | `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
@@ -109,6 +109,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 - `reach` says how the chat's messages can travel now; see [Reach](#reach).
 - `relays` are the account's relays; see [Relays](#relays).
 - `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
+- `npub` is the same key as a NIP-19 `npub1…`. Profile shows it with Copy, for people who add the user from White
+  Noise: both its phone apps take an npub, and its Android app refuses an nprofile and doesn't open peoples.chat links
+  (#129).
 - An invitation's `id` is the id of the chat that accepting it opens.
 
 ## Contacts and invitations
@@ -134,6 +137,9 @@ mistake.
 | The user's own link | "That is your own invite link." |
 
 **Adding a contact:**
+
+- **A scanned code asks first** (#129). Scan shows who it is, with `previewInvite`, and calls `addContact` only when the
+  user taps Start, as a tapped link does and as White Noise opens the person's profile first.
 
 - **The chat opens at once**, with `chatAdded`. The other person gets an invitation in the background.
 - **With a contact the user already has**, it returns their chat.

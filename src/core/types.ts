@@ -18,6 +18,11 @@ export interface Account {
   photo?: string;
   publicKey: PublicKey;
   /**
+   * The same key as an `npub1…`, for people who add the user from another Marmot app: White
+   * Noise takes an npub, and its Android app refuses an nprofile (#129). Opaque to the interface.
+   */
+  npub: string;
+  /**
    * Link that other people open or scan to start a chat. The user's QR code encodes it. From the
    * real core it is a `nostr:nprofile1…` URI; to the interface it is opaque.
    */
