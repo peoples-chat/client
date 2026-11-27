@@ -163,6 +163,28 @@ async fn issue_134_two_apps_pass_every_check_over_two_radios() {
     }
 }
 
+/// What the lab's radios did: one never reported the other's adverts. The contacts must still
+/// become reachable only once their radio is heard, and the run must say what happened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue_134_an_ignored_advert_is_reported_and_a_message_is_heard_instead() {
+    let _turn = support::take_turn().await;
+    let radios = radios().await;
+    radios.0.ignore_adverts();
+    let (result, out, _folder, _) = run(&radios).await;
+    result.unwrap_or_else(|error| panic!("{error}\n{out}"));
+    for expected in [
+        "ok R1: contact not reachable, their radio not heard yet",
+        "WARNING R1: reported none of R2's 3 adverts",
+        "ok R2: heard R1's advert",
+        "ok \"Lab hello\" from R1 to R2",
+        "ok R1: R2's radio was heard, contact reachable by radio",
+        "ok \"Lab message 2\" from R1 to R2",
+        "WARNING: an advert wasn't reported",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue_134_a_message_lost_twice_fails_the_run() {
     let _turn = support::take_turn().await;

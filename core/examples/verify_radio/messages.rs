@@ -6,8 +6,8 @@
 //! follows. Both cores pair their radio as the app does, through ports that open it with the
 //! harness's own link: the radio is checked at every open, and every frame is logged.
 //!
-//! This is the only part of the harness that puts anything on the air: one advert from each
-//! radio (zero hop, so no repeater passes it on) and three short messages, plus the retries.
+//! This is the only part of the harness that puts anything on the air: adverts from each radio
+//! (zero hop, so no repeater passes them on) and a few short messages, plus the retries.
 
 use std::io::Write;
 use std::path::Path;
@@ -116,6 +116,13 @@ impl LabRadio {
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// The radio's own clock, in seconds since the Unix epoch. Reading it changes nothing.
+    async fn clock(&self) -> Option<u32> {
+        let link = self.link.lock().await;
+        let commands = link.as_ref()?.commands.lock().await;
+        commands.get_time().await.ok()
     }
 }
 
@@ -443,10 +450,28 @@ async fn scenario(
             side.label
         );
     }
-    heard_after_advert(bench, bea, ada, &chat_id, out).await?;
+    let first = heard_after_advert(bench, bea, ada, &chat_id, out).await?;
     // The first radio hasn't announced itself, so the second still can't reach it.
     not_heard(waits.app, bea, &chat_id).await?;
-    heard_after_advert(bench, ada, bea, &chat_id, out).await?;
+    let second = heard_after_advert(bench, ada, bea, &chat_id, out).await?;
+    if !(first && second) {
+        // A message and its acknowledgement are heard too (#44). The app's switch for testing
+        // sends one although the contact isn't reachable yet.
+        heard_by_message(waits.delivery, ada, bea, &chat_id, out).await?;
+    }
+    for (side, other) in [(ada, bea), (bea, ada)] {
+        within(waits.app, "the contact is reachable by radio", || {
+            side.chat(&chat_id)
+                .filter(|chat| chat.reach == Reach::Radio)
+                .map(|_| ())
+        })
+        .await?;
+        let _ = writeln!(
+            out,
+            "ok {}: {}'s radio was heard, contact reachable by radio",
+            side.label, other.label
+        );
+    }
 
     // A message each way (#40, #41).
     exchange(waits.delivery, ada, bea, &chat_id, "Lab message 1", out).await?;
@@ -476,7 +501,15 @@ async fn scenario(
         bea.label,
         back.elapsed().as_secs_f32()
     );
-    exchange(waits.delivery, ada, bea, &chat_id, "Lab message 2", out).await
+    exchange(waits.delivery, ada, bea, &chat_id, "Lab message 2", out).await?;
+    if !(first && second) {
+        let _ = writeln!(
+            out,
+            "WARNING: an advert wasn't reported (see above). Reachability was shown with a \
+             message and its acknowledgement only."
+        );
+    }
+    Ok(())
 }
 
 /// Waits until both phones have the chat's radio keys in the same epoch.
@@ -513,14 +546,15 @@ async fn not_heard(wait: Duration, side: &Side, chat_id: &str) -> Result<(), Str
     }
 }
 
-/// `from`'s radio announces itself, and `to`'s app then counts the contact as reachable.
+/// `from`'s radio announces itself, and `to`'s app then counts the contact as reachable. When
+/// `to`'s radio never reports it, says what the clocks show and returns false.
 async fn heard_after_advert(
     bench: &Bench,
     from: &Side,
     to: &Side,
     chat_id: &str,
     out: &mut (dyn Write + Send),
-) -> Result<(), String> {
+) -> Result<bool, String> {
     for attempt in 1..=ADVERT_TRIES {
         from.ports.radio()?.advertise().await?;
         let heard = within(bench.waits.advert, "the advert", || {
@@ -535,14 +569,57 @@ async fn heard_after_advert(
                 "ok {}: heard {}'s advert (try {attempt}), contact reachable by radio",
                 to.label, from.label
             );
-            return Ok(());
+            return Ok(true);
         }
     }
-    Err(format!(
-        "{} didn't hear {}'s radio after {ADVERT_TRIES} adverts. Does each radio hold the other \
-         as a contact, and are their clocks right?",
-        to.label, from.label
-    ))
+    let seconds = |time: Option<u64>| time.map_or("unknown".to_owned(), |time| time.to_string());
+    let clock = from.ports.radio()?.clock().await;
+    let contacts = to
+        .ports
+        .radio()?
+        .contacts()
+        .await
+        .map_err(|error| error.to_string())?;
+    let own = from
+        .core
+        .snapshot()
+        .radio
+        .paired
+        .map(|paired| paired.public_key)
+        .unwrap_or_default();
+    let held = contacts
+        .iter()
+        .find(|contact| contact.public_key.eq_ignore_ascii_case(&own));
+    let _ = writeln!(
+        out,
+        "WARNING {}: reported none of {}'s {ADVERT_TRIES} adverts. {}'s clock: {}; the newest \
+         advert time {} holds for it: {}; this computer: {} (Unix seconds). A radio ignores an \
+         advert that isn't newer than the last.",
+        to.label,
+        from.label,
+        from.label,
+        seconds(clock.map(u64::from)),
+        to.label,
+        held.map_or("not a contact".to_owned(), |held| seconds(held.last_heard)),
+        support::now_ms() / 1000
+    );
+    Ok(false)
+}
+
+/// One message sent with the app's force-radio switch, so that each app hears the other's radio:
+/// the receiver by the message, the sender by its acknowledgement.
+async fn heard_by_message(
+    wait: Duration,
+    from: &Side,
+    to: &Side,
+    chat_id: &str,
+    out: &mut (dyn Write + Send),
+) -> Result<(), String> {
+    let force = |on| from.core.set_force_radio(on).map_err(|error| error.message);
+    force(true)?;
+    let result = exchange(wait, from, to, chat_id, "Lab hello", out).await;
+    force(false)?;
+    result
 }
 
 /// `from` sends `text`: it must arrive on `to` and be confirmed within `wait`, with at most one

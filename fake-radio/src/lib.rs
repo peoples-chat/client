@@ -121,6 +121,7 @@ struct State {
     replay: Option<Replay>,
     /// How many of the next messages are lost on the air.
     lose_texts: usize,
+    ignore_adverts: bool,
 }
 
 struct Waiting {
@@ -219,6 +220,7 @@ impl FakeRadio {
             rng: StdRng::seed_from_u64(config.seed),
             replay,
             lose_texts: 0,
+            ignore_adverts: false,
         };
         let shared = Arc::new(Shared {
             config,
@@ -251,6 +253,12 @@ impl FakeRadio {
     /// [`Config::loss`] says: for tests that need a certain loss.
     pub fn lose_next_messages(&self, count: usize) {
         self.shared.state().lose_texts = count;
+    }
+
+    /// Reports no advert from now on, as firmware does with adverts stamped no later than the
+    /// last one it took from that contact.
+    pub fn ignore_adverts(&self) {
+        self.shared.state().ignore_adverts = true;
     }
 
     /// The app's commands that didn't follow the fixture being replayed.
@@ -531,12 +539,12 @@ impl Shared {
             }
             Packet::Advert { from } => {
                 // Only contacts: the fake adds none by itself.
-                let known = self
-                    .state()
-                    .contacts
-                    .iter()
-                    .any(|(c, _)| c.public_key == from);
-                if known {
+                let reported = {
+                    let state = self.state();
+                    !state.ignore_adverts
+                        && state.contacts.iter().any(|(c, _)| c.public_key == from)
+                };
+                if reported {
                     self.to_app(vec![frames::advert(&from)]);
                 }
             }

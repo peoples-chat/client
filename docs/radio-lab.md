@@ -44,7 +44,12 @@ over USB as the app does.
 The times to arrive and to be acknowledged are printed, with the radio's own estimate.
 
 **What goes on the air:** one zero-hop advert from each radio (sent again up to twice if not heard), three short
-messages, any retry, and the radios' own acknowledgements.
+messages (four when an advert isn't reported), any retry, and the radios' own acknowledgements.
+
+**When an advert isn't reported.** A radio ignores an advert that isn't stamped later than the last one it took from
+that contact, so a radio whose clock is behind goes unheard. Neither the app nor the harness sets a radio's clock. The
+run then prints a `WARNING` with both times, and each app hears the other by a message and its acknowledgement instead,
+sent with the app's force-radio switch. The run still passes: read the warnings.
 
 **Closing the port isn't a power cycle.** The radio keeps running. The harness closes the port, tells the app the link
 ended, and hides the port until it "plugs it in" again.
