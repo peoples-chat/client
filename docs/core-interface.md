@@ -298,8 +298,8 @@ both people are admins in a chat MDK starts, and White Noise for Android offers 
 - **When its time is up**, the core takes the message away with `messageRemoved`, also from an invitation, and the
   snapshot no longer has it. A radio message loses its text in `radio.json` then; its id stays, for the replay check.
 - **From disk.** MDK deletes expired messages only when asked (`sweep_expired_retention`), and holds back one the user
-  hasn't read, or one that expired less than 5 seconds ago. The core asks soon after start, 6 seconds after a message
-  expires, after `markRead`, and every minute.
+  hasn't read, or a whole chat while a message in it expired less than 5 seconds ago. The core asks soon after start, 6
+  seconds after the latest expiry, after `markRead`, and every minute.
 - **`markRead(chatId)`** says the user has seen the chat up to its newest message. The interface calls it while it
   shows the chat. MDK's read mark stays on this device: nothing is sent, so the other person isn't told.
 - A message that waits for a path (#46) gets its time once it goes.
