@@ -234,6 +234,7 @@ async fn write_component(
 ) {
     let id = radio_component_id(owner, peer);
     let deadline = Instant::now() + WAIT;
+    let mut refused = None;
     loop {
         let state = runtime
             .group_mls_state(owner, &group(chat_id))
@@ -253,10 +254,13 @@ async fn write_component(
                 .update_app_component(owner, &group(chat_id), id, data.clone())
                 .await
             {
-                println!("the write waits: {error}");
+                refused = Some(error.to_string());
             }
         }
-        assert!(Instant::now() < deadline, "the component wasn't written");
+        assert!(
+            Instant::now() < deadline,
+            "the component wasn't written: {refused:?}"
+        );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
@@ -753,4 +757,232 @@ async fn issue_128_two_members_writing_at_the_same_moment_each_keep_their_record
     by_radio(&chat.bea, &chat.ada, &chat_id, "So they did").await;
 
     chat.close().await;
+}
+
+/// Joins the group `group_id` on a phone whose core is closed, once MDK has the invitation.
+async fn join(runtime: &MarmotAppRuntime, device: &str, group_id: &str) {
+    let deadline = Instant::now() + WAIT;
+    while let Err(error) = runtime.accept_group_invite(device, &group(group_id)).await {
+        assert!(
+            Instant::now() < deadline,
+            "the group wasn't joined: {error}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// The component `id` of the group `group_id`, as `device` has it.
+async fn raw_component(
+    runtime: &MarmotAppRuntime,
+    device: &str,
+    group_id: &str,
+    id: u16,
+) -> Option<Vec<u8>> {
+    runtime
+        .group_app_component(device, &group(group_id), id)
+        .await
+        .unwrap()
+}
+
+/// Starts each phone's core with its radio.
+async fn start_all(phones: &[Phone], radios: &[Arc<MockRadio>]) -> Vec<Core> {
+    let mut cores = Vec::new();
+    for (phone, radio) in phones.iter().zip(radios) {
+        let core = phone.start().await;
+        core.attach_radio(radio.clone()).await.unwrap();
+        cores.push(core);
+    }
+    cores
+}
+
+async fn close_all(cores: Vec<Core>) {
+    for core in cores {
+        core.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue_128_a_group_chat_gets_no_radio_record() {
+    let _turn = support::take_turn().await;
+    let relay = TestRelay::start().await;
+    let url = relay.url();
+    let phones = ["ada", "bea", "cai"].map(|name| Phone::new(&format!("128-group-{name}"), &url));
+    let mut cores = Vec::new();
+    for (phone, name) in phones.iter().zip(["Ada Lund", "Bea Holm", "Cai Berg"]) {
+        let core = phone.start().await;
+        core.create_account(name).await.unwrap();
+        cores.push(core);
+    }
+    let accounts: Vec<String> = cores.iter().map(account).collect();
+
+    // All three are direct contacts of each other, each with a radio, and each direct chat gets
+    // both records.
+    let pairs = [(0, 1), (0, 2), (1, 2)];
+    let mut chats = Vec::new();
+    for (one, other) in pairs {
+        let chat_id = make_contacts(&cores[one], &cores[other]).await;
+        until("the other side of the chat", || {
+            cores[other]
+                .snapshot()
+                .chats
+                .iter()
+                .any(|chat| chat.id == chat_id)
+                .then_some(())
+        })
+        .await;
+        settled(&cores[one], &cores[other], &chat_id).await;
+        chats.push(chat_id);
+    }
+    let mesh = MockMesh::new();
+    let radios =
+        ["Ada's radio", "Bea's radio", "Cai's radio"].map(|name| Arc::new(mesh.radio(name)));
+    for (core, radio) in cores.iter().zip(&radios) {
+        core.attach_radio(radio.clone()).await.unwrap();
+    }
+    // For each pair, the record that each of the two has from the other.
+    let mut records = Vec::new();
+    for ((one, other), chat_id) in pairs.into_iter().zip(&chats) {
+        let of_one = has_record_of(&cores[other], &cores[one], chat_id, RadioMesh::MeshCore).await;
+        let of_other =
+            has_record_of(&cores[one], &cores[other], chat_id, RadioMesh::MeshCore).await;
+        settled(&cores[one], &cores[other], chat_id).await;
+        records.push((of_one, of_other));
+    }
+
+    // Ada makes a group of the three through MDK, and the others join it. Ada's MDK keeps
+    // running meanwhile: it sends the invitations after making the group.
+    close_all(cores).await;
+    let ada = mdk(&phones[0], &url).await;
+    let group_id = ada
+        .create_group(&accounts[0], "Trail crew", &accounts[1..], None)
+        .await
+        .unwrap()
+        .operation
+        .expect("the group was made")
+        .to_string();
+    for member in [1, 2] {
+        let runtime = mdk(&phones[member], &url).await;
+        join(&runtime, &accounts[member], &group_id).await;
+        runtime.shutdown_and_close().await.unwrap();
+    }
+    ada.shutdown_and_close().await.unwrap();
+
+    // The apps run again with their radios, and look at their records.
+    let cores = start_all(&phones, &radios).await;
+    for core in &cores {
+        core.refresh_radio_records().await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    for core in &cores {
+        core.refresh_radio_records().await;
+        assert!(core.snapshot().chats.iter().all(|chat| chat.id != group_id));
+        assert_eq!(core.radio_own_record(&group_id, RadioMesh::MeshCore), None);
+        assert!(core.radio_contact_meshes(&group_id).is_empty());
+    }
+    close_all(cores).await;
+
+    // As MDK has it on each phone: the group has no radio component of anyone's and no event of
+    // the app's kinds, and the direct chats have their records.
+    for (member, phone) in phones.iter().enumerate() {
+        let runtime = mdk(phone, &url).await;
+        let device = &accounts[member];
+        let members = runtime
+            .group_members(device, &group(&group_id))
+            .await
+            .unwrap();
+        assert_eq!(members.len(), 3);
+        for (&(a, b), (chat_id, (of_a, of_b))) in pairs.iter().zip(chats.iter().zip(&records)) {
+            for (record, owner, peer) in [(of_a, a, b), (of_b, b, a)] {
+                let id = radio_component_id(&accounts[owner], &accounts[peer]);
+                assert_eq!(raw_component(&runtime, device, &group_id, id).await, None);
+                if member == a || member == b {
+                    assert_eq!(
+                        component(&runtime, device, chat_id, &accounts[owner], &accounts[peer])
+                            .await,
+                        vec![serde_json::to_value(record).unwrap()]
+                    );
+                }
+            }
+        }
+        let rows = runtime
+            .timeline_messages_with_query(
+                device,
+                TimelineMessageQuery {
+                    group_id_hex: Some(group_id.clone()),
+                    ..TimelineMessageQuery::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            rows.messages
+                .iter()
+                .all(|row| row.kind != 9_911 && row.kind != 9_912)
+        );
+        runtime.shutdown_and_close().await.unwrap();
+    }
+
+    // Another app of Ada's writes a radio component into the group, and it reaches the others.
+    let key = new_radio_key();
+    let info = radios[0].info().await.unwrap();
+    let injected = RadioRecord::new(&info, &key, 100, now_ms());
+    let data = format!("[{}]", injected.to_json()).into_bytes();
+    let ada = mdk(&phones[0], &url).await;
+    for peer in [1, 2] {
+        write_component(&ada, &accounts[0], &group_id, &accounts[peer], data.clone()).await;
+    }
+    for member in [1, 2] {
+        let runtime = mdk(&phones[member], &url).await;
+        let id = radio_component_id(&accounts[0], &accounts[member]);
+        let deadline = Instant::now() + WAIT;
+        while raw_component(&runtime, &accounts[member], &group_id, id)
+            .await
+            .as_ref()
+            != Some(&data)
+        {
+            assert!(Instant::now() < deadline, "the component didn't arrive");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        runtime.shutdown_and_close().await.unwrap();
+    }
+    ada.shutdown_and_close().await.unwrap();
+
+    // No app takes a record or a key from it: the direct chats' records are those from before.
+    let cores = start_all(&phones, &radios).await;
+    for core in &cores {
+        core.refresh_radio_records().await;
+        assert_eq!(core.radio_own_record(&group_id, RadioMesh::MeshCore), None);
+        assert!(core.radio_contact_meshes(&group_id).is_empty());
+    }
+    for (&(a, b), (chat_id, (of_a, of_b))) in pairs.iter().zip(chats.iter().zip(&records)) {
+        for (to, record) in [(a, of_b), (b, of_a)] {
+            assert_eq!(
+                cores[to]
+                    .radio_contact_record(chat_id, RadioMesh::MeshCore)
+                    .as_ref(),
+                Some(record)
+            );
+            assert_eq!(cores[to].radio_contact_meshes(chat_id), vec!["meshcore"]);
+        }
+    }
+    // A packet under the key written into the group shows nowhere.
+    for member in [1, 2] {
+        inject(
+            &radios[0],
+            &radios[member],
+            &key,
+            injected.rkn,
+            900,
+            now_ms(),
+            "Under the group's key",
+        )
+        .await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    for core in &cores {
+        for chat in core.snapshot().chats {
+            assert!(chat.messages.is_empty(), "{:?}", chat.messages);
+        }
+    }
+
+    close_all(cores).await;
 }
