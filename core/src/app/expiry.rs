@@ -210,18 +210,28 @@ impl Core {
 /// Hides messages as their time is up, and has MDK delete them: soon after start, shortly after
 /// a message expires, when asked, and every minute.
 pub(super) async fn watch_expiry(core: Weak<Inner>, wake: Arc<ExpiryWake>) {
-    let mut sweep_at = Instant::now();
+    let mut every_minute = Instant::now();
+    // Counted from the latest expiry: MDK holds back a whole chat while any message in it
+    // expired less than 5 seconds ago, so a sweep after an earlier one may delete nothing.
+    let mut after_expiry: Option<Instant> = None;
     loop {
         let Some(core) = upgrade(&core) else { return };
         let now = now_ms();
         if core.expire_due(now) {
-            sweep_at = sweep_at.min(Instant::now() + SWEEP_AFTER_EXPIRY);
+            after_expiry = Some(Instant::now() + SWEEP_AFTER_EXPIRY);
         }
-        if wake.sweep.swap(false, Ordering::AcqRel) || Instant::now() >= sweep_at {
+        let due = |at: Instant| Instant::now() >= at;
+        if wake.sweep.swap(false, Ordering::AcqRel)
+            || due(every_minute)
+            || after_expiry.is_some_and(due)
+        {
             core.sweep().await;
-            sweep_at = Instant::now() + SWEEP_EVERY;
+            every_minute = Instant::now() + SWEEP_EVERY;
+            if after_expiry.is_some_and(due) {
+                after_expiry = None;
+            }
         }
-        let mut next = sweep_at;
+        let mut next = after_expiry.map_or(every_minute, |at| at.min(every_minute));
         if let Some(at) = core.next_expiry() {
             next = next.min(Instant::now() + Duration::from_millis(at.saturating_sub(now_ms())));
         }

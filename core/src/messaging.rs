@@ -1080,13 +1080,20 @@ impl Messaging {
             TimelineMessageQuery {
                 group_id_hex: Some(chat_id.to_owned()),
                 pagination: TimelinePagination {
-                    limit: Some(1),
+                    limit: Some(HISTORY_LIMIT),
                     ..TimelinePagination::default()
                 },
                 ..TimelineMessageQuery::default()
             },
         )?;
-        if let Some(newest) = page.messages.last() {
+        // The newest one received: the user's own message, sent in the same second, may come
+        // after it or before it, and MDK's read mark counts from the one it is given.
+        let newest = page
+            .messages
+            .iter()
+            .rev()
+            .find(|record| record.direction == "received");
+        if let Some(newest) = newest {
             self.runtime.mark_timeline_message_read(
                 account_hex,
                 chat_id,
