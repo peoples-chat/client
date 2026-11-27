@@ -5,7 +5,7 @@ in #90: it takes only what Marmot messaging needs, keeps no network addresses, a
 This folder holds what the spec's deployment steps write by hand, as files, and a script that installs them.
 
 It runs at `wss://relay.peoples.chat` since 22 November 2026, on a Hetzner server in Helsinki: 1 vCPU, 1 GB of memory,
-Ubuntu 26.04. It isn't one of the app's defaults yet ([Making it a default](#making-it-a-default)).
+Ubuntu 26.04. It is one of the app's defaults since 27 November 2026 ([Making it a default](#making-it-a-default)).
 
 | File | Installed as | What it does |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ Ubuntu 26.04. It isn't one of the app's defaults yet ([Making it a default](#mak
 | `Caddyfile` | `/etc/caddy/Caddyfile` | TLS, and keeps `/metrics` private. Writes no access log |
 | `strfry-retention` | `/etc/cron.daily/strfry-retention` | Deletes group messages and gift wraps after 90 days |
 | `setup.sh` | | Installs all of it on a fresh Ubuntu server: 24.04 and 26.04 are tested |
+| `terms.md`, `privacy.md` | | Drafts of the relay's terms and privacy note. Not reviewed and not published |
 
 ## Setting it up
 
@@ -76,18 +77,48 @@ certificate by itself and answers 404 for `/metrics`. These parts differ from th
 
 ## Making it a default
 
-Once the relay passes its checks, in `core/src/messaging.rs`:
+Done on 27 November 2026, in `core/src/messaging.rs`:
 
-- put its address in `DEFAULT_RELAYS` instead of one of the three there, so that no two defaults share an operator;
-- add it to `PROJECT_RELAYS`, so that Settings → Privacy → Relays and servers shows it as run by peoples.chat (#88).
+- `DEFAULT_RELAYS` has it first, ahead of `relay.damus.io`, `nos.lol` and `relay.primal.net`. That makes four defaults,
+  not the spec's three: none was dropped, and no two share an operator. Which one to drop, if any, is open below.
+- `PROJECT_RELAYS` has it, so that Settings → Privacy → Relays and servers shows it first, as run by peoples.chat (#88).
+  `e2e/issue-90-project-relay.spec.ts` checks that in the app.
 
 Accounts created before then keep the relays they were set up with.
 
+## Checks on 27 November 2026
+
+`relay_check` against `wss://relay.peoples.chat`, after the reboot of 22 November and before it became a default:
+
+```
+ok    two accounts become contacts and chat: in 6.2 s
+ok    a public note is refused: refused: blocked: this relay only carries Marmot messaging events
+ok    large group messages: 1.5 MB taken, 2.2 MB refused: invalid: event too large: 2200416
+ok    gift wraps reach their recipient: served to its recipient, and to anyone who asks
+ok    expired events are dropped: served until it expired, then gone
+```
+
+`white_noise_check` (`core/examples/white_noise_check.rs`) against the same relay. The other side is White Noise's
+command-line app, `wn` from MDK v0.18.0, the MDK version the app uses. Both sides know only this relay:
+
+```
+ok    both accounts set up
+ok    peoples.chat starts a chat with White Noise: invitation, a message each way, in 3.4 s
+ok    White Noise starts a chat with peoples.chat: request accepted, a message each way, in 3.0 s
+```
+
+What this doesn't cover: White Noise's phone and desktop apps, which choose their own relays; `wn` was told to use this
+one. Photos, reactions and replies weren't tried (#123).
+
 ## Still open
 
-From the spec, before the relay becomes a default:
-
-- **Retention:** is 90 days right, given disk use and how long phones stay offline?
-- **Terms and privacy pages, and a contact address:** the relay is a hosting service in the EU.
+- **Uptime check** from somewhere else that alerts by email or phone (the spec's step 10).
+- **Retention:** is 90 days right, given disk use and how long phones stay offline? It also removes commits older than
+  that (comment of 24 November in #90).
+- **Terms and privacy pages, and a contact address:** drafts are in `terms.md` and `privacy.md`, to be reviewed for
+  Danish and EU rules before they are published and linked from `info`.
 - **The operator's Nostr key** for `info.pubkey`.
-- **White Noise:** a chat between White Noise and the app through this relay alone.
+- **Block lists (kind 10000)** are refused by the write policy. MDK publishes one once the app blocks through it.
+- **Three or four defaults:** the spec asks for three. The app now has four; dropping one is a product decision.
+- **Account relays and inbox relays** as White Noise has them, with White Noise's relays plus this one (comment of
+  27 November in #90). Not part of this change.
