@@ -34,7 +34,7 @@ export function Settings() {
     <div className={layout.screen}>
       <ScreenHeader title="Settings" onLeading={navigation.back} />
       <main className={layout.scroll}>
-        <button type="button" className={styles.profile} onClick={() => navigation.push({ name: "profile" })}>
+        <button type="button" className={styles.profile} data-testid="settings-profile" onClick={() => navigation.push({ name: "profile" })}>
           <Avatar name={account?.name ?? ""} size={60} tint="green" photo={account?.photo} />
           <span className={styles.profileText}>
             <span className={styles.name}>{account?.name}</span>
@@ -48,6 +48,7 @@ export function Settings() {
             icon={icon}
             label={label}
             disabled={!screen}
+            testId={screen && `settings-${screen.name}`}
             onClick={screen && (() => navigation.push(screen))}
           />
         ))}
