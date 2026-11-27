@@ -40,9 +40,7 @@ const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 /// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
 const HISTORY_LIMIT: usize = 200;
 /// MDK's name for `MLS-Exporter("marmot", "group-event", 32)`, one of the three exporter secrets
-/// it computes for every epoch and lets the app read. Marmot reserves it for the outer encryption
-/// of kind-445 events; the radio keys reuse it for the proof of concept only (#128,
-/// `docs/radio-format-v0.md`, "Where the keys come from").
+/// it computes for every epoch and lets the app read.
 const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
 const EXPORTER_BYTES: usize = 32;
 /// The surface that MDK's audit log records for a key export: a fixed label, never a person or a

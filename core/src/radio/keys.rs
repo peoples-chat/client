@@ -11,11 +11,6 @@
 //! A key changes with every epoch. Separate keys for the two directions keep the two senders'
 //! nonces apart, and a packet reflected back to its sender fails to decrypt. The finding behind
 //! this, with the epoch and nonce rules: `docs/spikes/37-radio-keys.md`.
-//!
-//! The exporter secret is Marmot's group-event secret, which Marmot reserves for the outer
-//! encryption of kind-445 events. v0 reuses it for the proof of concept only (#128); an exporter
-//! with a radio label of its own must replace it before the format is proposed or released:
-//! `docs/radio-format-v0.md`, "Where the keys come from".
 
 use hkdf::Hkdf;
 use sha2::Sha256;
