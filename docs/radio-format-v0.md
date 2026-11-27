@@ -7,8 +7,8 @@ requires an independent security review before public release.
 
 - **The packet:** an 8-byte header, the text encrypted with ChaCha20-Poly1305 under the sender's radio key for the
   chat, and a 16-byte tag. That is 24 bytes of overhead.
-- **The keys:** each member's app makes a random one and sends it inside the chat's MLS messages
-  ([Where the keys come from](#where-the-keys-come-from)).
+- **The keys:** each member's app makes a random one and puts it in its radio address record, which lives in the
+  chat's state ([Where the keys come from](#where-the-keys-come-from)).
 - **The budget:** in a MeshCore text message the packet travels as base64, which leaves 96 bytes for the text.
 - **The message id:** the receiver rebuilds the message's id from the packet. The copy the sender later publishes to
   the relays has the same id, so receivers drop the duplicate.
@@ -19,59 +19,83 @@ requires an independent security review before public release.
   one option that works with meshcore-rs 0.2.0 today, and the firmware encrypts and confirms it
   ([radio.md](radio.md#meshcore-facts-that-shape-the-poc)). Another path changes only the carrier and the budget.
 - **Direct chats only:** a chat with exactly two members.
-- **Keys travel in the chat:** one per member, chat and mesh.
+- **Keys are in the chat's state:** one per member, chat and mesh.
 
 ## Where the keys come from
 
-**Decision (2026-11-27, [#128](https://github.com/peoples-chat/client/issues/128)).** A radio key is an app payload of
-a kind we own. It is sent inside the chat's MLS messages like any other Marmot app event, such as a poll (kind 1068) or
-an edit (kind 1009). Nothing is derived from the chat's MLS exporter secrets. In particular
-`MLS-Exporter("marmot", "group-event", 32)`, which radio used before, is reserved by Marmot for the outer encryption of
-kind-445 events, and "MUST NOT be reused for app payloads"
-([transports/nostr.md](https://github.com/marmot-protocol/marmot/blob/677a4b5/transports/nostr.md)). An unknown kind is
-allowed: "Protocol processing MUST NOT reject an otherwise-valid app payload merely because its event kind is unknown"
-([foundation/application-messages.md](https://github.com/marmot-protocol/marmot/blob/677a4b5/foundation/application-messages.md),
-Message kinds).
+**Decisions (2026-11-27, [#128](https://github.com/peoples-chat/client/issues/128)).**
 
-**The event.** Kind **9912** (`RADIO_KEY_KIND`), provisional until it is registered in Marmot's
-`foundation/registries.md`. It has the six members of a Marmot app event (`id`, `pubkey`, `created_at`, `kind`,
-`tags`, `content`), no signature and no tags. MLS authenticates its sender. The content is JSON:
+1. A radio key is app data of our own, inside the chat. Nothing is derived from the chat's MLS exporter secrets. In
+   particular `MLS-Exporter("marmot", "group-event", 32)`, which radio used before, is reserved by Marmot for the outer
+   encryption of kind-445 events, and "MUST NOT be reused for app payloads"
+   ([transports/nostr.md](https://github.com/marmot-protocol/marmot/blob/677a4b5/transports/nostr.md)).
+2. **One record, not two.** The key is part of the radio address record (#34), which is now version 1: one record per
+   radio protocol, with the radio, its settings and the app's radio key.
+3. **Both MeshCore and Meshtastic.** The record names its mesh, and its fields cover both.
+4. **The record lives in the chat's state, not in a message** (after spike
+   [#117](https://github.com/peoples-chat/client/blob/117-chat-state-spike/docs/spikes/117-chat-state.md)). It is
+   written as MLS app components in the direct chat's GroupContext, so no client shows anything, and the current
+   records come with the chat to new devices. Marmot recommends app components for app-owned data
+   ([foundation/mls-protocol.md](https://github.com/marmot-protocol/marmot/blob/677a4b5/foundation/mls-protocol.md),
+   App components).
+
+**The components.** The account whose public key (hex) sorts first writes component **`0xf910`**, the other
+**`0xf911`**, each only its own. One shared component would lose a record when both write at once. The ids are
+provisional until registered ([#145](https://github.com/peoples-chat/client/issues/145)). A component holds a JSON array
+of records, at most one per mesh. Each write is an MLS commit, so it needs a relay and starts a new epoch. Only an
+admin of the chat can write; MDK makes both members of the direct chats it starts admins.
+
+**The record, version 1,** is canonical JSON: members sorted by name, no spaces. A MeshCore record is about 250 bytes,
+a Meshtastic one about 320.
 
 ```json
-{"v":0,"mesh":"meshcore","key":"…64 hex…","n":1,"at":1795300000000}
+{"addr":"…64 hex…","at":1795300000000,"bw":62500,"cr":8,"freq":869618,"mesh":"meshcore","name":"Ada's radio","rk":"…64 hex…","rkn":1,"sf":8,"v":1}
 ```
 
 | Member | Meaning |
 | --- | --- |
-| `v` | The record's version, 0. A record of another version is refused. Members added later are ignored. |
-| `mesh` | The radio protocol the key is for: `meshcore` or `meshtastic`, as in the radio address record (kind 9911). A record naming another mesh is kept and not used; the event is never rejected for it. |
-| `key` | 32 random bytes, in hex. |
-| `n` | The key's number among the sender's keys for the chat and mesh, from 1. |
-| `at` | When the sender made the key, in milliseconds since the Unix epoch, by their clock. |
+| `v` | `1` |
+| `mesh` | `meshcore` or `meshtastic` |
+| `name` | The radio's advertised name, at most 40 bytes |
+| `addr` | The radio's address on the mesh. MeshCore: its public key, 64 hex digits. Meshtastic: `{"key":"…64 hex…","num":123}`, the node's public key and number |
+| `freq`, `bw`, `sf`, `cr` | LoRa settings: frequency in kHz, bandwidth in Hz, spreading factor, the 5 of 4/5 |
+| `preset`, `region` | Optional, for a mesh that names them, such as `LONG_FAST` and `EU_868` |
+| `rk` | The app's radio key for this chat and mesh: 32 random bytes, in hex |
+| `rkn` | The key's number among the sender's keys for the chat and mesh, from 1 |
+| `at` | When the record was made, in milliseconds since the Unix epoch, by the sender's clock |
 
-**Who sends it, and when.**
+The Meshtastic fields are described from Meshtastic's published protobufs (`NodeInfo.num`, `User.public_key`,
+`Config.LoRaConfig`'s `modem_preset` and `region`); they have not been tried against a Meshtastic radio.
+
+**Reading.** A record of a mesh the app doesn't know, or of another version, or with a field missing or out of range,
+is kept and not used. Members added later are ignored. Nothing in a component makes the app reject the chat's change.
+
+**Version 0** is the address and settings alone, which older builds send as an app event of kind 9911. The app still
+reads it, and takes no key from it. It no longer sends it.
+
+**Who writes it, and when.**
 
 - Only in a direct chat: the account, its contact and nobody else. Never in a group, and never outside the chat.
-- Each member's app makes its key for a chat the first time it has a radio there, and sends it. It keeps the key
-  across restarts, in the radio store.
-- **A new key when the membership changes:** when the chat's member accounts, or an account's number of devices in it,
-  differ from when the key was made. The new key goes to the members of the new epoch, so whoever left can't read what
-  is sent after it. The app looks when a radio is attached, when MDK reports a change to the chat, before each radio
-  send, and every minute while it has a radio.
-- A key update alone, which keeps the members, keeps the radio key.
+- Each member's app makes its key for a chat and mesh when it first has a radio of that mesh, writes the record, and
+  keeps the key across restarts, in the radio store.
+- **A new key, and the record rewritten:** when the chat's membership changes (its member accounts, or an account's
+  number of devices in it), on every mesh; and when the radio, its name or its settings change, on that mesh. A key
+  update alone, which keeps the members, keeps the radio key.
+- The app looks when a radio is attached, when the chat moves to a new epoch or changes, before each radio send, and
+  every minute while it has a radio. It writes only while the chat is settled; MDK sends a waiting change by itself.
+- A key seals nothing until the chat's state has had it.
 
-**Which key opens a packet.** The receiver picks by sender and mesh: of the keys that the contact sent for the mesh of
-the radio in use, those whose number matches the packet's key hint. The one with the latest `at` is the current one; a
-member holds one current key per mesh. Only MeshCore sends radio packets today. A Meshtastic key is stored and
-selected the same way.
+**Which key opens a packet.** The receiver picks by sender and mesh: of the keys that the contact's records have held
+for the mesh of the radio in use, those whose number matches the packet's key hint. The key in the record now is the
+current one. Only MeshCore sends radio packets today. A Meshtastic key is stored and selected the same way.
 
-**Old keys.** A key that a newer one replaced still opens packets for 10 minutes after the newer one arrived, enough
-for a packet and its retry on the way, and only packets sent no later than the newer key was made (the packet's send
-time against the newer record's `at`, both by the sender's clock). After that it opens nothing. A chat keeps at most
-four keys per mesh.
+**Old keys.** A key that the record no longer holds still opens packets for 10 minutes after the app saw it replaced,
+enough for a packet and its retry on the way, and only packets sent no later than the newer record was made (the
+packet's send time against that record's `at`, both by the sender's clock). After that it opens nothing. A chat keeps
+at most four keys per mesh.
 
-**Before the key arrives.** The key travels over the relays only. A receiver that hasn't got the sender's current key
-drops the packet, and the relay copy of the message follows.
+**Behind on the chat's state.** The records travel over the relays only. A receiver that hasn't fetched the sender's
+current record drops the packet, and the relay copy of the message follows.
 
 ## The packet
 
@@ -100,7 +124,7 @@ A receiver drops a version or type it doesn't know.
 more bytes of text, with a 2^-64 chance per try of a forgery getting through; on radio every try costs airtime. It can
 be reconsidered with #36's measurements.
 
-**What opening proves.** A packet that opens with a key the contact sent comes from someone who holds that key:
+**What opening proves.** A packet that opens with a key from the contact's record comes from someone who holds that key:
 someone who was a member of the chat when it was sent. A packet reflected back to its sender doesn't open, since the
 sender never takes its own key as a contact's. This is the member-level authentication the spec promises, and no more.
 
@@ -229,7 +253,7 @@ inputs in CI.
 
 **Receiving.** `RadioInbox` in `core/src/radio/inbox.rs` applies the rules above to every incoming packet (#42):
 
-- It takes each direct chat's keys from the contact, for the mesh of the radio in use.
+- It takes each direct chat's keys from the contact's records, for the mesh of the radio in use.
 - It finds the chat by the sending radio, or by trying each chat's keys.
 - It opens the packet and checks its counter against a 64-wide replay window per key.
 - It refuses a message whose id the chat has already.
@@ -244,21 +268,21 @@ radios. When `send_message` chooses radio (#45), or the switch that forces radio
 1. MDK takes the message and keeps it until a relay can be reached. MDK's id is the id above.
 2. The core rebuilds that id from the account key, the time and the text. If it differs, as for a text with mentions,
    the message waits for the internet.
-3. It looks at the chat's membership, and makes and sends a new key if it changed. While the chat waits for a relay to
-   confirm a change, its members can't be read and the key stays. A key that couldn't be handed to the chat seals
+3. It looks at the chat's membership, and makes and writes a new record if it changed. While the chat waits for a
+   relay to confirm a change, its members can't be read and the key stays. A key the chat's state hasn't had seals
    nothing.
 4. It stores the next counter for the key, then seals the packet and hands it to the radio, addressed to the contact's
-   radio from the address book (#34).
+   MeshCore radio from their record (#34).
 
-Every packet the radio receives goes through the inbox. Before giving up on one, the core reads the chats' key records
-once more and tries again.
+Every packet the radio receives goes through the inbox. Before giving up on one, the core reads the contacts' records
+from the chats' state once more and tries again.
 
 `core/src/radio_store.rs` keeps, in `radio.json`:
 
-- **this phone's key** for each chat and mesh, with its next counter, written and synced before the packet goes out. A
-  damaged file loses keys and counters together: the app then makes new keys.
-- **the contacts' keys.** The file holds keys in the clear, as it holds message texts. On Unix systems, macOS, iOS and
-  Android included, only its owner can read it.
+- **this phone's record** for each chat and mesh, with its key's next counter, written and synced before the packet
+  goes out. A damaged file loses keys and counters together: the app then makes new keys.
+- **the contacts' records and keys.** The file holds keys in the clear, as it holds message texts. On Unix systems,
+  macOS, iOS and Android included, only its owner can read it.
 - **every message that went or came by radio,** with its id. A received one is shown from there until its relay copy
   arrives, and is marked as radio after that too.
 - **the contacts' radios,** and the switch.

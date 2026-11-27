@@ -407,8 +407,9 @@ a message the radio can't take waits for the internet instead:
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
 - "Your radio isn't connected.": it is paired, but the core is looking for it.
-- "Bea Holm's radio isn't known yet.": the contact's app hasn't sent a radio address record (#34); see
+- "Bea Holm's radio isn't known yet.": the chat has no radio address record of the contact's (#34); see
   [radio.md](radio.md).
+- "Only a MeshCore radio can send messages."
 - "Could not send by radio: the chat's keys aren't ready. Try again."
 
 Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and

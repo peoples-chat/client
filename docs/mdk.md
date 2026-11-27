@@ -32,7 +32,9 @@ lower `marmot-session` crate.
 | `follow_relays` | `subscribe_relay_liveness` |
 | `connectivity_restored` | `notify_connectivity_restored` |
 | `chat_membership` | `group_mls_state`, `group_members` |
-| `send_radio_key`, `radio_key_records` | `send_custom_event`, `timeline_messages_with_query` |
+| `radio_addresses` (version 0, read only) | `timeline_messages_with_query` |
+| `app_component`, `set_app_component` | `group_app_component`, `update_app_component` |
+| `follow_epochs` | `subscribe` (`GroupEvent::EpochChanged`) |
 | `update_own_key` | `schedule_manual_self_update`, `run_due_maintenance` |
 | `export_key` | `export_encrypted_secret_key` (NIP-49), `reveal_nsec` |
 | `close` | `shutdown_and_close` |
@@ -315,16 +317,32 @@ every 5 minutes after, from our relays.
 
 ## App events
 
-**Personal invitations' tokens** (#95), **radio address records** (#34) and **radio key records** (#128) travel as app
-events: `send_custom_event` sends an event of a kind the app chooses, inside the chat's encryption.
+**Personal invitations' tokens** (#95) travel as app events: `send_custom_event` sends an event of a kind the app
+chooses, inside the chat's encryption.
 
 - MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
-  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens, 9911 (`RADIO_ADDRESS_KIND`) for address
-  records and 9912 (`RADIO_KEY_KIND`) for key records. All are provisional: Marmot assigns kinds only to adopted specs.
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens, which is provisional: Marmot assigns kinds
+  only to adopted specs. Older builds sent radio address records as kind 9911; the core still reads those, and sends
+  none.
 - The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
   notification.
 - It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
   does text.
+
+## Radio records in the chat's state
+
+**Radio address records** (#34, #128) are no events: they are MLS app components in the direct chat's GroupContext, as
+spike [#117](https://github.com/peoples-chat/client/blob/117-chat-state-spike/docs/spikes/117-chat-state.md) tried
+them. The record and the rules: [radio-format-v0.md](radio-format-v0.md#where-the-keys-come-from).
+
+- `update_app_component` replaces a component by a commit, which only an admin may make. `group_app_component` reads
+  it from this device's copy of the chat. A change shows in neither chat.
+- Component ids from `0xf000` up belong to apps. The core uses `0xf910` and `0xf911`, one for each member of a direct
+  chat, provisional until registered (#145). With one for both, a race loses a record.
+- `subscribe` reports `GroupEvent::EpochChanged` when a chat moves to a new epoch, and the core reads the components
+  again.
+- Without a relay, the change waits (`PendingPublish`), the component still reads as before, and MDK publishes it
+  later by itself. Messages can still be written meanwhile.
 
 ## Relay reachability
 
@@ -451,11 +469,13 @@ orientation, dropping the metadata, transparency and refusals.
 - without a relay the profile doesn't change, and the error says why;
 - the error messages, and the limits counted in characters.
 
-`core/tests/issue_128_radio_keys.rs` has two contacts with mock radios exchange their radio keys (#128):
+`core/tests/issue_128_radio_records.rs` has two contacts with mock radios exchange their radio records through the
+chat's state (#128):
 
-- the keys go by themselves, radio text works both ways, and a restart keeps them;
-- a membership change brings a new key, and the old one opens no new packets;
-- each mesh has its own key, and a record of an unknown mesh is kept and not used.
+- the records go by themselves, show nothing, radio text works both ways, and a restart keeps the keys;
+- a membership change or another radio brings a new key, and the old one opens no new packets;
+- each mesh has its own record and key, and a record of an unknown mesh is kept and not used;
+- a version 0 event is still read, and two members writing at once both keep their records.
 
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.

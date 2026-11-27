@@ -1,11 +1,13 @@
 # Spike #37: radio keys from the chat's MLS state
 
-> **Replaced on 27 November 2026 ([#128](https://github.com/peoples-chat/client/issues/128)).** Radio keys no longer
-> come from the chat's MLS state. Each member's app makes a random key and sends it inside the chat's MLS messages, as
-> an app event of our own kind, 9912: [radio-format-v0.md, "Where the keys come
-> from"](../radio-format-v0.md#where-the-keys-come-from). The secret this spike used,
-> `MLS-Exporter("marmot", "group-event", 32)`, is reserved by Marmot for the outer encryption of kind-445 events. What
-> follows is the spike as it was, kept for what it found about MDK. The code and the tests it names are gone.
+> **Replaced on 27 November 2026 ([#128](https://github.com/peoples-chat/client/issues/128)).** Radio keys are no
+> longer derived from the chat's MLS secrets. Each member's app makes a random key and puts it in its radio address
+> record, version 1, which lives in the direct chat's state as an MLS app component: [radio-format-v0.md, "Where the
+> keys come from"](../radio-format-v0.md#where-the-keys-come-from) has the record and the decisions, and spike
+> [#117](https://github.com/peoples-chat/client/blob/117-chat-state-spike/docs/spikes/117-chat-state.md) how MDK holds
+> it. The secret this spike used, `MLS-Exporter("marmot", "group-event", 32)`, is reserved by Marmot for the outer
+> encryption of kind-445 events. What follows is the spike as it was, kept for what it found about MDK. The code and the
+> tests it names are gone.
 
 **Result: works, without changes to MDK.** Tested 22 November 2026 with MDK v0.18.0.
 
