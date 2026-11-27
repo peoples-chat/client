@@ -1360,18 +1360,11 @@ impl Core {
             .cloned()
     }
 
-    /// Who sent `message`, for a chat in `chat_state`: on incoming messages in a chat that is
-    /// no longer direct, where it can be someone other than the contact (#125).
+    /// Who sent `message`, for a chat in `chat_state` (#125): see [`message_sender`].
     fn sender_in(&self, chat_state: ChatState, message: &TextMessage) -> Option<Sender> {
-        (chat_state != ChatState::Direct && !message.outgoing && !message.sender_hex.is_empty())
-            .then(|| Sender {
-                public_key: message.sender_hex.clone(),
-                name: self
-                    .inner
-                    .messaging
-                    .known_name(&message.sender_hex)
-                    .unwrap_or_else(|| marmot_app::default_profile_pseudonym(&message.sender_hex)),
-            })
+        message_sender(chat_state, message, |hex| {
+            self.inner.messaging.known_name(hex)
+        })
     }
 
     /// Whether `chat` can be reached by radio: only a direct chat can (#125).
@@ -1549,6 +1542,25 @@ fn chat_state(chat: &DirectChat) -> ChatState {
     }
 }
 
+/// Who sent `message`, in a chat in `chat_state` (#125). Only incoming messages in a `group`
+/// chat say so: there anyone in the chat can have sent them. In a direct chat, and one the
+/// contact left, the contact sent them all. `known_name` gives a name from a profile; without
+/// one the sender goes by MDK's pseudonym for them, as in White Noise.
+fn message_sender(
+    chat_state: ChatState,
+    message: &TextMessage,
+    known_name: impl FnOnce(&str) -> Option<String>,
+) -> Option<Sender> {
+    if chat_state != ChatState::Group || message.outgoing || message.sender_hex.is_empty() {
+        return None;
+    }
+    let hex = &message.sender_hex;
+    Some(Sender {
+        public_key: hex.clone(),
+        name: known_name(hex).unwrap_or_else(|| marmot_app::default_profile_pseudonym(hex)),
+    })
+}
+
 /// Why nothing can be sent in `chat`, if it has ended (#125).
 fn cannot_send(chat: &Chat) -> Option<String> {
     match chat.state {
@@ -1680,6 +1692,64 @@ mod tests {
                     RelayStatus::Connecting
                 ),
             ]
+        );
+    }
+
+    fn text_from(sender_hex: &str, outgoing: bool) -> TextMessage {
+        TextMessage {
+            chat_id: "chat".to_owned(),
+            id: "message".to_owned(),
+            outgoing,
+            sender_hex: sender_hex.to_owned(),
+            text: "Hello".to_owned(),
+            sent_at: 0,
+            acknowledged: outgoing,
+        }
+    }
+
+    #[test]
+    fn issue_125_incoming_messages_in_a_group_say_who_sent_them() {
+        let cy = "c".repeat(64);
+        let named = |hex: &str| (hex == cy).then(|| "Cy Berg".to_owned());
+
+        // A known name.
+        let sender = message_sender(ChatState::Group, &text_from(&cy, false), named).unwrap();
+        assert_eq!(sender.public_key, cy);
+        assert_eq!(sender.name, "Cy Berg");
+
+        // Without a profile, the pseudonym MDK and White Noise give them.
+        let dee = "d".repeat(64);
+        let sender = message_sender(ChatState::Group, &text_from(&dee, false), named).unwrap();
+        assert_eq!(sender.public_key, dee);
+        assert_eq!(sender.name, marmot_app::default_profile_pseudonym(&dee));
+        assert!(!sender.name.is_empty());
+    }
+
+    #[test]
+    fn issue_125_only_incoming_messages_in_a_group_carry_a_sender() {
+        let cy = "c".repeat(64);
+        let named = |_: &str| Some("Cy Berg".to_owned());
+        // Our own messages, in any chat.
+        for state in [
+            ChatState::Direct,
+            ChatState::ContactLeft,
+            ChatState::Removed,
+            ChatState::Group,
+        ] {
+            assert_eq!(message_sender(state, &text_from(&cy, true), named), None);
+        }
+        // The contact's, in a chat that is or was direct, or one the user left.
+        for state in [
+            ChatState::Direct,
+            ChatState::ContactLeft,
+            ChatState::Removed,
+        ] {
+            assert_eq!(message_sender(state, &text_from(&cy, false), named), None);
+        }
+        // A message MDK gave no sender for.
+        assert_eq!(
+            message_sender(ChatState::Group, &text_from("", false), named),
+            None
         );
     }
 }

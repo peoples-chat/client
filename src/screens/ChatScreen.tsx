@@ -44,7 +44,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
   const sendable = canSend(chat);
   const ended = chatEndedText(chat, first);
   const suggestions =
-    sendable && invited && chat.messages.length === 0 ?[`Hi ${first}, I made it`, "What is the radio part?"] : [];
+    sendable && invited && chat.messages.length === 0 ? [`Hi ${first}, I made it`, "What is the radio part?"] : [];
 
   async function send(text: string) {
     setError(null);

@@ -1139,6 +1139,25 @@ impl Messaging {
         Err(MessagingError::EpochUnsettled)
     }
 
+    /// Gives the chat `chat_id` a name, which makes it a group for MDK and for every member's
+    /// app (#125). The interface doesn't offer this; tests use it to do what another app can.
+    pub async fn rename_chat(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        name: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_group_profile(
+                account_hex,
+                &group_id(chat_id)?,
+                Some(name.to_owned()),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// The account key as a copy to keep (#86): a NIP-49 `ncryptsec1…` protected by `password`,
     /// or the plain `nsec1…` without one.
     ///
