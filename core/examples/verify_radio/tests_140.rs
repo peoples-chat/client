@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use peoples_chat_core::radio::Port;
+use peoples_chat_fake_radio::{Config as FakeConfig, FakeRadio, Fixture, Sender};
 use tempfile::TempDir;
 
 use crate::config::{self, Config};
@@ -125,6 +126,53 @@ fn args(line: &str) -> Vec<String> {
 
 fn small_run() -> Options {
     spike::options(&args("--texts 10,96 --repeat 1 --flood-repeat 1 --offline")).unwrap()
+}
+
+#[test]
+fn issue_140_a_frame_log_becomes_one_fixture_per_radio() {
+    let log = [
+        r#"{"at_ms":1,"radio":"R1","dir":"to_radio","frame":"0a"}"#,
+        r#"{"at_ms":2,"radio":"R2","dir":"from_radio","frame":"83"}"#,
+        r#"{"at_ms":3,"radio":"R1","dir":"blocked","frame":"0c02"}"#,
+        r#"{"at_ms":4,"radio":"R1","dir":"from_radio","frame":"0a"}"#,
+    ]
+    .join("\n");
+    let radios = crate::fixtures::from_log(&log).unwrap();
+    assert_eq!(radios["R1"], "app 0a\nradio 0a\n");
+    assert_eq!(radios["R2"], "radio 83\n");
+    assert!(crate::fixtures::from_log("not a frame").is_err());
+}
+
+/// The captures of the lab run, which the fake radio replays.
+#[tokio::test]
+async fn issue_140_the_lab_captures_replay_on_the_fake_radio() {
+    let folder =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fake-radio/tests/fixtures");
+    for (radio, key) in [("R1", "32981804a143"), ("R2", "3d0e1c634782")] {
+        let path = folder.join(format!("lab-path-spike-{radio}.frames"));
+        let fixture = Fixture::load(&path).unwrap();
+        // The log's redactions hold: no channel secret was kept.
+        for frame in &fixture.frames {
+            if frame.sender == Sender::App && frame.payload[0] == 32 {
+                assert_eq!(frame.payload[34..50], [0; 16], "{radio}");
+            }
+        }
+        let fake = FakeRadio::replay(FakeConfig::default(), fixture)
+            .await
+            .unwrap();
+        let addr = fake.addr();
+        let link = meshcore_rs::MeshCore::tcp(&addr.ip().to_string(), addr.port())
+            .await
+            .unwrap();
+        let me = link.commands().lock().await.send_appstart().await.unwrap();
+        assert!(hex::encode(me.public_key).starts_with(key), "{radio}");
+        assert_eq!(
+            (me.radio_freq, me.sf, me.cr, me.tx_power),
+            (869_850, 7, 5, 2)
+        );
+        assert!(fake.replay_mismatches().is_empty(), "{radio}");
+        link.disconnect().await.unwrap();
+    }
 }
 
 #[tokio::test(start_paused = true)]

@@ -6,6 +6,8 @@
 ```sh
 pnpm verify:radio             # checks every USB radio, then that each still responds
 pnpm verify:radio --dry-run   # lists the radios it found and their firmware
+pnpm verify:radio --path-spike --offline   # measures the MeshCore paths from R1 to R2 (#140)
+pnpm verify:radio --adverts 75             # listens for the radios' own adverts for 75 minutes (#140)
 ```
 
 `npm run verify:radio` runs the same script. The code is in `core/examples/verify_radio/`.
@@ -21,7 +23,7 @@ pnpm verify:radio --dry-run   # lists the radios it found and their firmware
    `max_tx_power_dbm`. All radios are checked, every difference is reported, and then the run fails.
 5. **Checks that each radio still responds**, by asking for its contacts. A dry run stops after step 4.
 
-The harness sends nothing over the air. The message tests come with #134, and Bluetooth with #135: a radio without a
+The checks send nothing over the air. The message tests come with #134, and Bluetooth with #135: a radio without a
 `usb_serial` is listed as not checked.
 
 It exits with 0 when all passed, 1 when something failed, 2 for a wrong argument and 130 when interrupted.
@@ -80,6 +82,22 @@ link (`link.rs`), which lets only these companion commands through: app start (1
 (5), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and device query (22).
 Anything else is refused and logged as `blocked`.
 
+The path spike's links also let through raw data (25), reading and setting a channel slot (31, 32) and channel data
+(62). It puts its test channel in a free slot and empties it at the end, and leaves each radio holding the other as a
+contact. It refuses `--tx-power` and `--radio-off`.
+
+## Measurements
+
+Both run after the checks above, under the lock, on the first two USB radios of the lab file.
+
+- **`--path-spike`** runs [path_spike](radio-paths.md#running-the-spike) from the first radio to the second, or back
+  with `--reverse`. It takes the spike's other options. The CSV goes beside the frame log, or to `--out`. Interrupting
+  ends at once: the next run finds its test channel (`pc-spike`) and empties it.
+- **`--adverts MINUTES`** keeps both radios open, sends nothing, and reports every advert each one hears. At the end it
+  has each radio send one zero-hop advert, and fails unless the other hears it.
+- **`--fixtures FRAME_LOG FOLDER NAME`** uses no radios: it writes a frame log as fixtures for the fake radio (#132),
+  one file per radio.
+
 ## The frame log
 
 Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame, in order.
@@ -91,12 +109,12 @@ Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame, in ord
 - `dir` is `to_radio`, `from_radio`, or `blocked` for a command the harness refused to send.
 - `frame` is the companion frame in hex, without the serial link's start byte and length. A `from_radio` frame can be
   handed to meshcore-rs's `MessageReader::handle_rx` as it is, so the log serves as fixtures for a fake radio.
-- The radio's Bluetooth PIN and every position (the radio's own and its contacts') are zeroed, because fixtures end
-  up in the repository. Lengths don't change.
+- The radio's Bluetooth PIN, channel secrets and every position (the radio's own, its contacts', and those in logged
+  adverts) are zeroed, because fixtures end up in the repository. Lengths don't change.
 
 A log still holds public keys, contact names and, in later tests, message packets. Look at one before committing it.
 
 ## Adding a hardware test
 
-`Lab::run` in `lab.rs` has every checked radio as a `Station`, with its `MeshCoreRadio`: the same adapter the app
+`Lab::stations` in `lab.rs` has every checked radio as a `Station`, with its `MeshCoreRadio`: the same adapter the app
 uses. A test added there runs under the lock, after the checks, with its frames logged.
