@@ -104,8 +104,8 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
-    /// Who sent it: on incoming messages in a chat that is no longer direct, where it can be
-    /// someone other than the contact (#125).
+    /// Who sent it: on incoming messages in a `group` chat, where it can be someone other than
+    /// the contact (#125).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<Sender>,
 }
@@ -361,7 +361,7 @@ pub enum CoreEvent {
     },
     /// A chat stopped being a direct chat, or ended: the contact left, it got a name or another
     /// member, or the user is no longer in it (#125). Carries the whole chat, which replaces the
-    /// one with its id: in a chat that is no longer direct, messages say who sent them.
+    /// one with its id: in a `group` chat, incoming messages say who sent them.
     ChatChanged {
         chat: Chat,
     },

@@ -77,8 +77,8 @@ export interface Message {
    */
   cancellable?: boolean;
   /**
-   * Who sent it: on incoming messages in a chat that is no longer direct, where it can be someone
-   * other than the contact (#125).
+   * Who sent it: on incoming messages in a `group` chat, where it can be someone other than the
+   * contact (#125).
    */
   sender?: Sender;
 }
