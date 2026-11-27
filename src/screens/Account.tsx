@@ -68,7 +68,7 @@ export function Account() {
               <Button variant="secondary" onClick={() => setConfirming(false)} disabled={busy} autoFocus>
                 Cancel
               </Button>
-              <Button variant="dangerSolid" onClick={deleteAccount} disabled={busy}>
+              <Button variant="dangerSolid" onClick={deleteAccount} disabled={busy} data-testid="account-delete-confirm">
                 Delete account
               </Button>
             </div>
@@ -81,6 +81,7 @@ export function Account() {
             danger
             chevron={false}
             onClick={() => setConfirming(true)}
+            testId="account-delete"
           />
         )}
       </main>

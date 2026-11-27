@@ -37,7 +37,12 @@ export function Privacy() {
           disabled
         />
         <SectionTitle>Advanced</SectionTitle>
-        <ActionRow icon="globe" label="Relays and servers" onClick={() => navigation.push({ name: "relays" })} />
+        <ActionRow
+          icon="globe"
+          label="Relays and servers"
+          onClick={() => navigation.push({ name: "relays" })}
+          testId="privacy-relays"
+        />
       </main>
     </div>
   );

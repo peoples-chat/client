@@ -43,7 +43,7 @@ interface TabHeaderProps {
 export function TabHeader({ title, accountName, accountPhoto, onOpenSettings, action }: TabHeaderProps) {
   return (
     <header className={styles.tabHeader}>
-      <button type="button" className={styles.profileButton} aria-label="Settings and profile" onClick={onOpenSettings}>
+      <button type="button" className={styles.profileButton} aria-label="Settings and profile" data-testid="tab-open-settings" onClick={onOpenSettings}>
         <Avatar name={accountName} size={36} tint="green" photo={accountPhoto} />
       </button>
       <h1 className={styles.tabTitle}>{title}</h1>

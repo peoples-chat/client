@@ -49,6 +49,7 @@ export function Settings() {
             label={label}
             disabled={!screen}
             onClick={screen && (() => navigation.push(screen))}
+            testId={screen && `settings-${screen.name}`}
           />
         ))}
         <p className={styles.version}>

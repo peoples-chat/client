@@ -17,13 +17,16 @@ interface ActionRowProps {
   chevron?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  /** `data-testid`, for tests. */
+  testId?: string;
 }
 
 /** A row that opens something or does something. */
-export function ActionRow({ icon, label, description, accent, danger, chevron = true, disabled, onClick }: ActionRowProps) {
+export function ActionRow({ icon, label, description, accent, danger, chevron = true, disabled, onClick, testId }: ActionRowProps) {
   return (
     <button
       type="button"
+      data-testid={testId}
       className={[styles.actionRow, accent && styles.accent, danger && styles.danger].filter(Boolean).join(" ")}
       disabled={disabled}
       onClick={onClick}
@@ -39,13 +42,28 @@ export function ActionRow({ icon, label, description, accent, danger, chevron = 
 }
 
 /** A row that only tells something: the look of an action row, without the action. */
-export function InfoRow({ icon, label, description }: { icon: IconName; label: string; description?: ReactNode }) {
+export function InfoRow({
+  icon,
+  label,
+  description,
+  testId,
+}: {
+  icon: IconName;
+  label: string;
+  description?: ReactNode;
+  /** `data-testid` on the row; its label and description get `-label` and `-description`. */
+  testId?: string;
+}) {
   return (
-    <div className={styles.actionRow}>
+    <div className={styles.actionRow} data-testid={testId}>
       <Icon name={icon} size={22} className={styles.actionIcon} />
       <span className={styles.actionText}>
-        <span>{label}</span>
-        {description && <span className={styles.actionDescription}>{description}</span>}
+        <span data-testid={testId && `${testId}-label`}>{label}</span>
+        {description && (
+          <span className={styles.actionDescription} data-testid={testId && `${testId}-description`}>
+            {description}
+          </span>
+        )}
       </span>
     </div>
   );
