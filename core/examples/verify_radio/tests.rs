@@ -264,7 +264,7 @@ async fn run(
     let log = FrameLog::create(folder.path()).unwrap();
     let lab = Lab {
         config,
-        usb: bench,
+        usb: Arc::new(bench.clone()),
         power: switch,
         log: log.clone(),
         timing: timing(),

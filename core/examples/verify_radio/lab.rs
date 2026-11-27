@@ -93,7 +93,7 @@ pub struct Station {
     pub port: String,
     pub info: RadioInfo,
     pub radio: MeshCoreRadio,
-    link: Link,
+    pub link: Link,
 }
 
 impl std::fmt::Debug for Station {
@@ -112,7 +112,7 @@ impl Station {
 
 pub struct Lab<'a> {
     pub config: &'a Config,
-    pub usb: &'a dyn Usb,
+    pub usb: Arc<dyn Usb>,
     pub power: &'a dyn Power,
     pub log: Arc<FrameLog>,
     pub timing: Timing,
