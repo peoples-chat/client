@@ -6,8 +6,8 @@
 //! follows. Both cores pair their radio as the app does, through ports that open it with the
 //! harness's own link: the radio is checked at every open, and every frame is logged.
 //!
-//! This is the only part of the harness that puts anything on the air: adverts from each radio
-//! (zero hop, so no repeater passes them on) and a few short messages, plus the retries.
+//! These tests put on the air: adverts from each radio (zero hop, so no repeater passes them
+//! on) and a few short messages, plus the retries. The Bluetooth run (`ble.rs`) sends its own.
 
 use std::io::Write;
 use std::path::Path;
@@ -239,6 +239,7 @@ impl RadioPorts for LabPorts {
             power: &NoPower,
             log: self.log.clone(),
             timing: self.timing,
+            bluetooth: false,
         };
         // Finds the port by serial number again, and checks firmware, preset and power.
         let station = lab

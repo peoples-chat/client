@@ -1,8 +1,12 @@
-//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops.
+//! MeshCore through meshcore-rs (#60): a companion radio, reached over USB serial on desktops,
+//! or over TCP, as the radio lab reaches a Bluetooth radio through its bridge (#135).
 //!
 //! meshcore-rs speaks the MeshCore companion protocol. This adapter turns its commands and
 //! events into [`Radio`]. On phones the crate is built without a link of its own, and a link the
 //! app runs itself, such as Bluetooth (#23), uses [`MeshCoreRadio::over`].
+//!
+//! A Bluetooth link can end without anyone saying so: nothing arrives any more, and what is
+//! written goes nowhere. [`MeshCoreRadio::watch_link`] notices that.
 //!
 //! Notes on meshcore-rs 0.2.0 that this code works around are in `docs/radio.md`.
 
@@ -30,6 +34,17 @@ const BAUD_RATE: u32 = 115_200;
 /// MeshCore's text type for plain messages. CLI replies from repeaters and signed room posts use
 /// others.
 const TXT_PLAIN: u8 = 0;
+/// How often a TCP link is checked, as long as nothing else says that it ended.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const TCP_WATCH_EVERY: Duration = Duration::from_secs(10);
+/// How long a radio may take to answer a link check, at most.
+const LINK_CHECK_REPLY: Duration = Duration::from_secs(5);
+/// How many link checks in a row a radio may leave unanswered before its link counts as lost.
+/// A busy radio can lose one answer.
+const MISSED_CHECKS: u32 = 2;
+/// MeshCore's command for the battery level and storage: what a link check asks for. It changes
+/// nothing on the radio and puts nothing on the air.
+const CMD_GET_BATT_AND_STORAGE: u8 = 20;
 
 /// A MeshCore companion radio.
 pub struct MeshCoreRadio {
@@ -39,6 +54,8 @@ pub struct MeshCoreRadio {
     link: Option<meshcore_rs::MeshCore>,
     /// Turns meshcore-rs's events into [`RadioEvent`]s.
     pump: JoinHandle<()>,
+    /// Checks the link, when someone asked for that ([`MeshCoreRadio::watch_link`]).
+    watch: Mutex<Option<JoinHandle<()>>>,
 }
 
 struct Shared {
@@ -76,6 +93,21 @@ impl MeshCoreRadio {
         Self::start(commands, &dispatcher, Some(link)).await
     }
 
+    /// Connects to a companion radio over TCP, such as the Bluetooth bridge of the radio lab on
+    /// `127.0.0.1` (#135). The link is watched from the start ([`MeshCoreRadio::watch_link`]):
+    /// whatever is behind the TCP connection can be lost without the connection ending.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub async fn connect_tcp(host: &str, port: u16) -> Result<Self, RadioError> {
+        let link = meshcore_rs::MeshCore::tcp(host, port)
+            .await
+            .map_err(|error| RadioError::Link(error.to_string()))?;
+        let commands = link.commands().clone();
+        let dispatcher = link.dispatcher().clone();
+        let radio = Self::start(commands, &dispatcher, Some(link)).await?;
+        radio.watch_link(TCP_WATCH_EVERY);
+        Ok(radio)
+    }
+
     /// A radio over meshcore-rs's command handler and event dispatcher, for a link the app runs
     /// itself: it writes the handler's frames to the radio and passes the radio's frames to the
     /// dispatcher's reader. Tests use it with a fake radio.
@@ -106,6 +138,7 @@ impl MeshCoreRadio {
             state,
             link,
             pump,
+            watch: Mutex::new(None),
         };
         if let Err(error) = radio.greet().await {
             // Lets go of the port, so that it can be opened again (#24).
@@ -131,6 +164,35 @@ impl MeshCoreRadio {
         Ok(())
     }
 
+    /// Checks the link every `every` from now on, for links that can end silently, as Bluetooth
+    /// does (#135). A check asks the radio for its battery level. When the radio leaves two
+    /// checks in a row unanswered, the link counts as lost: [`RadioEvent::Disconnected`] follows,
+    /// and the core opens the radio again as after any lost link (#24). An answer of any kind
+    /// counts, also a refusal.
+    pub fn watch_link(&self, every: Duration) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let watch = runtime.spawn(watch(every, self.commands.clone(), self.state.clone()));
+        let previous = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(watch);
+        if let Some(previous) = previous {
+            previous.abort();
+        }
+    }
+
+    /// Has the radio announce itself to the radios in direct range, which is how MeshCore radios
+    /// come to hold each other as contacts. It changes none of the radio's settings.
+    pub async fn advertise(&self) -> Result<(), RadioError> {
+        self.ensure_connected()?;
+        let commands = self.commands.lock().await;
+        commands.send_advert(false).await.map_err(command_error)?;
+        Ok(())
+    }
+
     fn ensure_connected(&self) -> Result<(), RadioError> {
         if self.state.connected.load(Ordering::SeqCst) {
             Ok(())
@@ -143,6 +205,10 @@ impl MeshCoreRadio {
 impl Drop for MeshCoreRadio {
     fn drop(&mut self) {
         self.pump.abort();
+        let watch = self.watch.get_mut().unwrap_or_else(PoisonError::into_inner);
+        if let Some(watch) = watch.take() {
+            watch.abort();
+        }
         // A link this radio opened holds the serial port until it ends (#24).
         if let Some(link) = self.link.take()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
@@ -309,6 +375,44 @@ async fn pump(
             }
             (EventType::Disconnected, _) => state.disconnected(),
             _ => {}
+        }
+    }
+}
+
+/// Checks the link every `every` until it is lost or ended ([`MeshCoreRadio::watch_link`]).
+async fn watch(
+    every: Duration,
+    commands: Arc<tokio::sync::Mutex<CommandHandler>>,
+    state: Arc<Shared>,
+) {
+    let mut missed = 0;
+    loop {
+        tokio::time::sleep(every).await;
+        if !state.connected.load(Ordering::SeqCst) {
+            return;
+        }
+        // meshcore-rs's own battery query waits for the battery level only, so a radio that
+        // refuses would look like one that is gone.
+        let answer = commands
+            .lock()
+            .await
+            .send_multi(
+                &[CMD_GET_BATT_AND_STORAGE],
+                &[EventType::Battery, EventType::Error],
+                every.min(LINK_CHECK_REPLY),
+            )
+            .await;
+        match answer {
+            Ok(_) => missed = 0,
+            Err(error) => {
+                missed += 1;
+                log::info!("the radio left a link check unanswered ({missed}): {error}");
+                if missed >= MISSED_CHECKS {
+                    log::warn!("the radio's link is lost: it stopped answering");
+                    state.disconnected();
+                    return;
+                }
+            }
         }
     }
 }

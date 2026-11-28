@@ -15,6 +15,7 @@ pub const CMD_GET_DEVICE_TIME: u8 = 5;
 pub const CMD_SET_DEVICE_TIME: u8 = 6;
 pub const CMD_SEND_SELF_ADVERT: u8 = 7;
 pub const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
+pub const CMD_GET_BATT_AND_STORAGE: u8 = 20;
 pub const CMD_DEVICE_QUERY: u8 = 22;
 
 // Error codes.
@@ -55,6 +56,15 @@ pub fn error(code: u8) -> Vec<u8> {
     vec![1, code]
 }
 
+/// BATT_AND_STORAGE: 4.1 V, and 120 of 1024 kB of storage used.
+pub fn battery() -> Vec<u8> {
+    let mut frame = vec![12];
+    frame.extend_from_slice(&4100u16.to_le_bytes());
+    frame.extend_from_slice(&120u32.to_le_bytes());
+    frame.extend_from_slice(&1024u32.to_le_bytes());
+    frame
+}
+
 pub fn contacts_start(count: usize) -> Vec<u8> {
     [&[2u8][..], &(count as u32).to_le_bytes()].concat()
 }
@@ -76,13 +86,14 @@ pub fn contact(contact: &Contact, last_modified: u32) -> Vec<u8> {
     frame
 }
 
-/// SELF_INFO on MeshCore's EU/UK narrow preset: 869.618 MHz, 62.5 kHz, SF 8, CR 8.
-pub fn self_info(public_key: &[u8; 32], name: &str) -> Vec<u8> {
+/// SELF_INFO with the rest of MeshCore's EU/UK narrow preset (869.618 MHz): 62.5 kHz, SF 8,
+/// CR 8.
+pub fn self_info(public_key: &[u8; 32], name: &str, frequency_khz: u32) -> Vec<u8> {
     let mut frame = vec![5, 1, 22, 22]; // chat node, TX power, its maximum
     frame.extend_from_slice(public_key);
     frame.extend_from_slice(&[0; 8]); // latitude, longitude
     frame.extend_from_slice(&[0; 4]); // multi ACKs, location policy, telemetry, manual add
-    frame.extend_from_slice(&869_618u32.to_le_bytes()); // kHz
+    frame.extend_from_slice(&frequency_khz.to_le_bytes());
     frame.extend_from_slice(&62_500u32.to_le_bytes()); // Hz
     frame.extend_from_slice(&[8, 8]);
     frame.extend_from_slice(name.as_bytes());
