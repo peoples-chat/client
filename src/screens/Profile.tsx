@@ -90,12 +90,7 @@ function PublicKeySection({ npub }: { npub: string }) {
   useEffect(() => () => clearTimeout(resetTimer.current), []);
 
   async function copyNpub() {
-    try {
-      await navigator.clipboard.writeText(npub);
-      setCopy("copied");
-    } catch {
-      setCopy("failed");
-    }
+    setCopy(await copyPublicKey(npub, navigator.clipboard));
     clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setCopy("idle"), 2000);
   }
@@ -122,6 +117,19 @@ function PublicKeySection({ npub }: { npub: string }) {
       </div>
     </section>
   );
+}
+
+/** Hands the plain npub, and nothing else, to the clipboard (#129). */
+export async function copyPublicKey(
+  npub: string,
+  clipboard: Pick<Clipboard, "writeText">,
+): Promise<"copied" | "failed"> {
+  try {
+    await clipboard.writeText(npub);
+    return "copied";
+  } catch {
+    return "failed";
+  }
 }
 
 type PhotoState = { kind: "idle" } | { kind: "uploading" } | { kind: "removing" } | { kind: "failed"; message: string };
