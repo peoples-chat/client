@@ -174,6 +174,11 @@ describe("the JSON shared with the Rust core", () => {
       },
       messageRemoved: (next) => expect(next.chats[1].messages.map((m) => m.cancellable)).toEqual([undefined]),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
+      messageChanged: (next) =>
+        expect([next.chats[1].messages[0].reactions, next.chats[1].messages[0].replyTo]).toEqual([
+          [{ emoji: "❤️", count: 2, mine: true }],
+          { messageId: "msg-gone", text: "" },
+        ]),
       reachChanged: (next) =>
         expect(next.chats.map((c) => [c.reach, c.radioIssue])).toEqual([
           ["radio", undefined],

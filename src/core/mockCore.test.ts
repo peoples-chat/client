@@ -87,7 +87,7 @@ describe("mock core", () => {
 
     vi.advanceTimersByTime(1500);
     expect(events[2]).toMatchObject({ type: "messageAdded", chatId: chat.id, message: { direction: "in" } });
-    expect((await core.load()).chats[0].messages).toHaveLength(4);
+    expect((await core.load()).chats[0].messages).toHaveLength(6);
   });
 
   it("sends by radio where the chat is reached by radio, and the other radio confirms", async () => {

@@ -48,7 +48,7 @@ export function MessageRequest({ invitationId }: { invitationId: string }) {
         onLeading={navigation.back}
         actions={<IconButton label="About this request" icon="info" disabled />}
       />
-      <MessageList messages={invitation.messages} />
+      <MessageList messages={invitation.messages} contactName={name} />
       <footer className={styles.footer}>
         <p className={styles.note}>{firstName(name)} cannot see that you have read this until you accept.</p>
         {error && (

@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { radioBytes } from "../core/radio";
-import { RADIO_TEXT_LIMIT, type DeliveryState, type Message } from "../core/types";
+import { RADIO_TEXT_LIMIT, type DeliveryState, type Message, type Quote } from "../core/types";
 import { formatDay, formatTime, sameDay } from "./format";
 import { Icon } from "./Icon";
+import { messageSummary, PLACEHOLDER_ICONS, PLACEHOLDER_LABELS, quoteSummary, reactionLabel } from "./messageContent";
 import styles from "./MessageList.module.css";
 
 interface MessageListProps {
@@ -13,10 +14,12 @@ interface MessageListProps {
   onCancel?: (messageId: string) => void;
   /** The chat's messages go by radio, so a waiting one too long for radio says why it waits. */
   byRadio?: boolean;
+  /** The other person, who wrote the messages a reply quotes that aren't the user's (#123). */
+  contactName: string;
 }
 
 /** The messages of a chat, oldest at the top, with a separator for each day. */
-export function MessageList({ messages, empty, onCancel, byRadio = false }: MessageListProps) {
+export function MessageList({ messages, empty, onCancel, byRadio = false, contactName }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -54,7 +57,7 @@ export function MessageList({ messages, empty, onCancel, byRadio = false }: Mess
           {(index === 0 || !sameDay(messages[index - 1].sentAt, message.sentAt)) && (
             <div className={styles.day}>{formatDay(message.sentAt, now)}</div>
           )}
-          <MessageBubble message={message} />
+          <MessageBubble message={message} contactName={contactName} />
           {message.direction === "out" && message.delivery === "timedOut" && (
             <p className={styles.waiting}>Not confirmed by radio. It goes by internet once a relay is back.</p>
           )}
@@ -70,23 +73,78 @@ export function MessageList({ messages, empty, onCancel, byRadio = false }: Mess
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+export function MessageBubble({ message, contactName }: { message: Message; contactName: string }) {
   const outgoing = message.direction === "out";
   // Radio messages say so, in the radio colour (#48). Internet is the usual way and says nothing.
   const radio = message.transport === "radio";
+  const { placeholder, replyTo, reactions = [] } = message;
+  // A change to the chat itself is a line in the chat, not something someone said (#123).
+  if (placeholder === "chatEvent") {
+    return (
+      <p className={styles.event} data-testid="message-chat-event">
+        {messageSummary(message)}
+      </p>
+    );
+  }
   return (
-    <div className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}>
-      <div className={styles.text}>{message.text}</div>
-      <div className={styles.meta}>
-        {radio && (
-          <span className={styles.transport}>
-            <Icon name="radio" size={12} strokeWidth={2.4} />
-            Radio
-          </span>
+    <div className={`${styles.message} ${outgoing ? styles.outSide : styles.inSide}`}>
+      <div
+        className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}
+        data-testid="message"
+      >
+        {replyTo && <QuoteBlock quote={replyTo} contactName={contactName} />}
+        {placeholder && (
+          <div className={styles.placeholder} data-testid="message-placeholder">
+            <Icon name={PLACEHOLDER_ICONS[placeholder]} size={18} strokeWidth={2} />
+            <div>
+              <div className={styles.placeholderLabel}>{PLACEHOLDER_LABELS[placeholder]}</div>
+              <div className={styles.placeholderNote}>peoples.chat can't show this yet</div>
+            </div>
+          </div>
         )}
-        <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
-        {outgoing && message.delivery && <Delivery state={message.delivery} radio={radio} />}
+        {message.text && (
+          <div className={styles.text} data-testid="message-text">
+            {message.text}
+          </div>
+        )}
+        <div className={styles.meta}>
+          {radio && (
+            <span className={styles.transport}>
+              <Icon name="radio" size={12} strokeWidth={2.4} />
+              Radio
+            </span>
+          )}
+          <time dateTime={new Date(message.sentAt).toISOString()}>{formatTime(message.sentAt)}</time>
+          {outgoing && message.delivery && <Delivery state={message.delivery} radio={radio} />}
+        </div>
       </div>
+      {reactions.length > 0 && (
+        <ul className={styles.reactions} data-testid="message-reactions">
+          {reactions.map((reaction) => (
+            <li
+              key={reaction.emoji}
+              className={`${styles.reaction} ${reaction.mine ? styles.mine : ""}`}
+              aria-label={reactionLabel(reaction.emoji, reaction.count, reaction.mine)}
+              data-testid="message-reaction"
+            >
+              <span aria-hidden>{reaction.emoji}</span>
+              <span aria-hidden className={styles.count}>
+                {reaction.count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The message a reply answers, above the reply's text (#123). */
+function QuoteBlock({ quote, contactName }: { quote: Quote; contactName: string }) {
+  return (
+    <div className={styles.quote} data-testid="message-quote">
+      {quote.direction && <div className={styles.quoteAuthor}>{quote.direction === "out" ? "You" : contactName}</div>}
+      <div className={`${styles.quoteText} ${quote.direction ? "" : styles.unavailable}`}>{quoteSummary(quote)}</div>
     </div>
   );
 }

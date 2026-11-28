@@ -90,6 +90,7 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
       />
       <MessageList
         messages={chat.messages}
+        contactName={name}
         onCancel={cancel}
         byRadio={byRadio}
         empty={

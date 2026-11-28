@@ -453,6 +453,8 @@ function demoRelays(): Relay[] {
 }
 
 function demoChat(now: number): Chat {
+  const answer = "Yes, around three. I will bring the spare radio.";
+  const answerId = randomHex(8);
   return {
     id: randomHex(8),
     contact: { publicKey: randomHex(32), name: "Astrid Holm" },
@@ -465,12 +467,30 @@ function demoChat(now: number): Chat {
         transport: "internet",
       },
       {
-        id: randomHex(8),
+        id: answerId,
         direction: "out",
-        text: "Yes, around three. I will bring the spare radio.",
+        text: answer,
         sentAt: now - 25 * MINUTE,
         transport: "internet",
         delivery: "sent",
+        // From White Noise, which can send what the app can't show yet (#123).
+        reactions: [{ emoji: "❤️", count: 1, mine: false }],
+      },
+      {
+        id: randomHex(8),
+        direction: "in",
+        text: "Perfect, the kettle will be on.",
+        sentAt: now - 24 * MINUTE,
+        transport: "internet",
+        replyTo: { messageId: answerId, direction: "out", text: answer },
+      },
+      {
+        id: randomHex(8),
+        direction: "in",
+        text: "The sky right now",
+        sentAt: now - 23 * MINUTE,
+        transport: "internet",
+        placeholder: "photo",
       },
     ],
     reach: "internet",

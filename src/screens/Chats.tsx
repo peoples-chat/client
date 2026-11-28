@@ -7,6 +7,7 @@ import { Icon } from "../ui/Icon";
 import { Chip, ChipRow } from "../ui/Chip";
 import { SearchField } from "../ui/fields";
 import { formatListTime } from "../ui/format";
+import { messageSummary } from "../ui/messageContent";
 import { tintFor } from "../ui/people";
 import { ChatRow } from "../ui/rows";
 import { TabHeader } from "../ui/ScreenHeader";
@@ -83,8 +84,11 @@ export function Chats() {
                     photo={item.chat.contact.photo}
                     time={item.time ? formatListTime(item.time, now) : ""}
                     preview={
-                      item.chat.messages[item.chat.messages.length - 1]?.text ??
-                      (joinedChats.has(item.chat.id) ? "Joined from your invite. Say hi." : "No messages yet")
+                      item.chat.messages.length > 0
+                        ? messageSummary(item.chat.messages[item.chat.messages.length - 1])
+                        : joinedChats.has(item.chat.id)
+                          ? "Joined from your invite. Say hi."
+                          : "No messages yet"
                     }
                     onClick={() => navigation.push({ name: "chat", chatId: item.chat.id })}
                   />

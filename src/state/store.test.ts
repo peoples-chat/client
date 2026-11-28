@@ -78,6 +78,26 @@ describe("applyEvent", () => {
     expect(applyEvent(next, { type: "deliveryChanged", chatId: "a", messageId: "m2", delivery: "sent" })).toBe(next);
   });
 
+  it("issue 123: replaces a message whose reactions or quote changed, in a chat or an invitation", () => {
+    const state = ready([chat("a", [message("m1", 1), message("m2", 2)])]);
+    const reacted = message("m2", 2, { reactions: [{ emoji: "👍", count: 1, mine: false }] });
+    const next = applyEvent(state, { type: "messageChanged", chatId: "a", message: reacted });
+
+    expect(next.chats[0].messages).toEqual([state.chats[0].messages[0], reacted]);
+    expect(next.chats[0].messages[0]).toBe(state.chats[0].messages[0]);
+    // A message it doesn't know isn't added.
+    expect(applyEvent(next, { type: "messageChanged", chatId: "a", message: message("m3", 3) })).toBe(next);
+
+    const incoming = message("m4", 6, { direction: "in", delivery: undefined });
+    const invitation = { id: "i1", from: { publicKey: "k", name: "Karen" }, receivedAt: 5, messages: [incoming] };
+    const quoted = { ...incoming, replyTo: { messageId: "m0", direction: "out" as const, text: "Hi" } };
+    const withInvitation = applyEvent(
+      { ...state, invitations: [invitation] },
+      { type: "messageChanged", chatId: "i1", message: quoted },
+    );
+    expect(withInvitation.invitations[0].messages).toEqual([quoted]);
+  });
+
   it("shows a radio message as timed out, and confirmed when a late confirmation comes (#41)", () => {
     const state = ready([chat("a", [message("m1", 1, { transport: "radio" })])]);
     const timedOut = applyEvent(state, { type: "deliveryChanged", chatId: "a", messageId: "m1", delivery: "timedOut" });

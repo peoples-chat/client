@@ -76,6 +76,40 @@ export interface Message {
    * it goes, `messageRemoved` takes it away and `messageAdded` brings it with the core's id.
    */
   cancellable?: boolean;
+  /**
+   * What the message is, when the app can't show it as text yet (#123). `text` is then its caption,
+   * a poll's question, or what happened in the chat, and can be empty.
+   */
+  placeholder?: Placeholder;
+  /** The message this one answers: a reply's quote, or a thread message's parent (#123). */
+  replyTo?: Quote;
+  /** Reactions, one per emoji, most frequent first (#123). */
+  reactions?: Reaction[];
+}
+
+/**
+ * What a message is, when the app can't show it as text yet (#123).
+ * - `file`: any other attachment, or attachments of different sorts.
+ * - `chatEvent`: a change to the chat itself, such as someone leaving it.
+ * - `unsupported`: a kind of message the app doesn't know.
+ */
+export type Placeholder = "photo" | "video" | "audio" | "file" | "sticker" | "poll" | "chatEvent" | "unsupported";
+
+/** The message a reply answers (#123). */
+export interface Quote {
+  messageId: string;
+  /** Who sent the quoted message. Absent when it isn't available: deleted, or never received. */
+  direction?: "in" | "out";
+  text: string;
+  placeholder?: Placeholder;
+}
+
+/** An emoji people reacted to a message with (#123). */
+export interface Reaction {
+  emoji: string;
+  count: number;
+  /** The user is among them. */
+  mine: boolean;
 }
 
 /**
@@ -238,6 +272,8 @@ export type CoreEvent =
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
+  /** Someone reacted to a message, or the message it quotes arrived (#123). Replaces it by id. */
+  | { type: "messageChanged"; chatId: string; message: Message }
   /** A message is gone: cancelled while it waited, or gone out under the core's id (#46). */
   | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }

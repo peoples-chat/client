@@ -72,6 +72,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
+| `messageChanged` | `chatId`, `message` | Someone reacted to a message, or the message a reply quotes arrived. Replaces the message with that id | Done (#123) |
 | `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
@@ -89,7 +90,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `placeholder` (optional), `replyTo` (optional `Quote`), `reactions` (optional) |
+| `Quote` | `messageId`, `direction` (absent when the quoted message isn't available), `text`, `placeholder` (optional) |
+| `Reaction` | `emoji`, `count`, `mine` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -285,10 +288,26 @@ that comes before the user accepts an invitation is added to the invitation: `me
 - `sentAt` is the sender's clock, in whole seconds. After a restart, messages sent within the same second can come back
   in another order.
 
+**What other apps send** (#123). Every message in a chat shows something, so that nothing arrives unnoticed:
+
+- Text shows as text, and so do thread messages (NIP-22, kind 1111, which White Noise for Linux sends).
+- A reply, and a thread message with a parent, has `replyTo`: the quoted message from MDK's `reply_preview`, its
+  `direction` (who sent it) and its `text` or `placeholder`. Without `direction`, the quoted message is deleted or
+  never reached this device, and the interface says "Message not available".
+- A reaction isn't a message: it is counted in `reactions` on the message it reacts to, one entry per emoji, most
+  frequent first. NIP-25's `+` and `-` are 👍 and 👎. `mine` says the user is among those who reacted.
+- What the app can't show yet has a `placeholder` naming it: `photo`, `video`, `audio` or `file` (from the attachments'
+  types; one MDK can't read is a `file`), `sticker`, `poll`, `chatEvent` (a change to the chat, such as someone
+  leaving) or `unsupported` (any other kind). `text` is then the caption, the poll's question, or what happened in the
+  chat, and is empty for a sticker or an unknown kind.
+- The app's own events stay hidden: an invitation's token (9910) and a radio address record (9911, until #119).
+  Deleted messages, and ones withdrawn when the chat's state was settled, stay hidden too.
+
 **Not built yet:**
 
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
-- editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
+- sending reactions, replies and media; showing photos, files, stickers and polls themselves; editing and deleting. A
+  message deleted after it was shown stays until the app restarts (#122).
 
 ## Reach
 

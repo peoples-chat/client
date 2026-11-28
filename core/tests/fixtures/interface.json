@@ -41,10 +41,18 @@
             ]
           },
           {
+            "id": "msg-5",
+            "direction": "out",
+            "text": "Are you still there?",
+            "sentAt": 1795300090000,
+            "transport": "radio",
+            "delivery": "timedOut"
+          },
+          {
             "id": "msg-6",
             "direction": "in",
             "text": "The view from the hill",
-            "sentAt": 1795300070000,
+            "sentAt": 1795300100000,
             "transport": "internet",
             "placeholder": "photo",
             "replyTo": {
@@ -52,14 +60,6 @@
               "direction": "out",
               "text": "Yes, around three."
             }
-          },
-          {
-            "id": "msg-5",
-            "direction": "out",
-            "text": "Are you still there?",
-            "sentAt": 1795300090000,
-            "transport": "radio",
-            "delivery": "timedOut"
           }
         ],
         "reach": "radio"
@@ -158,12 +158,12 @@
       "type": "messageChanged",
       "chatId": "chat-2",
       "message": {
-        "id": "msg-7",
-        "direction": "in",
-        "text": "",
-        "sentAt": 1795300190000,
+        "id": "msg-4",
+        "direction": "out",
+        "text": "Hello!",
+        "sentAt": 1795300180000,
         "transport": "internet",
-        "placeholder": "sticker",
+        "delivery": "sent",
         "replyTo": {
           "messageId": "msg-gone",
           "text": ""

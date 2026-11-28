@@ -97,6 +97,21 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       return state;
     }
 
+    case "messageChanged": {
+      const replace = (messages: Message[]) => messages.map((m) => (m.id === event.message.id ? event.message : m));
+      if (!state.chats.some((c) => c.id === event.chatId)) {
+        const invitation = state.invitations.find((i) => i.id === event.chatId);
+        if (!invitation?.messages.some((m) => m.id === event.message.id)) return state;
+        return {
+          ...state,
+          invitations: state.invitations.map((i) => (i === invitation ? { ...i, messages: replace(i.messages) } : i)),
+        };
+      }
+      return updateChat(state, event.chatId, (chat) =>
+        chat.messages.some((m) => m.id === event.message.id) ? { ...chat, messages: replace(chat.messages) } : chat,
+      );
+    }
+
     case "deliveryChanged":
       return updateChat(state, event.chatId, (chat) => {
         const message = chat.messages.find((m) => m.id === event.messageId);
