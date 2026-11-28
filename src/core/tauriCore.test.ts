@@ -64,7 +64,7 @@ describe("Tauri core", () => {
   });
 
   it("sends commands with their arguments", async () => {
-    const account = { name: "Emil Dahl", about: "", publicKey: "ab", inviteLink: "nostr:nprofile1", shareLink: "https://peoples.chat/i#nprofile1" };
+    const account = { name: "Emil Dahl", about: "", publicKey: "ab", npub: "npub1ab", inviteLink: "nostr:nprofile1", shareLink: "https://peoples.chat/i#nprofile1" };
     const chat = shared.snapshot.chats[0];
     const message = chat.messages[1];
     const port = { path: "/dev/cu.usbmodem1101", description: "T1000-E" };
@@ -172,6 +172,12 @@ describe("the JSON shared with the Rust core", () => {
 
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
+      chatChanged: (next) =>
+        expect([next.chats.map((c) => c.id), next.chats[1].state, next.chats[1].messages[1].sender?.name]).toEqual([
+          ["chat-1", "chat-2"],
+          "group",
+          "Frida Nygaard",
+        ]),
       messageAdded: (next) => {
         const messages = next.chats[1].messages;
         expect(messages[messages.length - 1].delivery).toBe("waiting");

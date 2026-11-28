@@ -6,18 +6,20 @@ import layout from "../ui/layout.module.css";
 /**
  * Privacy, reached from Settings. Only Relays and servers is built (#88). The other settings are
  * disabled until they are, and show no on or off state, since they have none yet.
+ *
+ * The design's Read receipts and Typing indicators are left out (#129). Marmot defines neither, and
+ * no other Marmot app sends or reads such events, so the switches could do nothing. On radio the
+ * spec rules them out anyway (`docs/spec.md`, Mesh etiquette).
  */
 export function Privacy() {
   const navigation = useNavigation();
 
   return (
-    <div className={layout.screen}>
+    <div className={layout.screen} data-testid="privacy-screen">
       <ScreenHeader title="Privacy" bordered onLeading={navigation.back} />
       <main className={layout.scroll}>
         <ActionRow icon="block" label="Blocked" disabled />
         <SectionTitle>Messaging</SectionTitle>
-        <ActionRow icon="checks" label="Read receipts" chevron={false} disabled />
-        <ActionRow icon="chat" label="Typing indicators" chevron={false} disabled />
         <ActionRow icon="timer" label="Default timer for new chats" disabled />
         <SectionTitle>App security</SectionTitle>
         <ActionRow

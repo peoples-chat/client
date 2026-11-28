@@ -24,8 +24,8 @@ describe("issue 90: the project's relay", () => {
     await $('[data-testid="create-profile-continue"]').click();
 
     // Publishing the account can take a while on public relays.
-    await $('[data-testid="tab-open-settings"]').waitForDisplayed({ timeout: 90_000 });
-    await $('[data-testid="tab-open-settings"]').click();
+    await $('[data-testid="tab-settings"]').waitForDisplayed({ timeout: 90_000 });
+    await $('[data-testid="tab-settings"]').click();
     await $('[data-testid="settings-privacy"]').click();
     await $('[data-testid="privacy-relays"]').click();
     await expect($('[data-testid="relays-screen"]')).toBeDisplayed();

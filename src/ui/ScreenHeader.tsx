@@ -20,7 +20,7 @@ interface ScreenHeaderProps {
 export function ScreenHeader({ title, subtitle, leading = "back", onLeading, avatar, actions, bordered }: ScreenHeaderProps) {
   return (
     <header className={`${styles.header} ${bordered ? styles.bordered : ""}`}>
-      <IconButton label={leading === "back" ? "Back" : "Close"} icon={leading} onClick={onLeading} />
+      <IconButton label={leading === "back" ? "Back" : "Close"} icon={leading} onClick={onLeading} data-testid="header-leading" />
       {avatar && <Avatar name={avatar.name} size={40} tint={avatar.tint} photo={avatar.photo} />}
       <div className={styles.titles}>
         <h1 className={styles.title}>{title}</h1>
@@ -43,7 +43,7 @@ interface TabHeaderProps {
 export function TabHeader({ title, accountName, accountPhoto, onOpenSettings, action }: TabHeaderProps) {
   return (
     <header className={styles.tabHeader}>
-      <button type="button" className={styles.profileButton} aria-label="Settings and profile" data-testid="tab-open-settings" onClick={onOpenSettings}>
+      <button type="button" className={styles.profileButton} data-testid="tab-settings" aria-label="Settings and profile" onClick={onOpenSettings}>
         <Avatar name={accountName} size={36} tint="green" photo={accountPhoto} />
       </button>
       <h1 className={styles.tabTitle}>{title}</h1>

@@ -70,6 +70,10 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       if (state.chats.some((c) => c.id === event.chat.id)) return state;
       return { ...state, chats: [...state.chats, event.chat] };
 
+    case "chatChanged":
+      // The whole chat replaces the one with its id (#125).
+      return updateChat(state, event.chat.id, (chat) => (sameChat(chat, event.chat) ? chat : event.chat));
+
     case "invitationReceived":
       if (state.invitations.some((i) => i.id === event.invitation.id)) return state;
       return { ...state, invitations: [...state.invitations, event.invitation] };
@@ -148,12 +152,40 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
   }
 }
 
+/** Whether two chats show the same. Both come from the core as JSON. */
+function sameChat(a: Chat, b: Chat): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Whether messages can still be sent in the chat (#125). */
+export function canSend(chat: Chat): boolean {
+  return chat.state !== "contactLeft" && chat.state !== "removed";
+}
+
+/**
+ * What the chat says once it is no longer a direct chat (#125), or `null` while it is one.
+ * `first` is the contact's first name.
+ */
+export function chatEndedText(chat: Chat, first: string): string | null {
+  switch (chat.state ?? "direct") {
+    case "direct":
+      return null;
+    case "contactLeft":
+      return `${first} left this chat. Messages can't be sent here any more.`;
+    case "removed":
+      return "You are no longer in this chat. Messages can't be sent here any more.";
+    case "group":
+      return "This is no longer a direct chat: it has a name or more people now.";
+  }
+}
+
 function sameAccount(a: Account, b: Account): boolean {
   return (
     a.name === b.name &&
     a.about === b.about &&
     a.photo === b.photo &&
     a.publicKey === b.publicKey &&
+    a.npub === b.npub &&
     a.inviteLink === b.inviteLink &&
     a.shareLink === b.shareLink
   );

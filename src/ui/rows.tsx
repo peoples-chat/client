@@ -17,7 +17,7 @@ interface ActionRowProps {
   chevron?: boolean;
   disabled?: boolean;
   onClick?: () => void;
-  /** `data-testid`, for tests. */
+  /** For tests: the row's `data-testid`. */
   testId?: string;
 }
 
