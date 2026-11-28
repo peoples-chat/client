@@ -31,7 +31,27 @@
             "text": "Yes, around three.",
             "sentAt": 1795300060000,
             "transport": "radio",
-            "delivery": "confirmed"
+            "delivery": "confirmed",
+            "reactions": [
+              {
+                "emoji": "👍",
+                "count": 1,
+                "mine": false
+              }
+            ]
+          },
+          {
+            "id": "msg-6",
+            "direction": "in",
+            "text": "The view from the hill",
+            "sentAt": 1795300070000,
+            "transport": "internet",
+            "placeholder": "photo",
+            "replyTo": {
+              "messageId": "msg-2",
+              "direction": "out",
+              "text": "Yes, around three."
+            }
           },
           {
             "id": "msg-5",
@@ -133,6 +153,29 @@
       "chatId": "chat-2",
       "messageId": "msg-4",
       "delivery": "sent"
+    },
+    {
+      "type": "messageChanged",
+      "chatId": "chat-2",
+      "message": {
+        "id": "msg-7",
+        "direction": "in",
+        "text": "",
+        "sentAt": 1795300190000,
+        "transport": "internet",
+        "placeholder": "sticker",
+        "replyTo": {
+          "messageId": "msg-gone",
+          "text": ""
+        },
+        "reactions": [
+          {
+            "emoji": "❤️",
+            "count": 2,
+            "mine": true
+          }
+        ]
+      }
     },
     {
       "type": "messageAdded",

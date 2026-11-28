@@ -16,13 +16,14 @@ use zeroize::Zeroizing;
 
 use crate::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Reach, Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
+    Placeholder, Quote, Reach, Reaction, Relay, RelayOperator, RelayStatus, SentInvite, Snapshot,
+    Transport,
 };
 use crate::invite;
 use crate::invites::{InviteRecord, Invites};
 use crate::messaging::{
-    ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
-    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
+    self, ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions,
+    NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
@@ -727,7 +728,7 @@ impl Core {
                 outgoing: true,
                 text: text.to_owned(),
                 sent_at: now_ms() / 1000 * 1000,
-                acknowledged: false,
+                ..TextMessage::default()
             });
         self.apply_message(&sent);
         self.chat(chat_id)
@@ -1062,8 +1063,9 @@ impl Core {
         }
     }
 
-    /// Records a message that was added or changed, and emits what changed: a new message, or
-    /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
+    /// Records a message that was added or changed, and emits what changed: a new message, an
+    /// outgoing one that a relay has now acknowledged, or one with new reactions or a quote that
+    /// has arrived. A message for a chat the snapshot
     /// doesn't have yet is in that chat's history when it arrives.
     fn apply_message(&self, message: &TextMessage) {
         let view = message_view(
@@ -1097,19 +1099,36 @@ impl Core {
                     message: view,
                 }
             }
-            // Delivery only moves forward: waiting, timed out, sent, confirmed.
-            Some(known)
-                if delivery_rank(view.delivery) > delivery_rank(known.delivery)
-                    && let Some(delivery) = view.delivery =>
-            {
-                known.delivery = view.delivery;
-                CoreEvent::DeliveryChanged {
-                    chat_id: message.chat_id.clone(),
-                    message_id: view.id,
-                    delivery,
+            Some(known) => {
+                // Delivery only moves forward: waiting, timed out, sent, confirmed.
+                let advanced = delivery_rank(view.delivery) > delivery_rank(known.delivery);
+                if advanced {
+                    known.delivery = view.delivery;
+                }
+                // Someone reacted, or the message a reply quotes arrived (#123).
+                let changed = known.text != view.text
+                    || known.placeholder != view.placeholder
+                    || known.reply_to != view.reply_to
+                    || known.reactions != view.reactions;
+                if changed {
+                    known.text = view.text;
+                    known.placeholder = view.placeholder;
+                    known.reply_to = view.reply_to;
+                    known.reactions = view.reactions;
+                    CoreEvent::MessageChanged {
+                        chat_id: message.chat_id.clone(),
+                        message: known.clone(),
+                    }
+                } else if advanced && let Some(delivery) = view.delivery {
+                    CoreEvent::DeliveryChanged {
+                        chat_id: message.chat_id.clone(),
+                        message_id: view.id,
+                        delivery,
+                    }
+                } else {
+                    return;
                 }
             }
-            Some(_) => return,
         };
         self.emit(event);
     }
@@ -1452,6 +1471,41 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
         },
         delivery: message.outgoing.then_some(delivery),
         cancellable: false,
+        placeholder: message.placeholder.map(placeholder_view),
+        reply_to: message.reply_to.as_ref().map(|quote| Quote {
+            message_id: quote.message_id.clone(),
+            direction: quote.outgoing.map(|outgoing| {
+                if outgoing {
+                    Direction::Out
+                } else {
+                    Direction::In
+                }
+            }),
+            text: quote.text.clone(),
+            placeholder: quote.placeholder.map(placeholder_view),
+        }),
+        reactions: message
+            .reactions
+            .iter()
+            .map(|reaction| Reaction {
+                emoji: reaction.emoji.clone(),
+                count: reaction.count,
+                mine: reaction.mine,
+            })
+            .collect(),
+    }
+}
+
+fn placeholder_view(placeholder: messaging::Placeholder) -> Placeholder {
+    match placeholder {
+        messaging::Placeholder::Photo => Placeholder::Photo,
+        messaging::Placeholder::Video => Placeholder::Video,
+        messaging::Placeholder::Audio => Placeholder::Audio,
+        messaging::Placeholder::File => Placeholder::File,
+        messaging::Placeholder::Sticker => Placeholder::Sticker,
+        messaging::Placeholder::Poll => Placeholder::Poll,
+        messaging::Placeholder::ChatEvent => Placeholder::ChatEvent,
+        messaging::Placeholder::Unsupported => Placeholder::Unsupported,
     }
 }
 
@@ -1475,6 +1529,9 @@ fn radio_view(radio: &RadioMessage) -> Message {
             DeliveryState::Waiting
         }),
         cancellable: false,
+        placeholder: None,
+        reply_to: None,
+        reactions: Vec::new(),
     }
 }
 

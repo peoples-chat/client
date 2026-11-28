@@ -182,5 +182,8 @@ fn queued_view(queued: &Queued) -> Message {
         transport: Transport::Internet,
         delivery: Some(DeliveryState::Waiting),
         cancellable: true,
+        placeholder: None,
+        reply_to: None,
+        reactions: Vec::new(),
     }
 }

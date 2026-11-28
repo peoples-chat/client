@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 mod blossom;
+mod other_app;
 mod relay;
 
 use std::path::Path;
@@ -18,6 +19,9 @@ use tokio::sync::broadcast;
 // Only the photo tests use it.
 #[allow(unused_imports)]
 pub use blossom::TestBlossom;
+// Only the tests with another MDK app use it.
+#[allow(unused_imports)]
+pub use other_app::OtherApp;
 pub use relay::TestRelay;
 
 /// How long a test waits for the relay and the other core. Each step takes well under a second.

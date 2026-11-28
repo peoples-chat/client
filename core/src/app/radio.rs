@@ -872,7 +872,7 @@ impl Core {
             outgoing: false,
             text: received.text.clone(),
             sent_at: u64::from(received.sent_at) * 1000,
-            acknowledged: false,
+            ..TextMessage::default()
         };
         let kept = self.inner.radio_store.add_message(RadioMessage {
             chat_id: message.chat_id.clone(),

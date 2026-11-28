@@ -104,6 +104,56 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
+    /// What the message is, when the app can't show it as text yet (#123). `text` is then its
+    /// caption, a poll's question, or what happened in the chat, and can be empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<Placeholder>,
+    /// The message this one answers: a reply's quote, or a thread message's parent (#123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<Quote>,
+    /// Reactions to the message, one per emoji, most frequent first (#123).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
+}
+
+/// What a message is, when the app can't show it as text yet (#123).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Placeholder {
+    Photo,
+    Video,
+    Audio,
+    /// Any other attachment, or attachments of different sorts.
+    File,
+    Sticker,
+    Poll,
+    /// A change to the chat itself, such as someone leaving it. Shown as a line, not a bubble.
+    ChatEvent,
+    /// A kind of message the app doesn't know.
+    Unsupported,
+}
+
+/// The message a reply answers (#123).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quote {
+    pub message_id: String,
+    /// Who sent the quoted message. Absent when it isn't available: deleted, or never received.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<Placeholder>,
+}
+
+/// An emoji people reacted to a message with (#123).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: u32,
+    /// The user is among them.
+    pub mine: bool,
 }
 
 /// How a chat's messages can travel now (#43).
@@ -337,6 +387,12 @@ pub enum CoreEvent {
         chat_id: String,
         message_id: String,
         delivery: DeliveryState,
+    },
+    /// A message the interface has changed otherwise: someone reacted to it, or the message it
+    /// quotes arrived (#123). `message` replaces the one with its id.
+    MessageChanged {
+        chat_id: String,
+        message: Message,
     },
     /// A message is gone: the user cancelled it while it waited, or it went, and came back
     /// under MDK's id (#46).

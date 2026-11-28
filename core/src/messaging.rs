@@ -241,8 +241,9 @@ impl DirectChats {
     }
 }
 
-/// A text message in a direct chat, as MDK holds it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A message in a direct chat, as MDK holds it (#20). Most are text. Others the core can't show
+/// yet carry a [`Placeholder`] saying what they are, so that nothing arrives unnoticed (#123).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextMessage {
     /// The id of the chat it belongs to.
     pub chat_id: String,
@@ -251,49 +252,230 @@ pub struct TextMessage {
     pub id: String,
     /// The account sent it, rather than received it.
     pub outgoing: bool,
+    /// The text; for a photo or file its caption, for a poll its question, for a chat event what
+    /// happened. Empty when there is none.
     pub text: String,
     /// When the sender sent it, by the sender's clock, in milliseconds since the Unix epoch. MDK
     /// keeps whole seconds.
     pub sent_at: u64,
     /// Outgoing only: a relay has acknowledged it.
     pub acknowledged: bool,
+    /// What the message is when it isn't plain text (#123).
+    pub placeholder: Option<Placeholder>,
+    /// The message it answers, for a reply or a thread message (#123).
+    pub reply_to: Option<Quote>,
+    /// The reactions to it, most frequent first (#123).
+    pub reactions: Vec<Reaction>,
 }
 
-/// The text message in `record`, unless it is something else: a system row, media, a sticker,
-/// a deleted message, or one withdrawn when the chat's state was settled.
-fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
+/// What a message is, when the core can't show it as text (#123).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placeholder {
+    Photo,
+    Video,
+    Audio,
+    /// Any other attachment, or attachments of different sorts.
+    File,
+    Sticker,
+    Poll,
+    /// A change to the chat itself, such as someone leaving it.
+    ChatEvent,
+    /// A kind of message the core doesn't know.
+    Unsupported,
+}
+
+/// The message a reply answers, as MDK previews it (#123).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Quote {
+    pub message_id: String,
+    /// The account sent the quoted message. `None` when the quoted message isn't available.
+    pub outgoing: Option<bool>,
+    /// Its text, as for [`TextMessage::text`].
+    pub text: String,
+    pub placeholder: Option<Placeholder>,
+}
+
+/// One emoji that people reacted with, and how many did (#123).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: u32,
+    /// The account is among them.
+    pub mine: bool,
+}
+
+/// MDK's kinds that the timeline has rows for and the core knows (NIP-88 polls, NIP-22 thread
+/// messages, group system rows).
+const POLL_KIND: u64 = 1_068;
+const THREAD_KIND: u64 = 1_111;
+const GROUP_SYSTEM_KIND: u64 = 1_210;
+
+/// The message in `record` as the account `account_hex` sees it, unless it is one the core keeps
+/// out of the chat: its own app events (an invitation's token, a radio address record), a
+/// deleted message, or one withdrawn when the chat's state was settled. Anything else shows,
+/// as text or as a [`Placeholder`] (#123).
+fn text_message(account_hex: &str, record: &TimelineMessageRecord) -> Option<TextMessage> {
     let outgoing = match record.direction.as_str() {
         "sent" => true,
         "received" => false,
         _ => return None,
     };
-    let sticker = record
-        .tags
-        .iter()
-        .any(|tag| tag.first().is_some_and(|name| name == "sticker"));
     // A message no relay would take stays: MDK keeps it, and it shows as not sent yet.
     let withdrawn = record
         .invalidation_status
         .as_deref()
         .is_some_and(|status| status != LOCAL_PUBLISH_FAILED);
-    if record.kind != CHAT_KIND
-        || record.deleted
-        || record.media.is_some()
-        || record.agent_text_stream.is_some()
-        || sticker
-        || withdrawn
+    if matches!(record.kind, INVITE_TOKEN_KIND | RADIO_ADDRESS_KIND) || record.deleted || withdrawn
     {
         return None;
     }
+    let placeholder = placeholder(
+        record.kind,
+        &record.tags,
+        record.media.as_ref(),
+        record.source_epoch,
+        record.agent_text_stream.is_some(),
+    );
+    let text = match (&record.poll, &record.group_system) {
+        (Some(poll), _) => poll.question.clone(),
+        (_, Some(system)) => system.text.clone(),
+        // MDK has nothing to show for a message it doesn't know. Its content may be anything.
+        _ if placeholder == Some(Placeholder::Unsupported) => String::new(),
+        _ => record.plaintext.clone(),
+    };
     Some(TextMessage {
         chat_id: record.group_id_hex.clone(),
         id: record.message_id_hex.clone(),
         outgoing,
-        text: record.plaintext.clone(),
+        text: text.trim().to_owned(),
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
             && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+        placeholder,
+        reply_to: quote(account_hex, record),
+        reactions: reactions(account_hex, &record.reactions),
     })
+}
+
+/// What a message of `kind` with `tags` and `media` is, when it isn't plain text.
+fn placeholder(
+    kind: u64,
+    tags: &[Vec<String>],
+    media: Option<&serde_json::Value>,
+    source_epoch: Option<u64>,
+    agent_stream: bool,
+) -> Option<Placeholder> {
+    match kind {
+        CHAT_KIND | THREAD_KIND => {
+            if agent_stream {
+                Some(Placeholder::Unsupported)
+            } else if tags
+                .iter()
+                .any(|tag| tag.first().is_some_and(|name| name == "sticker"))
+            {
+                Some(Placeholder::Sticker)
+            } else {
+                media.and_then(|media| attachments(media, source_epoch))
+            }
+        }
+        POLL_KIND => Some(Placeholder::Poll),
+        GROUP_SYSTEM_KIND => Some(Placeholder::ChatEvent),
+        _ => Some(Placeholder::Unsupported),
+    }
+}
+
+/// What a message's attachments are, from MDK's `imeta` media: photos, videos or audio when all
+/// are of that sort, else files. `None` without attachments. One MDK can't read is a file.
+fn attachments(media: &serde_json::Value, source_epoch: Option<u64>) -> Option<Placeholder> {
+    // Only the attachments' types matter here, not where they can be downloaded from.
+    let outcomes =
+        marmot_app::media_attachment_outcomes_from_media_json(Some(media), source_epoch, true);
+    let mut sorts = outcomes.iter().map(|outcome| match outcome {
+        marmot_app::MediaAttachmentOutcome::Accepted { reference, .. } => {
+            match reference.media_type.split('/').next() {
+                Some("image") => Placeholder::Photo,
+                Some("video") => Placeholder::Video,
+                Some("audio") => Placeholder::Audio,
+                _ => Placeholder::File,
+            }
+        }
+        marmot_app::MediaAttachmentOutcome::Rejected { .. } => Placeholder::File,
+    });
+    let first = sorts.next()?;
+    Some(if sorts.all(|sort| sort == first) {
+        first
+    } else {
+        Placeholder::File
+    })
+}
+
+/// The message `record` answers: a reply's quote, or a thread message's parent, which MDK both
+/// links by `reply_to_message_id_hex` (#123).
+fn quote(account_hex: &str, record: &TimelineMessageRecord) -> Option<Quote> {
+    let message_id = record.reply_to_message_id_hex.clone()?;
+    let Some(preview) = record
+        .reply_preview
+        .as_ref()
+        .filter(|preview| !preview.deleted)
+    else {
+        // The quoted message is gone, or never reached this device.
+        return Some(Quote {
+            message_id,
+            outgoing: None,
+            text: String::new(),
+            placeholder: None,
+        });
+    };
+    let placeholder = placeholder(
+        preview.kind,
+        &preview.tags,
+        preview.media.as_ref(),
+        preview.source_epoch,
+        preview.agent_text_stream.is_some(),
+    );
+    let text = match placeholder {
+        Some(Placeholder::Unsupported) => String::new(),
+        Some(Placeholder::ChatEvent) => {
+            marmot_app::group_system_event_from_message(preview.kind, &preview.plaintext)
+                .map(|system| system.text)
+                .unwrap_or_default()
+        }
+        _ => preview.plaintext.clone(),
+    };
+    Some(Quote {
+        message_id,
+        outgoing: Some(preview.sender == account_hex),
+        text: text.trim().to_owned(),
+        placeholder,
+    })
+}
+
+/// The reactions in `summary`, one per emoji, most frequent first, then in the order MDK keeps
+/// them. NIP-25's `+` and `-` are a like and a dislike.
+fn reactions(account_hex: &str, summary: &marmot_app::TimelineReactionSummary) -> Vec<Reaction> {
+    let mut reactions: Vec<Reaction> = Vec::new();
+    for (emoji, senders) in &summary.by_emoji {
+        let emoji = match emoji.trim() {
+            "" | "+" => "👍",
+            "-" => "👎",
+            emoji => emoji,
+        };
+        let count = u32::try_from(senders.len()).unwrap_or(u32::MAX);
+        let mine = senders.iter().any(|sender| sender == account_hex);
+        // `+` and an empty reaction are both a like.
+        if let Some(known) = reactions.iter_mut().find(|known| known.emoji == emoji) {
+            known.count = known.count.saturating_add(count);
+            known.mine |= mine;
+        } else {
+            reactions.push(Reaction {
+                emoji: emoji.to_owned(),
+                count,
+                mine,
+            });
+        }
+    }
+    reactions.sort_by_key(|reaction| std::cmp::Reverse(reaction.count));
+    reactions
 }
 
 /// An invitation's token that the other person sent in a chat (#95).
@@ -339,16 +521,17 @@ pub enum ChatItem {
     RadioAddress(RadioAddressItem),
 }
 
-fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
-    text_message(record)
+fn chat_item(account_hex: &str, record: &TimelineMessageRecord) -> Option<ChatItem> {
+    text_message(account_hex, record)
         .map(ChatItem::Text)
         .or_else(|| invite_token(record).map(ChatItem::InviteToken))
         .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
 }
 
-/// What comes in the account's chats as it is added or changes: text messages, for example
-/// when a relay acknowledges one of ours, and invitations' tokens.
+/// What comes in the account's chats as it is added or changes: messages, for example when a
+/// relay acknowledges one of ours or someone reacts to one, and invitations' tokens.
 pub struct ChatItems {
+    account_hex: String,
     subscription: RuntimeTimelineMessagesSubscription,
     ready: VecDeque<ChatItem>,
 }
@@ -363,13 +546,16 @@ impl ChatItems {
             match self.subscription.recv().await? {
                 // MDK fell behind and sends its latest messages again.
                 RuntimeTimelineMessageUpdate::Page { page } => {
-                    self.ready
-                        .extend(page.messages.iter().filter_map(chat_item));
+                    self.ready.extend(
+                        page.messages
+                            .iter()
+                            .filter_map(|m| chat_item(&self.account_hex, m)),
+                    );
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
                         if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(chat_item(message));
+                            self.ready.extend(chat_item(&self.account_hex, message));
                         }
                     }
                 }
@@ -945,7 +1131,11 @@ impl Messaging {
                 ..TimelineMessageQuery::default()
             },
         )?;
-        Ok(page.messages.iter().filter_map(text_message).collect())
+        Ok(page
+            .messages
+            .iter()
+            .filter_map(|record| text_message(account_hex, record))
+            .collect())
     }
 
     /// The invitations' tokens the other person sent in the chat `chat_id` (#95).
@@ -1028,7 +1218,7 @@ impl Messaging {
         Ok(())
     }
 
-    /// The message `message_id` in the chat `chat_id`, if MDK has it as a text message.
+    /// The message `message_id` in the chat `chat_id`, if MDK has it as one the chat shows.
     pub fn chat_message(
         &self,
         account_hex: &str,
@@ -1039,16 +1229,17 @@ impl Messaging {
             .runtime
             .timeline_message(account_hex, chat_id, message_id)
             .ok()??;
-        text_message(&record)
+        text_message(account_hex, &record)
     }
 
-    /// Follows the account's text messages in all its chats, from now on.
+    /// Follows the account's messages in all its chats, from now on.
     pub async fn follow_messages(&self, account_hex: &str) -> Result<ChatItems, MessagingError> {
         let subscription = self
             .runtime
             .subscribe_timeline_messages(account_hex, TimelineMessageQuery::default())
             .await?;
         Ok(ChatItems {
+            account_hex: account_hex.to_owned(),
             subscription,
             ready: VecDeque::new(),
         })
@@ -1251,8 +1442,10 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers, directory_relays,
-        lookup_relays, profile_copy_relays,
+        DEFAULT_RELAYS, GROUP_SYSTEM_KIND, INVITE_TOKEN_KIND, LOCAL_PUBLISH_FAILED, POLL_KIND,
+        Placeholder, Quote, RADIO_ADDRESS_KIND, TextMessage, TimelineMessageRecord,
+        WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers, directory_relays, lookup_relays,
+        profile_copy_relays, text_message,
     };
 
     #[test]
@@ -1326,6 +1519,202 @@ mod tests {
         );
         // Without lookup relays MDK looks on ours, as it always has.
         assert!(directory_relays(&owned(&["wss://nos.lol"]), &[]).is_empty());
+    }
+
+    const ME: &str = "aa";
+    const THEM: &str = "bb";
+
+    /// A timeline row as MDK gives it: a text message from the other person, changed by `with`.
+    fn record(with: serde_json::Value) -> TimelineMessageRecord {
+        let mut row = serde_json::json!({
+            "message_id_hex": "m1",
+            "source_message_id_hex": "s1",
+            "source_epoch": 1,
+            "direction": "received",
+            "group_id_hex": "c1",
+            "sender": THEM,
+            "plaintext": "Hello",
+            "kind": 9,
+            "tags": [],
+            "timeline_at": 1_800_000_000u64,
+            "received_at": 1_800_000_001u64,
+            "reactions": { "by_emoji": {}, "user_reactions": [] },
+            "deleted": false,
+        });
+        for (key, value) in with.as_object().unwrap() {
+            row[key] = value.clone();
+        }
+        serde_json::from_value(row).unwrap()
+    }
+
+    fn shown(with: serde_json::Value) -> Option<TextMessage> {
+        text_message(ME, &record(with))
+    }
+
+    #[test]
+    fn issue_123_plain_text_stays_text() {
+        let message = shown(serde_json::json!({})).unwrap();
+        assert_eq!(message.text, "Hello");
+        assert_eq!(message.placeholder, None);
+        assert_eq!(message.reply_to, None);
+        assert!(message.reactions.is_empty());
+        assert!(!message.outgoing);
+        assert_eq!(message.sent_at, 1_800_000_000_000);
+    }
+
+    #[test]
+    fn issue_123_what_the_core_cant_show_gets_a_placeholder() {
+        let sticker = shown(serde_json::json!({
+            "plaintext": "",
+            "tags": [["sticker", "30031:bb:waves", "wave", "ab"]],
+        }))
+        .unwrap();
+        assert_eq!(sticker.placeholder, Some(Placeholder::Sticker));
+        assert_eq!(sticker.text, "");
+
+        // An attachment MDK can't read still says that something came, with its caption.
+        let file = shown(serde_json::json!({
+            "plaintext": "Minutes",
+            "media": { "imeta": [["imeta", "m application/pdf"]] },
+        }))
+        .unwrap();
+        assert_eq!(file.placeholder, Some(Placeholder::File));
+        assert_eq!(file.text, "Minutes");
+
+        let poll = shown(serde_json::json!({
+            "kind": POLL_KIND,
+            "plaintext": "Lunch?",
+            "poll": {
+                "question": "Lunch after?",
+                "options": [],
+                "poll_type": "single_choice",
+                "participants": 0,
+                "local_selection": [],
+                "creator": THEM,
+                "ends_at": null,
+                "open": true,
+            },
+        }))
+        .unwrap();
+        assert_eq!(poll.placeholder, Some(Placeholder::Poll));
+        assert_eq!(poll.text, "Lunch after?");
+
+        let left = shown(serde_json::json!({
+            "kind": GROUP_SYSTEM_KIND,
+            "plaintext": "{}",
+            "group_system": { "system_type": "member_left", "text": "Bea left" },
+        }))
+        .unwrap();
+        assert_eq!(left.placeholder, Some(Placeholder::ChatEvent));
+        assert_eq!(left.text, "Bea left");
+
+        // A kind nobody here knows, and an agent's stream: something came, its content unshown.
+        for with in [
+            serde_json::json!({ "kind": 4_242, "plaintext": "{\"x\":1}" }),
+            serde_json::json!({ "kind": 1_200, "plaintext": "" }),
+            serde_json::json!({ "agent_text_stream": { "status": "finalized" } }),
+        ] {
+            let message = shown(with).unwrap();
+            assert_eq!(message.placeholder, Some(Placeholder::Unsupported));
+            assert_eq!(message.text, "");
+        }
+    }
+
+    #[test]
+    fn issue_123_the_apps_own_events_and_removed_messages_stay_hidden() {
+        for direction in ["sent", "received"] {
+            for kind in [INVITE_TOKEN_KIND, RADIO_ADDRESS_KIND] {
+                assert_eq!(
+                    shown(serde_json::json!({ "kind": kind, "direction": direction })),
+                    None
+                );
+            }
+        }
+        assert_eq!(shown(serde_json::json!({ "deleted": true })), None);
+        assert_eq!(
+            shown(serde_json::json!({ "invalidation_status": "LosingBranch" })),
+            None
+        );
+        // One that no relay took stays, and shows as not sent yet.
+        let failed = shown(serde_json::json!({
+            "direction": "sent",
+            "source_message_id_hex": null,
+            "invalidation_status": LOCAL_PUBLISH_FAILED,
+        }))
+        .unwrap();
+        assert!(failed.outgoing && !failed.acknowledged);
+    }
+
+    #[test]
+    fn issue_123_reactions_are_counted_on_their_message() {
+        let message = shown(serde_json::json!({
+            "reactions": {
+                "by_emoji": { "+": [THEM], "": [ME], "❤️": [ME, THEM, "cc"], "-": [THEM] },
+                "user_reactions": [],
+            },
+        }))
+        .unwrap();
+        let counts: Vec<(&str, u32, bool)> = message
+            .reactions
+            .iter()
+            .map(|reaction| (reaction.emoji.as_str(), reaction.count, reaction.mine))
+            .collect();
+        assert_eq!(counts, [("❤️", 3, true), ("👍", 2, true), ("👎", 1, false)]);
+    }
+
+    #[test]
+    fn issue_123_a_reply_quotes_what_it_answers() {
+        let preview = |with: serde_json::Value| {
+            let mut preview = serde_json::json!({
+                "message_id_hex": "m0",
+                "sender": ME,
+                "plaintext": "Shall we meet?",
+                "kind": 9,
+                "tags": [],
+                "source_epoch": 1,
+                "media": null,
+                "agent_text_stream": null,
+                "deleted": false,
+                "invalidation_status": null,
+            });
+            for (key, value) in with.as_object().unwrap() {
+                preview[key] = value.clone();
+            }
+            shown(serde_json::json!({
+                "reply_to_message_id_hex": "m0",
+                "reply_preview": preview,
+            }))
+            .unwrap()
+            .reply_to
+            .unwrap()
+        };
+        assert_eq!(
+            preview(serde_json::json!({})),
+            Quote {
+                message_id: "m0".to_owned(),
+                outgoing: Some(true),
+                text: "Shall we meet?".to_owned(),
+                placeholder: None,
+            }
+        );
+        let sticker = preview(serde_json::json!({
+            "sender": THEM,
+            "plaintext": "",
+            "tags": [["sticker", "30031:bb:waves", "wave", "ab"]],
+        }));
+        assert_eq!(sticker.outgoing, Some(false));
+        assert_eq!(sticker.placeholder, Some(Placeholder::Sticker));
+
+        // A quoted message that is deleted, or never arrived, is unavailable.
+        let unavailable = Quote {
+            message_id: "m0".to_owned(),
+            outgoing: None,
+            text: String::new(),
+            placeholder: None,
+        };
+        assert_eq!(preview(serde_json::json!({ "deleted": true })), unavailable);
+        let missing = shown(serde_json::json!({ "reply_to_message_id_hex": "m0" })).unwrap();
+        assert_eq!(missing.reply_to, Some(unavailable));
     }
 
     #[test]
