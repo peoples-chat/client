@@ -13,6 +13,25 @@
   background: var(--color-surface);
 }
 
+/* The npub (#129): long and unbroken, so it wraps anywhere. */
+.key {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px;
+  border-radius: 20px;
+  background: var(--color-surface);
+}
+
+.npub {
+  margin: 6px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .qrTile {
   flex-shrink: 0;
   display: flex;

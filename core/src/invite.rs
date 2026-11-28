@@ -66,6 +66,14 @@ pub fn invite_link(public_key_hex: &str, relays: &[String]) -> Result<String, Ap
     Ok(format!("nostr:{nprofile}"))
 }
 
+/// The account `public_key_hex` as a NIP-19 `npub1…`, the form White Noise takes (#129).
+/// `None` if it is not a public key.
+pub fn npub(public_key_hex: &str) -> Option<String> {
+    use nostr::nips::nip19::ToBech32;
+    let key = nostr::key::PublicKey::from_hex(public_key_hex).ok()?;
+    key.to_bech32().ok()
+}
+
 /// The web link for sharing: the invite link's key and hints after `https://peoples.chat/i#`.
 pub fn web_link(invite_link: &str) -> String {
     let reference = strip_prefix_ignoring_case(invite_link, "nostr:").unwrap_or(invite_link);
@@ -260,6 +268,28 @@ mod tests {
             invite.relays,
             relays(&["wss://r.x.com", "wss://djbas.sadkb.com"])
         );
+    }
+
+    /// Issue #129: the npub shown on Profile, the form White Noise takes.
+    #[test]
+    fn issue_129_npub_is_the_nip_19_form_and_reads_back() {
+        // The npub example from NIP-19.
+        let hex = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d";
+        let shown = npub(hex).unwrap();
+        assert_eq!(
+            shown,
+            "npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6"
+        );
+        assert_eq!(parse(&shown).unwrap().public_key_hex, hex);
+        assert_eq!(
+            parse(&format!("marmot://profile/{shown}"))
+                .unwrap()
+                .public_key_hex,
+            hex
+        );
+        let key = new_key();
+        assert_eq!(npub(&key.hex).unwrap(), key.npub);
+        assert_eq!(npub("not a key"), None);
     }
 
     #[test]

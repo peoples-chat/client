@@ -1559,6 +1559,8 @@ fn account_view(
 ) -> Result<Account, MessagingError> {
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
     let share_link = invite::web_link(&invite_link);
+    // The invite link above has already read the same key.
+    let npub = invite::npub(&public_key_hex).expect("the invite link has read this key");
     let photo = messaging
         .known_picture(&public_key_hex)
         .and_then(|url| avatars.get(&url))
@@ -1569,6 +1571,7 @@ fn account_view(
         photo,
         invite_link,
         share_link,
+        npub,
         public_key: public_key_hex,
     })
 }

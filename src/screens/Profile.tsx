@@ -74,9 +74,62 @@ export function Profile() {
             </div>
           </div>
         </section>
+        <PublicKeySection npub={account.npub} />
       </main>
     </div>
   );
+}
+
+/**
+ * The user's public key as an npub, with Copy (#129). White Noise takes an npub, and its Android
+ * app neither reads an nprofile nor opens peoples.chat links.
+ */
+function PublicKeySection({ npub }: { npub: string }) {
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+
+  async function copyNpub() {
+    setCopy(await copyPublicKey(npub, navigator.clipboard));
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopy("idle"), 2000);
+  }
+
+  return (
+    <section className={styles.key} aria-labelledby="key-title" data-testid="profile-npub-section">
+      <h2 id="key-title" className={styles.codeTitle}>
+        Your public key
+      </h2>
+      <p className={styles.codeDescription}>For people who add you from White Noise or another Marmot app.</p>
+      <p className={styles.npub} data-testid="profile-npub">
+        {npub}
+      </p>
+      <div className={styles.buttons}>
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={copyNpub}
+          aria-live="polite"
+          data-testid="profile-npub-copy"
+        >
+          {copy === "copied" ? "Copied" : copy === "failed" ? "Could not copy" : "Copy"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/** Hands the plain npub, and nothing else, to the clipboard (#129). */
+export async function copyPublicKey(
+  npub: string,
+  clipboard: Pick<Clipboard, "writeText">,
+): Promise<"copied" | "failed"> {
+  try {
+    await clipboard.writeText(npub);
+    return "copied";
+  } catch {
+    return "failed";
+  }
 }
 
 type PhotoState = { kind: "idle" } | { kind: "uploading" } | { kind: "removing" } | { kind: "failed"; message: string };

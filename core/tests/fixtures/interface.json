@@ -4,6 +4,7 @@
       "name": "Emil Dahl",
       "about": "Aarhus. Usually reachable by radio.",
       "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+      "npub": "npub1fixtureemildahl",
       "inviteLink": "nostr:nprofile1fixtureemildahl",
       "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
     },
@@ -220,6 +221,7 @@
         "about": "Aarhus, Denmark",
         "photo": "data:image/jpeg;base64,/9j/2wBDAA==",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "npub": "npub1fixtureemildahl",
         "inviteLink": "nostr:nprofile1fixtureemildahl",
         "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
       }
@@ -268,6 +270,7 @@
         "name": "Emil Dahl",
         "about": "",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "npub": "npub1fixtureemildahl",
         "inviteLink": "nostr:nprofile1fixtureemildahl",
         "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
       }
