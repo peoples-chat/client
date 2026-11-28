@@ -24,8 +24,7 @@ use support::{Phone, TestRelay, WAIT, make_contacts, until};
 use tokio::time::Instant;
 
 const BY_RADIO: &str = "The key is under the mat";
-const WAITING: &str =
-    "This one is too long for a single radio packet, so it waits for the internet to come back to us.";
+const WAITING: &str = "This one is too long for a single radio packet, so it waits for the internet to come back to us.";
 
 fn messages(core: &Core, chat_id: &str) -> Vec<Message> {
     core.snapshot()
@@ -161,8 +160,7 @@ async fn pair(name: &str, keys_in_file: bool) -> Pair {
 
 /// MDK on the data folder of `phone`, whose core must be closed.
 async fn mdk(phone: &Phone, relay: &str) -> (MarmotApp, MarmotAppRuntime, String) {
-    let home =
-        AccountHome::open_with_keychain(phone.data_dir(), phone.keychain_service()).unwrap();
+    let home = AccountHome::open_with_keychain(phone.data_dir(), phone.keychain_service()).unwrap();
     let account = home.accounts().unwrap().remove(0).account_id_hex;
     let app = MarmotApp::try_with_relays_and_account_home_and_config(
         phone.data_dir(),
@@ -216,10 +214,7 @@ async fn text_stays_encrypted_until_the_relay_copy_arrives(keys_in_file: bool) {
             _ => continue,
         }
     };
-    until("Bea has it", || {
-        has(&bea, &chat_id, &sent.id).then_some(())
-    })
-    .await;
+    until("Bea has it", || has(&bea, &chat_id, &sent.id).then_some(())).await;
     ada.set_force_radio(false).unwrap();
     let waiting = ada.send_message(&chat_id, WAITING).await.unwrap();
     assert!(waiting.cancellable);
@@ -231,7 +226,10 @@ async fn text_stays_encrypted_until_the_relay_copy_arrives(keys_in_file: bool) {
     assert!(received["sealed"].is_string(), "{received}");
     // What was sent is in MDK already.
     let own = entry(ada_phone.data_dir(), &sent.id);
-    assert!(own.get("sealed").is_none() && own.get("text").is_none(), "{own}");
+    assert!(
+        own.get("sealed").is_none() && own.get("text").is_none(),
+        "{own}"
+    );
 
     // Both restart with the relay still blocked: the texts are read back.
     ada.close().await.unwrap();
@@ -322,10 +320,7 @@ async fn issue_127_a_deleted_message_does_not_come_back_from_the_radio_store() {
     relay.block();
     reach_becomes(&ada, &chat_id, Reach::Radio).await;
     let sent = ada.send_message(&chat_id, BY_RADIO).await.unwrap();
-    until("Bea has it", || {
-        has(&bea, &chat_id, &sent.id).then_some(())
-    })
-    .await;
+    until("Bea has it", || has(&bea, &chat_id, &sent.id).then_some(())).await;
 
     // The relay copy arrives, then Ada deletes the message for everyone.
     relay.unblock();
@@ -360,7 +355,11 @@ async fn issue_127_a_deleted_message_does_not_come_back_from_the_radio_store() {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     assert_no_plain_text(bea_phone.data_dir(), &[BY_RADIO]);
-    assert!(entry(bea_phone.data_dir(), &sent.id).get("sealed").is_none());
+    assert!(
+        entry(bea_phone.data_dir(), &sent.id)
+            .get("sealed")
+            .is_none()
+    );
 
     runtime.shutdown_and_close().await.unwrap();
     bea.close().await.unwrap();
@@ -412,10 +411,7 @@ async fn issue_127_a_radio_message_disappears_when_its_time_is_up() {
     relay.block();
     reach_becomes(&ada, &chat_id, Reach::Radio).await;
     let sent = ada.send_message(&chat_id, BY_RADIO).await.unwrap();
-    until("Bea has it", || {
-        has(&bea, &chat_id, &sent.id).then_some(())
-    })
-    .await;
+    until("Bea has it", || has(&bea, &chat_id, &sent.id).then_some(())).await;
     assert!(entry(bea_phone.data_dir(), &sent.id)["sealed"].is_string());
 
     // Its time passes without the relay copy.
@@ -423,7 +419,11 @@ async fn issue_127_a_radio_message_disappears_when_its_time_is_up() {
         (!has(&bea, &chat_id, &sent.id)).then_some(())
     })
     .await;
-    assert!(entry(bea_phone.data_dir(), &sent.id).get("sealed").is_none());
+    assert!(
+        entry(bea_phone.data_dir(), &sent.id)
+            .get("sealed")
+            .is_none()
+    );
     bea.close().await.unwrap();
     let bea = bea_phone.start().await;
     until("Bea's chat", || {
