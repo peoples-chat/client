@@ -28,8 +28,8 @@ use tokio::time::Instant;
 
 use super::{Core, Inner, failed, now_ms, upgrade};
 use crate::interface::{
-    Account, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioConnection, RadioIssue,
-    RadioPreset, RadioStatus, Reach,
+    Account, Chat, CommandError, CoreEvent, Mesh, Message, PairedRadio, RadioConnection,
+    RadioIssue, RadioPreset, RadioStatus, Reach,
 };
 use crate::messaging::{ChatMembership, RadioAddressItem, TextMessage};
 use crate::radio::airtime;
@@ -205,7 +205,10 @@ impl Core {
                 return;
             }
         };
-        let Some(contact) = self.chat(&item.chat_id).map(|chat| chat.contact.public_key) else {
+        let Some(contact) = self
+            .radio_chat(&item.chat_id)
+            .map(|chat| chat.contact.public_key)
+        else {
             return;
         };
         match self.inner.radio_store.set_contact_radio(&contact, record) {
@@ -216,6 +219,13 @@ impl Core {
             Ok(false) => {}
             Err(error) => log::warn!("could not keep a contact's radio: {error}"),
         }
+    }
+
+    /// The chat `chat_id`, while it is direct. Only such a chat has radio records and keys
+    /// (#128): one that got a name or a third member, or that ended, is still followed (#125),
+    /// but nothing about radio is read from it, written to it or received for it.
+    fn radio_chat(&self, chat_id: &str) -> Option<Chat> {
+        self.chat(chat_id).filter(|chat| chat.state.is_direct())
     }
 
     /// Reads the version 0 records the contact sent in the chat `chat_id`, for those that came
@@ -282,7 +292,7 @@ impl Core {
     async fn read_contact_records(&self, chat_id: &str) {
         // Two statements: each locks the state.
         let account = self.state().account.clone();
-        let (Some(account), Some(chat)) = (account, self.chat(chat_id)) else {
+        let (Some(account), Some(chat)) = (account, self.radio_chat(chat_id)) else {
             return;
         };
         let contact = chat.contact.public_key;
@@ -331,7 +341,7 @@ impl Core {
             return;
         }
         let account = self.state().account.clone();
-        let (Some(account), Some(chat)) = (account, self.chat(chat_id)) else {
+        let (Some(account), Some(chat)) = (account, self.radio_chat(chat_id)) else {
             return;
         };
         let contact = &chat.contact.public_key;
@@ -1097,6 +1107,7 @@ impl Core {
             .state()
             .chats
             .iter()
+            .filter(|chat| chat.state.is_direct())
             .map(|chat| (chat.id.clone(), chat.contact.public_key.clone()))
             .collect();
         let now = now_ms();

@@ -13,12 +13,12 @@ use marmot_account::AccountHome;
 use marmot_app::{
     AppGroupLifecycleState, MarmotApp, MarmotAppConfig, MarmotAppRuntime, TimelineMessageQuery,
 };
-use peoples_chat_core::Core;
-use peoples_chat_core::interface::{DeliveryState, Mesh, Message, Transport};
+use peoples_chat_core::interface::{ChatState, DeliveryState, Mesh, Message, Transport};
 use peoples_chat_core::radio::{
     Mesh as RadioMesh, MockMesh, MockRadio, Radio, RadioEvent, RadioKey, RadioRecord,
     encode_component, format, new_radio_key, radio_component_id,
 };
+use peoples_chat_core::{Core, Messaging};
 use serde_json::Value;
 use support::{Phone, TestRelay, WAIT, make_contacts, now_ms, until};
 use tokio::time::Instant;
@@ -985,4 +985,90 @@ async fn issue_128_a_group_chat_gets_no_radio_record() {
     }
 
     close_all(cores).await;
+}
+
+/// A direct chat that gets a name is followed still (#125), but is a group: no new record or key
+/// is made for it, and no packet is received for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue_128_a_chat_that_becomes_a_group_is_left_alone_by_radio() {
+    let _turn = support::take_turn().await;
+    let chat = Chat::new("128-renamed").await;
+    let chat_id = chat.chat_id.clone();
+    let (ada_radio, bea_radio) = chat.radios().await;
+    let ada_record = chat
+        .ada
+        .radio_own_record(&chat_id, RadioMesh::MeshCore)
+        .unwrap();
+    let bea_record = chat
+        .bea
+        .radio_own_record(&chat_id, RadioMesh::MeshCore)
+        .unwrap();
+    let bea_key = bea_record.radio_key().unwrap();
+
+    // While the chat is direct, a packet under Bea's key is shown.
+    inject(
+        &bea_radio,
+        &ada_radio,
+        &bea_key,
+        bea_record.rkn,
+        1_000,
+        now_ms(),
+        "While direct",
+    )
+    .await;
+    until("the packet in the direct chat", || {
+        texts(&chat.ada, &chat_id)
+            .contains(&"While direct".to_owned())
+            .then_some(())
+    })
+    .await;
+
+    // In another app, Ada, who started the chat, gives it a name.
+    let ada_account = account(&chat.ada);
+    chat.bea.close().await.unwrap();
+    chat.ada.close().await.unwrap();
+    let other_app = Messaging::open(support::options(
+        chat.ada_phone.data_dir(),
+        &chat.relay.url(),
+        chat.ada_phone.keychain_service(),
+    ))
+    .await
+    .unwrap();
+    other_app
+        .rename_chat(&ada_account, &chat_id, "Book club")
+        .await
+        .unwrap();
+    other_app.close().await.unwrap();
+    let ada = chat.ada_phone.start().await;
+    until("the chat to be a group", || {
+        ada.snapshot()
+            .chats
+            .iter()
+            .any(|c| c.id == chat_id && c.state == ChatState::Group)
+            .then_some(())
+    })
+    .await;
+    ada.attach_radio(ada_radio.clone()).await.unwrap();
+
+    // What would bring a new key in a direct chat changes nothing here.
+    ada.set_radio_contact_devices(&chat_id, 2);
+    ada.refresh_radio_records().await;
+    assert_eq!(
+        ada.radio_own_record(&chat_id, RadioMesh::MeshCore),
+        Some(ada_record)
+    );
+
+    inject(
+        &bea_radio,
+        &ada_radio,
+        &bea_key,
+        bea_record.rkn,
+        1_001,
+        now_ms(),
+        "After the name",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(!texts(&ada, &chat_id).contains(&"After the name".to_owned()));
+    ada.close().await.unwrap();
 }
