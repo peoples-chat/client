@@ -170,6 +170,7 @@ describe("the JSON shared with the Rust core", () => {
       expected: true,
     });
 
+    const deliveries = [{ since: 1795300170000, reason: "tooLarge" }, undefined];
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
       chatChanged: (next) =>
@@ -189,6 +190,10 @@ describe("the JSON shared with the Rust core", () => {
           ["radio", undefined],
           ["unreachable", "notHeard"],
         ]),
+      // The fixture's chat-2 starts with its invitation undelivered, then learns why, then has it
+      // delivered (#126).
+      invitationDeliveryChanged: (next) =>
+        expect(next.chats[1].undelivered).toEqual(deliveries.shift()),
       disappearingChanged: (next) => expect(next.chats.map((c) => c.disappearAfter)).toEqual([604800, 3600]),
       relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
       accountChanged: (next) =>

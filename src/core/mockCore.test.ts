@@ -306,6 +306,21 @@ describe("mock core", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("issue 126: shows a new contact's invitation as not arrived, then as arrived", async () => {
+    const { core, events } = setup();
+    await core.createAccount("Emil");
+    const chat = await core.addContact("peopleschat:demo-invite/abc123");
+    events.length = 0;
+
+    vi.advanceTimersByTime(600);
+    expect(events).toEqual([{ type: "invitationDeliveryChanged", chatId: chat.id, undelivered: { since: NOW } }]);
+    expect((await core.load()).chats.find((c) => c.id === chat.id)?.undelivered).toEqual({ since: NOW });
+
+    vi.advanceTimersByTime(15_000);
+    expect(events[1]).toEqual({ type: "invitationDeliveryChanged", chatId: chat.id });
+    expect((await core.load()).chats.find((c) => c.id === chat.id)?.undelivered).toBeUndefined();
+  });
+
   it("explains why a name or its own link cannot be added", async () => {
     const { core } = setup();
     const account = await core.createAccount("Emil");

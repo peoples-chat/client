@@ -131,10 +131,23 @@ export interface Chat {
   /** Why the chat isn't reachable by radio, when it is `unreachable` (#44). */
   radioIssue?: RadioIssue;
   /**
+   * The user started the chat, and the invitation hasn't reached the contact yet: they don't
+   * have the chat (#126). The core keeps sending it.
+   */
+  undelivered?: UndeliveredInvitation;
+  /**
    * After how many seconds new messages disappear, when someone in the chat turned disappearing
    * messages on (#124). Absent when they are off.
    */
   disappearAfter?: number;
+}
+
+/** An invitation to a chat that the core couldn't deliver to the contact yet (#126). */
+export interface UndeliveredInvitation {
+  /** When delivery first failed, in milliseconds since the Unix epoch. */
+  since: number;
+  /** Why, when the core knows. `tooLarge`: a relay refused it as too large. */
+  reason?: "tooLarge";
 }
 
 /**
@@ -289,6 +302,11 @@ export type CoreEvent =
    */
   | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
+  /**
+   * The invitation to a chat the user started couldn't be delivered, or now has been (#126).
+   * Without `undelivered`, the contact has it.
+   */
+  | { type: "invitationDeliveryChanged"; chatId: string; undelivered?: UndeliveredInvitation }
   /** Someone in the chat turned disappearing messages on or off, or changed the timer (#124). */
   | { type: "disappearingChanged"; chatId: string; disappearAfter?: number }
   /** The account's relays changed, or their connections did. Carries all of them. */

@@ -13,6 +13,7 @@ import { firstName, tintFor } from "../ui/people";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import layout from "../ui/layout.module.css";
 import { errorText, Missing } from "./shared";
+import { undeliveredText } from "./undelivered";
 import styles from "./ChatScreen.module.css";
 
 /**
@@ -148,6 +149,12 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
               : `Internet is down.${chat.radioIssue ? ` ${radioIssueText(chat.radioIssue, first)}` : ""} Messages wait until it is back.`}
           </span>
         </button>
+      )}
+      {chat.undelivered && (
+        <p className={`${styles.notice} ${styles.undelivered}`} role="status" data-testid="invitation-undelivered">
+          <Icon name="info" size={14} strokeWidth={2.2} />
+          <span>{undeliveredText(chat.undelivered, first)}</span>
+        </p>
       )}
       {error && (
         <p className={layout.error} role="alert">

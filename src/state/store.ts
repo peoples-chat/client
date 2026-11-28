@@ -11,6 +11,7 @@ import type {
   Relay,
   SentInvite,
   Snapshot,
+  UndeliveredInvitation,
 } from "../core/types";
 
 /** What the interface shows. It changes only through core events. */
@@ -129,6 +130,11 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
           : { ...chat, reach: event.reach, radioIssue: event.radioIssue },
       );
 
+    case "invitationDeliveryChanged":
+      return updateChat(state, event.chatId, (chat) =>
+        sameUndelivered(chat.undelivered, event.undelivered) ? chat : { ...chat, undelivered: event.undelivered },
+      );
+
     case "relaysChanged":
       return sameRelays(state.relays, event.relays) ? state : { ...state, relays: event.relays };
 
@@ -150,6 +156,10 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
         : { ...state, invites: [...state.invites, event.invite] };
     }
   }
+}
+
+function sameUndelivered(a: UndeliveredInvitation | undefined, b: UndeliveredInvitation | undefined): boolean {
+  return a?.since === b?.since && a?.reason === b?.reason;
 }
 
 /** Whether two chats show the same. Both come from the core as JSON. */
