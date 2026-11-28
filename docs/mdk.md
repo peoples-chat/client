@@ -27,6 +27,9 @@ lower `marmot-session` crate.
 | `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
 | `send_invite_token`, `invite_tokens`, `follow_messages` (tokens) | `send_custom_event`, `timeline_messages_with_query`, `subscribe_timeline_messages` |
 | `chat_started_at` | `chat_list_row` |
+| `mark_chat_read`, `has_unread` (#124) | `mark_timeline_message_read` on the newest timeline message, `chat_list_row` |
+| `sweep_expired` (#124) | `sweep_expired_retention`; its deletions come as `TimelineMessageChange::Remove` with `TimelineRemoveReason::Pruned` |
+| `DirectChat::disappear_after`, `TextMessage::expires_at` (#124) | `AppGroupRecord::message_retention`, `TimelineMessageRecord::retention_expires_at` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
 | `follow_messages` | `subscribe_timeline_messages` |
@@ -160,8 +163,13 @@ later (#11). Building with `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) replace
 1. They look up its relay lists (kinds 10002 and 10050) on discovery relays of their own.
 2. They fetch its KeyPackage (kind 30443) from the relays the list names.
 
-White Noise's discovery relays are `purplepag.es`, `relay.vertexlab.io`, `nos.lol`, `relay.ditto.pub` and
-`relay.primal.net`. When we checked on 22 November 2026:
+White Noise looks a contact up on its own two relays only, `wss://relay.us.whitenoise.chat` and
+`wss://relay.eu.whitenoise.chat` (#22, #76). Our accounts don't publish their relay lists there, so White Noise users
+can't find them yet; what to do about it is #76.
+
+`purplepag.es`, `relay.vertexlab.io`, `nos.lol`, `relay.ditto.pub` and `relay.primal.net` are where White Noise looks
+for its own user's lists at sign-in, not for contacts. Other clients may look contacts up on relays like these.
+When we checked them on 22 November 2026:
 
 - `nos.lol`, `relay.ditto.pub` and `relay.primal.net` found a new account and its KeyPackage. Ditto found it even
   though we don't publish there.

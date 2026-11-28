@@ -104,6 +104,11 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
+    /// When the message disappears, in milliseconds since the Unix epoch, for a message sent
+    /// while the chat's messages disappear (#124). It counts from the sender's clock. The core
+    /// takes the message away then with `messageRemoved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 /// How a chat's messages can travel now (#43).
@@ -154,6 +159,10 @@ pub struct Chat {
     /// have the chat (#126). The core keeps sending it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undelivered: Option<UndeliveredInvitation>,
+    /// After how many seconds new messages in the chat disappear, when someone in it turned
+    /// disappearing messages on (#124). Absent when they are off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disappear_after: Option<u64>,
 }
 
 /// An invitation to a chat that the core couldn't deliver to the contact yet (#126).
@@ -362,7 +371,7 @@ pub enum CoreEvent {
         delivery: DeliveryState,
     },
     /// A message is gone: the user cancelled it while it waited, or it went, and came back
-    /// under MDK's id (#46).
+    /// under MDK's id (#46), or it disappeared once its time was up (#124).
     MessageRemoved {
         chat_id: String,
         message_id: String,
@@ -382,6 +391,13 @@ pub enum CoreEvent {
         chat_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         undelivered: Option<UndeliveredInvitation>,
+    },
+    /// Someone in the chat turned disappearing messages on or off, or changed after how long
+    /// they disappear (#124). Without `disappear_after`, they are off.
+    DisappearingChanged {
+        chat_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disappear_after: Option<u64>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {

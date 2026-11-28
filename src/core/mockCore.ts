@@ -367,6 +367,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         transport: radio ? "radio" : "internet",
         delivery: "waiting",
         ...(waits ? { cancellable: true } : {}),
+        // Its time starts when it goes (#124).
+        ...(!waits && chat.disappearAfter ? { expiresAt: now() + chat.disappearAfter * 1000 } : {}),
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
@@ -398,6 +400,12 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       if (!message.cancellable) throw new CoreError("This message is on its way already.");
       chat.messages = chat.messages.filter((m) => m.id !== messageId);
       emit({ type: "messageRemoved", chatId, messageId });
+    },
+
+    // The demo keeps no read marks: its messages disappear after a week, read or not.
+    async markRead(chatId) {
+      requireAccount();
+      chatById(chatId);
     },
 
     // The demo's radio reaches every contact, so the switch is all it takes.
@@ -469,6 +477,9 @@ function demoRelays(): Relay[] {
 }
 
 function demoChat(now: number): Chat {
+  // Astrid turned disappearing messages on, as a White Noise user can (#124).
+  const disappearAfter = 7 * 24 * 60 * 60;
+  const expires = (sentAt: number) => sentAt + disappearAfter * 1000;
   return {
     id: randomHex(8),
     contact: { publicKey: randomHex(32), name: "Astrid Holm" },
@@ -479,6 +490,7 @@ function demoChat(now: number): Chat {
         text: "Storm warning for tonight. Are you still coming by tomorrow?",
         sentAt: now - 26 * MINUTE,
         transport: "internet",
+        expiresAt: expires(now - 26 * MINUTE),
       },
       {
         id: randomHex(8),
@@ -487,9 +499,11 @@ function demoChat(now: number): Chat {
         sentAt: now - 25 * MINUTE,
         transport: "internet",
         delivery: "sent",
+        expiresAt: expires(now - 25 * MINUTE),
       },
     ],
     reach: "internet",
+    disappearAfter,
   };
 }
 

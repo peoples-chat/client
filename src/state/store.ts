@@ -95,8 +95,19 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
           chat.messages.some((m) => m.id === event.messageId) ? { ...chat, messages: without(chat.messages) } : chat,
         );
       }
-      return state;
+      // A message that came with an invitation can disappear too (#124).
+      const invitation = state.invitations.find((i) => i.id === event.chatId);
+      if (!invitation || !invitation.messages.some((m) => m.id === event.messageId)) return state;
+      return {
+        ...state,
+        invitations: state.invitations.map((i) => (i === invitation ? { ...i, messages: without(i.messages) } : i)),
+      };
     }
+
+    case "disappearingChanged":
+      return updateChat(state, event.chatId, (chat) =>
+        chat.disappearAfter === event.disappearAfter ? chat : { ...chat, disappearAfter: event.disappearAfter },
+      );
 
     case "deliveryChanged":
       return updateChat(state, event.chatId, (chat) => {

@@ -81,6 +81,7 @@ pub fn run() {
             bridge::send_message,
             bridge::set_force_radio,
             bridge::cancel_message,
+            bridge::mark_read,
             bridge::export_account_key,
             // Pairing a radio over USB (#24). Phones will pair over Bluetooth (#23).
             #[cfg(desktop)]

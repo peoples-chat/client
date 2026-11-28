@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { core } from "../core";
 import type { Contact, RadioIssue, Reach } from "../core/types";
 import { useNavigation } from "../navigation/Navigator";
@@ -8,6 +8,7 @@ import { IconButton } from "../ui/Button";
 import { Composer } from "../ui/Composer";
 import { Icon } from "../ui/Icon";
 import { MessageList } from "../ui/MessageList";
+import { formatDuration } from "../ui/format";
 import { firstName, tintFor } from "../ui/people";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import layout from "../ui/layout.module.css";
@@ -32,6 +33,14 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const chat = chats.find((c) => c.id === chatId);
+  const exists = chat !== undefined;
+  const newest = chat?.messages[chat.messages.length - 1]?.id;
+
+  // The user sees the chat, up to its newest message (#124). MDK deletes expired messages only
+  // once they are read. Nothing is sent: the read mark stays on this device.
+  useEffect(() => {
+    if (exists) core.markRead(chatId).catch(() => undefined);
+  }, [chatId, newest, exists]);
 
   if (!chat) return <Missing title="Chat" text="This chat no longer exists." />;
   const name = chat.contact.name;
@@ -89,6 +98,12 @@ export function ChatScreen({ chatId, invited = false }: { chatId: string; invite
           </>
         }
       />
+      {chat.disappearAfter !== undefined && (
+        <p className={styles.disappearing} data-testid="chat-disappearing">
+          <Icon name="timer" size={14} strokeWidth={2.2} />
+          <span>Messages disappear {formatDuration(chat.disappearAfter)} after they are sent.</span>
+        </p>
+      )}
       <MessageList
         messages={chat.messages}
         onCancel={cancel}

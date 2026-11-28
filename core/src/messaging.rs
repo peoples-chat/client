@@ -20,10 +20,11 @@ use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
     AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime, MarmotDeployment,
-    PendingWelcomeDelivery, RelayLiveness, RelayLivenessStatus, RuntimeChatsSubscription,
-    RuntimeEventsSubscription, RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
-    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
-    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, UserProfileMetadata,
+    PendingWelcomeDelivery, RelayLiveness, RelayLivenessStatus, RetentionSweepStatus,
+    RuntimeChatsSubscription, RuntimeEventsSubscription, RuntimeRelayLivenessSubscription,
+    RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
+    TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
+    TimelineRemoveReason, UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
 
@@ -54,7 +55,9 @@ const SECRET_RETRY: Duration = Duration::from_millis(100);
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
-/// It isn't text, so White Noise doesn't show it as a message.
+/// White Noise shows a kind it doesn't know, for Android as a bubble of its raw content and for
+/// iOS as an "Unsupported event" card (#123). That does no harm here: only the inviter's app,
+/// which is peoples.chat, receives the token.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
 /// The app's own kind for a radio address record (#34), which each app sends in its direct
 /// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
@@ -68,8 +71,8 @@ static SENDS: AtomicU64 = AtomicU64::new(0);
 /// relay lists, profile and KeyPackage here.
 ///
 /// These are public, general-purpose relays. Who runs the project's own relays is decided later
-/// (#11). nos.lol and relay.primal.net are also among the relays White Noise searches for relay
-/// lists, so White Noise users can find accounts made here.
+/// (#11). They don't make accounts made here findable from White Noise: it looks a contact's
+/// relay lists up only on its own relays (#22), and that stays to be decided (#76).
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
@@ -212,6 +215,10 @@ pub struct DirectChat {
     /// The relays the chat's messages go through, as [`canonical_relay`] spells them. Empty when
     /// the core made this value itself rather than reading it from MDK.
     pub relays: Vec<String>,
+    /// After how many seconds new messages disappear, when someone in the chat turned
+    /// disappearing messages on (#124). `None` when they are off, or when the core made this
+    /// value itself.
+    pub disappear_after: Option<u64>,
 }
 
 /// The account's direct chats as they were when following began, then each one that changes.
@@ -257,6 +264,10 @@ pub struct TextMessage {
     pub sent_at: u64,
     /// Outgoing only: a relay has acknowledged it.
     pub acknowledged: bool,
+    /// When it disappears, in milliseconds since the Unix epoch (whole seconds), if it was sent
+    /// while the chat's messages disappear (#124). MDK pins it to the message: the sender's
+    /// clock when it was sent, plus the chat's timer then.
+    pub expires_at: Option<u64>,
 }
 
 /// The text message in `record`, unless it is something else: a system row, media, a sticker,
@@ -293,6 +304,9 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
             && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+        expires_at: record
+            .retention_expires_at
+            .map(|seconds| seconds.saturating_mul(1000)),
     })
 }
 
@@ -337,6 +351,10 @@ pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    /// MDK deleted the message `message_id` because its time was up (#124).
+    Expired {
+        message_id: String,
+    },
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -368,8 +386,18 @@ impl ChatItems {
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
-                        if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(chat_item(message));
+                        match change {
+                            TimelineMessageChange::Upsert { message, .. } => {
+                                self.ready.extend(chat_item(message));
+                            }
+                            // The retention sweep deleted it (#124). Deletions are #122's.
+                            TimelineMessageChange::Remove {
+                                message_id_hex,
+                                reason: TimelineRemoveReason::Pruned,
+                            } => self.ready.push_back(ChatItem::Expired {
+                                message_id: message_id_hex.clone(),
+                            }),
+                            TimelineMessageChange::Remove { .. } => {}
                         }
                     }
                 }
@@ -396,6 +424,9 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
             .iter()
             .map(|relay| canonical_relay(relay))
             .collect(),
+        // Marmot: 0 means off (message-retention-v1).
+        disappear_after: Some(record.message_retention.disappearing_message_secs)
+            .filter(|secs| *secs > 0),
     })
 }
 
@@ -1091,6 +1122,74 @@ impl Messaging {
             .timeline_message(account_hex, chat_id, message_id)
             .ok()??;
         text_message(&record)
+    }
+
+    /// Marks everything in the chat `chat_id` as read, up to its newest message (#124). MDK's
+    /// read cursor stays on this device: nothing is sent. The retention sweep deletes only
+    /// expired messages that are read.
+    pub fn mark_chat_read(&self, account_hex: &str, chat_id: &str) -> Result<(), MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        // The newest one received: the user's own message, sent in the same second, may come
+        // after it or before it, and MDK's read mark counts from the one it is given.
+        let newest = page
+            .messages
+            .iter()
+            .rev()
+            .find(|record| record.direction == "received");
+        if let Some(newest) = newest {
+            self.runtime.mark_timeline_message_read(
+                account_hex,
+                chat_id,
+                &newest.message_id_hex,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Whether the chat `chat_id` has messages the user hasn't seen, by MDK's read mark (#124).
+    pub fn has_unread(&self, account_hex: &str, chat_id: &str) -> Result<bool, MessagingError> {
+        Ok(self
+            .runtime
+            .chat_list_row(account_hex, chat_id)?
+            .is_some_and(|row| row.has_unread))
+    }
+
+    /// Has MDK delete the plaintext of expired disappearing messages in all the account's
+    /// chats, as of `now_ms` (#124). MDK holds back a chat while an expired message in it is
+    /// unread, or while one expired less than 5 seconds ago. Returns how many it deleted; each
+    /// also comes as [`ChatItem::Expired`].
+    pub async fn sweep_expired(
+        &self,
+        account_hex: &str,
+        now_ms: u64,
+    ) -> Result<u64, MessagingError> {
+        let report = self
+            .runtime
+            .sweep_expired_retention(account_hex, now_ms)
+            .await?;
+        for group in &report.groups {
+            if group.status == RetentionSweepStatus::Failed {
+                log::warn!(
+                    "deleting a chat's expired messages failed: {}",
+                    group.failure_kind.as_deref().unwrap_or("unknown")
+                );
+            }
+        }
+        Ok(report
+            .groups
+            .iter()
+            .map(|group| group.pruned_messages)
+            .sum())
     }
 
     /// Follows the account's text messages in all its chats, from now on.
