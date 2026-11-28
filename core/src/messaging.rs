@@ -19,10 +19,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
-    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, RelayLiveness,
-    RelayLivenessStatus, RuntimeChatsSubscription, RuntimeRelayLivenessSubscription,
-    RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
-    TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, MarmotDeployment, RelayLiveness,
+    RelayLivenessStatus, RetentionSweepStatus, RuntimeChatsSubscription,
+    RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
+    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
+    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, TimelineRemoveReason,
     UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
@@ -90,22 +91,53 @@ pub const WHITE_NOISE_RELAYS: &[&str] = &[
     "wss://whitenoise.nostrdev.com",
 ];
 
+/// Media servers signed into each chat the core starts (#120): the two White Noise founds its
+/// chats with, provisionally. Each takes opaque `application/octet-stream` uploads, which is
+/// what encrypted media looks like. Who runs the project's own is decided later (#11).
+pub const CHAT_MEDIA_SERVERS: &[&str] =
+    &["https://blossom.divine.video", "https://blossom.ditto.pub"];
+
+/// The name our KeyPackages carry in their NIP-89 `client` tag (#120), as White Noise's carry
+/// its own. Display metadata only.
+pub const CLIENT_NAME: &str = "peoples.chat";
+
+/// Whether `relays` are the public [`DEFAULT_RELAYS`], in any order and however spelled.
+fn on_default_relays(relays: &[String]) -> bool {
+    relays.len() == DEFAULT_RELAYS.len()
+        && relays
+            .iter()
+            .all(|relay| DEFAULT_RELAYS.contains(&canonical_relay(relay).as_str()))
+}
+
+/// `values` when the app is on the public [`DEFAULT_RELAYS`], else nothing: a build with relays
+/// of its own, such as a test relay, stays off public servers.
+fn only_on_defaults(relays: &[String], values: &[&str]) -> Vec<String> {
+    if on_default_relays(relays) {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// The relays that get a copy of each profile change (#113). An app on the public
 /// [`DEFAULT_RELAYS`] gets White Noise's. A build with relays of its own, such as a test relay,
 /// gets none, so that it stays off public relays.
 pub fn profile_copy_relays(relays: &[String]) -> Vec<String> {
-    let on_defaults = relays.len() == DEFAULT_RELAYS.len()
-        && relays
-            .iter()
-            .all(|relay| DEFAULT_RELAYS.contains(&canonical_relay(relay).as_str()));
-    if on_defaults {
-        WHITE_NOISE_RELAYS
-            .iter()
-            .map(|relay| (*relay).to_owned())
-            .collect()
-    } else {
-        Vec::new()
-    }
+    only_on_defaults(relays, WHITE_NOISE_RELAYS)
+}
+
+/// The media servers new chats get (#120): [`CHAT_MEDIA_SERVERS`] on the public
+/// [`DEFAULT_RELAYS`], none for a build with relays of its own. A chat started without any can
+/// never carry photos or files.
+pub fn chat_media_servers(relays: &[String]) -> Vec<String> {
+    only_on_defaults(relays, CHAT_MEDIA_SERVERS)
+}
+
+/// The relays people are also looked up on, besides the app's own (#120): White Noise's, on the
+/// public [`DEFAULT_RELAYS`]. White Noise users publish their relay lists and KeyPackages there,
+/// and may never have published anywhere else. A build with relays of its own gets none.
+pub fn lookup_relays(relays: &[String]) -> Vec<String> {
+    only_on_defaults(relays, WHITE_NOISE_RELAYS)
 }
 
 /// The relay the project runs and pays for (#90). Its configuration is in `relay/`.
@@ -137,6 +169,13 @@ pub struct MessagingOptions {
     /// (#113). MDK copies in the background, so a failed copy never fails the change. It copies
     /// nothing for an account on loopback relays.
     pub profile_copies: Vec<String>,
+    /// Media servers signed into each chat this core starts, usually [`chat_media_servers`]
+    /// (#120). MDK writes them into the chat's state when it founds the chat. With none, the chat
+    /// carries no photos or files for anyone in it, for good: nothing can add them later.
+    pub chat_media_servers: Vec<String>,
+    /// Relays people are looked up on besides [`Self::relays`], usually [`lookup_relays`]
+    /// (#120): their relay lists, and their KeyPackages when their lists name no relays.
+    pub lookup_relays: Vec<String>,
 }
 
 /// What another account's profile says about it, as the relays have it now.
@@ -177,6 +216,10 @@ pub struct DirectChat {
     /// The relays the chat's messages go through, as [`canonical_relay`] spells them. Empty when
     /// the core made this value itself rather than reading it from MDK.
     pub relays: Vec<String>,
+    /// After how many seconds new messages disappear, when someone in the chat turned
+    /// disappearing messages on (#124). `None` when they are off, or when the core made this
+    /// value itself.
+    pub disappear_after: Option<u64>,
 }
 
 /// The account's direct chats as they were when following began, then each one that changes.
@@ -222,6 +265,10 @@ pub struct TextMessage {
     pub sent_at: u64,
     /// Outgoing only: a relay has acknowledged it.
     pub acknowledged: bool,
+    /// When it disappears, in milliseconds since the Unix epoch (whole seconds), if it was sent
+    /// while the chat's messages disappear (#124). MDK pins it to the message: the sender's
+    /// clock when it was sent, plus the chat's timer then.
+    pub expires_at: Option<u64>,
 }
 
 /// The text message in `record`, unless it is something else: a system row, media, a sticker,
@@ -258,6 +305,9 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
             && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+        expires_at: record
+            .retention_expires_at
+            .map(|seconds| seconds.saturating_mul(1000)),
     })
 }
 
@@ -302,6 +352,10 @@ pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    /// MDK deleted the message `message_id` because its time was up (#124).
+    Expired {
+        message_id: String,
+    },
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -333,8 +387,18 @@ impl ChatItems {
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
-                        if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(chat_item(message));
+                        match change {
+                            TimelineMessageChange::Upsert { message, .. } => {
+                                self.ready.extend(chat_item(message));
+                            }
+                            // The retention sweep deleted it (#124). Deletions are #122's.
+                            TimelineMessageChange::Remove {
+                                message_id_hex,
+                                reason: TimelineRemoveReason::Pruned,
+                            } => self.ready.push_back(ChatItem::Expired {
+                                message_id: message_id_hex.clone(),
+                            }),
+                            TimelineMessageChange::Remove { .. } => {}
                         }
                     }
                 }
@@ -361,6 +425,9 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
             .iter()
             .map(|relay| canonical_relay(relay))
             .collect(),
+        // Marmot: 0 means off (message-retention-v1).
+        disappear_after: Some(record.message_retention.disappearing_message_secs)
+            .filter(|secs| *secs > 0),
     })
 }
 
@@ -495,6 +562,12 @@ impl Messaging {
         )
         .map_err(AppError::from)?;
         let config = MarmotAppConfig::default()
+            .with_deployment(MarmotDeployment {
+                new_group_media_endpoints: options.chat_media_servers.clone(),
+                ..MarmotDeployment::neutral()
+            })
+            .with_key_package_client_name(Some(CLIENT_NAME.to_owned()))
+            .with_directory_relay_urls(directory_relays(&options.relays, &options.lookup_relays))
             .with_allow_loopback_relay_endpoints(options.allow_loopback)
             .with_allow_loopback_blob_endpoints(options.allow_loopback);
         let app = MarmotApp::try_with_relays_and_account_home_and_config(
@@ -654,6 +727,28 @@ impl Messaging {
                 Err(error) => return Err(error.into()),
             }
         }
+    }
+
+    /// The media servers signed into the chat's state (#120), where photos and files in it go.
+    /// Empty when the chat has no encrypted-media component, so it can never carry them.
+    pub async fn media_servers_in_chat(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+    ) -> Result<Vec<String>, MessagingError> {
+        let snapshot = self
+            .runtime
+            .group_conversation_snapshot(account_hex, &group_id(chat_id)?)
+            .await?;
+        let media = snapshot.group.encrypted_media;
+        if !media.required {
+            return Ok(Vec::new());
+        }
+        Ok(media
+            .default_blob_endpoints
+            .into_iter()
+            .map(|endpoint| endpoint.base_url)
+            .collect())
     }
 
     /// Follows the account's direct chats, invitations included.
@@ -979,6 +1074,74 @@ impl Messaging {
         text_message(&record)
     }
 
+    /// Marks everything in the chat `chat_id` as read, up to its newest message (#124). MDK's
+    /// read cursor stays on this device: nothing is sent. The retention sweep deletes only
+    /// expired messages that are read.
+    pub fn mark_chat_read(&self, account_hex: &str, chat_id: &str) -> Result<(), MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        // The newest one received: the user's own message, sent in the same second, may come
+        // after it or before it, and MDK's read mark counts from the one it is given.
+        let newest = page
+            .messages
+            .iter()
+            .rev()
+            .find(|record| record.direction == "received");
+        if let Some(newest) = newest {
+            self.runtime.mark_timeline_message_read(
+                account_hex,
+                chat_id,
+                &newest.message_id_hex,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Whether the chat `chat_id` has messages the user hasn't seen, by MDK's read mark (#124).
+    pub fn has_unread(&self, account_hex: &str, chat_id: &str) -> Result<bool, MessagingError> {
+        Ok(self
+            .runtime
+            .chat_list_row(account_hex, chat_id)?
+            .is_some_and(|row| row.has_unread))
+    }
+
+    /// Has MDK delete the plaintext of expired disappearing messages in all the account's
+    /// chats, as of `now_ms` (#124). MDK holds back a chat while an expired message in it is
+    /// unread, or while one expired less than 5 seconds ago. Returns how many it deleted; each
+    /// also comes as [`ChatItem::Expired`].
+    pub async fn sweep_expired(
+        &self,
+        account_hex: &str,
+        now_ms: u64,
+    ) -> Result<u64, MessagingError> {
+        let report = self
+            .runtime
+            .sweep_expired_retention(account_hex, now_ms)
+            .await?;
+        for group in &report.groups {
+            if group.status == RetentionSweepStatus::Failed {
+                log::warn!(
+                    "deleting a chat's expired messages failed: {}",
+                    group.failure_kind.as_deref().unwrap_or("unknown")
+                );
+            }
+        }
+        Ok(report
+            .groups
+            .iter()
+            .map(|group| group.pruned_messages)
+            .sum())
+    }
+
     /// Follows the account's text messages in all its chats, from now on.
     pub async fn follow_messages(&self, account_hex: &str) -> Result<ChatItems, MessagingError> {
         let subscription = self
@@ -1097,6 +1260,23 @@ impl Messaging {
     }
 }
 
+/// The relays MDK looks people up on: ours, then `lookup`, each once. MDK uses these instead of
+/// ours, not besides them, so ours come first. With no `lookup` relays, none: MDK then looks on
+/// ours, as before #120.
+fn directory_relays(relays: &[String], lookup: &[String]) -> Vec<String> {
+    if lookup.is_empty() {
+        return Vec::new();
+    }
+    let mut all: Vec<String> = Vec::new();
+    for relay in relays.iter().chain(lookup) {
+        let relay = canonical_relay(relay);
+        if !all.contains(&relay) {
+            all.push(relay);
+        }
+    }
+    all
+}
+
 fn endpoints(relays: &[String]) -> Vec<TransportEndpoint> {
     relays.iter().cloned().map(TransportEndpoint).collect()
 }
@@ -1171,7 +1351,8 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RELAYS, PROJECT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, profile_copy_relays,
+        DEFAULT_RELAYS, PROJECT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers,
+        directory_relays, lookup_relays, profile_copy_relays,
     };
 
     /// #90: new accounts use the project's relay, and the interface shows it as run by
@@ -1232,6 +1413,47 @@ mod tests {
         ] {
             assert!(profile_copy_relays(&owned(relays)).is_empty(), "{relays:?}");
         }
+    }
+
+    /// #120: on the defaults, new chats get White Noise's media servers and people are also looked
+    /// up on White Noise's relays. A build with relays of its own stays off public servers.
+    #[test]
+    fn issue_120_only_the_default_relays_use_public_media_servers_and_lookup_relays() {
+        let owned = |relays: &[&str]| relays.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        let defaults = owned(DEFAULT_RELAYS);
+        assert_eq!(
+            chat_media_servers(&defaults),
+            ["https://blossom.divine.video", "https://blossom.ditto.pub"]
+        );
+        assert_eq!(lookup_relays(&defaults), owned(WHITE_NOISE_RELAYS));
+        for relays in [
+            &["ws://127.0.0.1:7777"][..],
+            &["wss://relay.peoples.chat"],
+            &["wss://nos.lol", "wss://relay.primal.net"],
+            &[],
+        ] {
+            assert!(chat_media_servers(&owned(relays)).is_empty(), "{relays:?}");
+            assert!(lookup_relays(&owned(relays)).is_empty(), "{relays:?}");
+        }
+    }
+
+    /// MDK looks people up on the directory relays instead of ours, so ours are listed first.
+    #[test]
+    fn issue_120_people_are_looked_up_on_our_relays_and_the_lookup_relays() {
+        let owned = |relays: &[&str]| relays.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            directory_relays(
+                &owned(&["wss://nos.lol/", "wss://relay.damus.io"]),
+                &owned(&["wss://relay.eu.whitenoise.chat", "wss://nos.lol"]),
+            ),
+            [
+                "wss://nos.lol",
+                "wss://relay.damus.io",
+                "wss://relay.eu.whitenoise.chat"
+            ]
+        );
+        // Without lookup relays MDK looks on ours, as it always has.
+        assert!(directory_relays(&owned(&["wss://nos.lol"]), &[]).is_empty());
     }
 
     #[test]
