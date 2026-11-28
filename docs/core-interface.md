@@ -69,6 +69,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `accountCreated` | `account` | The account was created on this device | Done (#16) |
 | `accountDeleted` | | The account and its data were removed from this device | Done (#16) |
 | `chatAdded` | `chat` | A direct chat starts: the user added a contact or accepted an invitation | Done (#19) |
+| `chatChanged` | `chat` | A chat stopped being direct, or ended: the contact left or deleted their account, it got a name or another member, or the user is no longer in it. The whole chat replaces the one with its id | Done (#125) |
 | `invitationReceived` | `invitation` | Someone who is not a contact invites the user | Done (#19) |
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
@@ -91,8 +92,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
-| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `disappearAfter` (optional, seconds, #124) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124), `edited`, `deleted`, `withdrawn` (each optional, #122) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `disappearAfter` (optional, seconds, #124), `state` (optional: `contactLeft`, `group`, `removed`; left out while `direct`, #125) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124), `edited`, `deleted`, `withdrawn` (each optional, #122), `sender` (optional: `publicKey`, `name`; incoming messages in a `group` chat, #125) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -154,10 +155,23 @@ mistake.
   derived from the key ("Brave Otter"), the same one White Noise shows. A name found later, or a new one, arrives as
   `contactChanged` ([Profile](#profile)).
 
+**When a chat stops being direct (#125):**
+
+MDK counts a chat as direct while it has no name and two accounts. The core keeps a chat it has shown, by its id,
+after that stops: `chatChanged` brings the whole chat with its new `state`, and it stays after a restart (the core
+keeps which chats were direct, and with whom, in `chats.json`).
+
+- **`contactLeft`**: the contact left the chat or deleted their account. The chat says so, and `sendMessage` refuses
+  with "Bea Holm left this chat. Messages can't be sent here any more." Waiting messages stay until cancelled.
+- **`removed`**: the user left the chat or was removed, in another app. Nothing can be sent.
+- **`group`**: the chat got a name or a third member, in another app. Incoming messages carry `sender`, since anyone
+  in it can have sent them. Messages go by internet only: radio keys are for the two people of a direct chat.
+- Adding the contact again starts a new direct chat; the old one stays in the list.
+
 **Not built yet:**
 
 - deleting or blocking an invitation;
-- group chats: the core shows direct chats only;
+- group chats: the core shows direct chats, and chats that were direct (#125), only;
 - opening an invite link tapped in another app on an iPhone: that needs the Apple developer account (#61). See [Links that
   open the app](#links-that-open-the-app).
 
@@ -242,7 +256,9 @@ no server.
 2. Someone without an account opens the link. `previewInvite(link)` gives the inviter's name and photo from their
    profile; it needs no account.
 3. They create an account, and `addContact(link)` starts the chat. Their core then sends the token in the chat, as an
-   app event of the app's own kind (9910). It isn't text, so White Noise doesn't show it.
+   app event of the app's own kind (9910). peoples.chat doesn't show it. White Noise would show a kind it doesn't know,
+   for Android as a bubble of its raw content and for iOS as an "Unsupported event" card (#123), but that does no harm
+   here: the token goes only to the inviter, whose app is peoples.chat.
 4. The inviter's core gets the token while the chat is still a request. If the token is the user's, unused and less
    than 7 days old, the core marks the invitation as used (`inviteChanged`, with `joinedChatId`) and accepts the chat
    (`invitationRemoved`, then `chatAdded`). A token that came while the app was closed counts when it starts.

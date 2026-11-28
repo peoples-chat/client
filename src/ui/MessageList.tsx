@@ -91,6 +91,11 @@ function MessageBubble({ message }: { message: Message }) {
       data-testid={`message-${message.id}`}
       data-state={state}
     >
+      {message.sender && !outgoing && (
+        <div className={styles.sender} data-testid="message-sender">
+          {message.sender.name}
+        </div>
+      )}
       <div className={styles.text} data-testid="message-text">
         {shownText(message)}
       </div>

@@ -874,6 +874,8 @@ impl Core {
             chat_id: received.chat_id.clone(),
             id: received.message_id.clone(),
             outgoing: false,
+            // Radio carries only direct chats, where the sender is the contact (#125).
+            sender_hex: String::new(),
             text: received.text.clone(),
             sent_at: u64::from(received.sent_at) * 1000,
             acknowledged: false,
