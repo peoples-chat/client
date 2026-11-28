@@ -339,8 +339,15 @@ fn text_message(account_hex: &str, record: &TimelineMessageRecord) -> Option<Tex
     let text = match (&record.poll, &record.group_system) {
         (Some(poll), _) => poll.question.clone(),
         (_, Some(system)) => system.text.clone(),
-        // MDK has nothing to show for a message it doesn't know. Its content may be anything.
-        _ if placeholder == Some(Placeholder::Unsupported) => String::new(),
+        // MDK has nothing to show for a message it doesn't know, or a chat event it can't read.
+        // Their content may be anything.
+        _ if matches!(
+            placeholder,
+            Some(Placeholder::Unsupported | Placeholder::ChatEvent)
+        ) =>
+        {
+            String::new()
+        }
         _ => record.plaintext.clone(),
     };
     Some(TextMessage {
@@ -1607,6 +1614,14 @@ mod tests {
         .unwrap();
         assert_eq!(left.placeholder, Some(Placeholder::ChatEvent));
         assert_eq!(left.text, "Bea left");
+        // One MDK can't read shows as a chat event, without its raw content.
+        let unread = shown(serde_json::json!({
+            "kind": GROUP_SYSTEM_KIND,
+            "plaintext": "{\"v\":99}",
+        }))
+        .unwrap();
+        assert_eq!(unread.placeholder, Some(Placeholder::ChatEvent));
+        assert_eq!(unread.text, "");
 
         // A kind nobody here knows, and an agent's stream: something came, its content unshown.
         for with in [

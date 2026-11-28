@@ -28,7 +28,7 @@ fn photo() -> Vec<u8> {
     jpeg
 }
 
-fn find<'a>(messages: &'a [Message], what: impl Fn(&Message) -> bool) -> Option<&'a Message> {
+fn find(messages: &[Message], what: impl Fn(&Message) -> bool) -> Option<&Message> {
     messages.iter().find(|message| what(message))
 }
 
