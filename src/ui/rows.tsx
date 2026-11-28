@@ -17,13 +17,16 @@ interface ActionRowProps {
   chevron?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  /** For tests: the row's `data-testid`. */
+  testId?: string;
 }
 
 /** A row that opens something or does something. */
-export function ActionRow({ icon, label, description, accent, danger, chevron = true, disabled, onClick }: ActionRowProps) {
+export function ActionRow({ icon, label, description, accent, danger, chevron = true, disabled, onClick, testId }: ActionRowProps) {
   return (
     <button
       type="button"
+      data-testid={testId}
       className={[styles.actionRow, accent && styles.accent, danger && styles.danger].filter(Boolean).join(" ")}
       disabled={disabled}
       onClick={onClick}

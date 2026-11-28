@@ -207,6 +207,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         name: trimmed,
         about: "",
         publicKey: randomHex(32),
+        npub: demoNpub(),
         inviteLink: INVITE_PREFIX + invite,
         shareLink: `https://peoples.chat/i#demo-invite-${invite}`,
       };
@@ -601,6 +602,8 @@ function restore(storage: StorageLike | null): MockState | null {
     if (restored.account && typeof restored.account.shareLink !== "string") {
       restored.account.shareLink = `https://peoples.chat/i#${restored.account.inviteLink.replace(INVITE_PREFIX, "demo-invite-")}`;
     }
+    // Saved before accounts showed their npub (#129).
+    if (restored.account && typeof restored.account.npub !== "string") restored.account.npub = demoNpub();
     // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
     // in a chat that can't be reached.
     for (const chat of restored.chats) {
@@ -624,6 +627,12 @@ function toBase64(bytes: Uint8Array): string {
 function randomBech32(length: number): string {
   const alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
   return Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => alphabet[b % 32]).join("");
+}
+
+/** Looks like an npub, but is no key: the demo has none (#129). */
+function demoNpub(): string {
+  const bech32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+  return "npub1" + Array.from(crypto.getRandomValues(new Uint8Array(58)), (b) => bech32[b % 32]).join("");
 }
 
 function randomHex(bytes: number): string {

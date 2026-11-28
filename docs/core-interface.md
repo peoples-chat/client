@@ -90,7 +90,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
-| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
+| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `npub`, `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `undelivered` (optional, #126), `disappearAfter` (optional, seconds, #124), `state` (optional: `contactLeft`, `group`, `removed`; left out while `direct`, #125) |
 | `UndeliveredInvitation` | `since`, `reason` (optional: `tooLarge`); see [When the invitation doesn't arrive](#contacts-and-invitations) |
@@ -114,6 +114,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 - `reach` says how the chat's messages can travel now; see [Reach](#reach).
 - `relays` are the account's relays; see [Relays](#relays).
 - `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
+- `npub` is the same key as a NIP-19 `npub1…`. Profile shows it with Copy, for people who add the user from White
+  Noise: both its phone apps take an npub, and its Android app refuses an nprofile and doesn't open peoples.chat links
+  (#129).
 - An invitation's `id` is the id of the chat that accepting it opens.
 
 ## Contacts and invitations
@@ -139,6 +142,9 @@ mistake.
 | The user's own link | "That is your own invite link." |
 
 **Adding a contact:**
+
+- **A scanned code asks first** (#129). Scan shows who it is, with `previewInvite`, and calls `addContact` only when the
+  user taps Start, as a tapped link does and as White Noise opens the person's profile first.
 
 - **The chat opens at once**, with `chatAdded`. The other person gets an invitation in the background.
 - **With a contact the user already has**, it returns their chat.
@@ -462,8 +468,9 @@ a message the radio can't take waits for the internet instead:
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
 - "Your radio isn't connected.": it is paired, but the core is looking for it.
-- "Bea Holm's radio isn't known yet.": the contact's app hasn't sent a radio address record (#34); see
+- "Bea Holm's radio isn't known yet.": the chat has no radio address record of the contact's (#34); see
   [radio.md](radio.md).
+- "Only a MeshCore radio can send messages."
 - "Could not send by radio: the chat's keys aren't ready. Try again."
 
 Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and

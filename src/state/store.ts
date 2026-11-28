@@ -195,6 +195,7 @@ function sameAccount(a: Account, b: Account): boolean {
     a.about === b.about &&
     a.photo === b.photo &&
     a.publicKey === b.publicKey &&
+    a.npub === b.npub &&
     a.inviteLink === b.inviteLink &&
     a.shareLink === b.shareLink
   );

@@ -71,13 +71,14 @@ export function NewChat({ link: opened }: { link?: string }) {
           label="Scan a QR code"
           accent
           disabled={!canScanQrCodes}
+          testId="new-chat-scan"
           onClick={() => navigation.push({ name: "scan" })}
         />
         <ActionRow icon="link" label="Share my invite link" accent onClick={() => navigation.push({ name: "profile" })} />
         {contacts.length > 0 && (
           <>
             <SectionTitle>Contacts</SectionTitle>
-            <ul className={styles.contacts}>
+            <ul className={styles.contacts} data-testid="new-chat-contacts">
               {contacts.map((chat) => (
                 <li key={chat.id}>
                   <ContactRow

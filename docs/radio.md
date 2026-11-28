@@ -9,30 +9,28 @@ reachable and the contact's radio has been heard (#44, #45), or while the switch
 a radio over USB ([Pairing](#pairing), #24); phones will over Bluetooth (#23). The path for the packets comes with #36.
 [radio-format-v0.md](radio-format-v0.md#in-the-core) describes how the core sends and receives.
 
-**Addresses.** Each app learns its contacts' radios from their radio address records (#34), with nobody doing
-anything:
+**Addresses and keys** (#34, #128). Each app learns its contacts' radios, and the keys they encrypt with, from their
+radio address records, with nobody doing anything. The decisions are on
+[#128](https://github.com/peoples-chat/client/issues/128).
 
-- **The record** (`core/src/radio/address.rs`) is small, versioned JSON: the mesh, the radio's public key, its LoRa
-  settings (frequency in kHz, bandwidth in Hz, spreading factor, coding rate) and when it was made, in milliseconds.
-
-  ```json
-  {"v":0,"mesh":"meshcore","key":"…64 hex…","freq":869618,"bw":62500,"sf":8,"cr":8,"at":1795300000000}
-  ```
-
-- **It travels** as an app event of kind 9911 inside the direct chat ([mdk.md](mdk.md#app-events)): never in a group,
-  never published.
-- **Sending.** With a radio, the core sends its record in every direct chat that hasn't had this one: when the radio
-  is attached, when a chat starts, and every minute for chats it couldn't reach. A different radio, or the same one with
-  other settings, makes a new record; the same radio keeps the time of its first record, so it isn't sent again.
-- **Receiving.** The newest record of a chat's contact becomes their radio in `radio.json`. Records that came while the
-  app was closed are read when it starts, and those in a request when it is accepted. A record of another version or
-  mesh, or with a malformed key or settings out of LoRa's range, changes nothing.
-- **What shows.** A contact with a radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under "Your
-  contacts by mesh".
-
-**Keys.** Radio messages are encrypted with keys derived from the chat's MLS state (#37), with one key per direction.
-`core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
-including the rules for epochs and nonces.
+- **The record** (`core/src/radio/address.rs`), version 1, is small canonical JSON: the mesh (`meshcore` or
+  `meshtastic`), the radio's name and address, its LoRa settings, the app's random radio key for this chat and its
+  number, and when it was made. [radio-format-v0.md](radio-format-v0.md#where-the-keys-come-from) has every field and
+  the rules for the keys.
+- **It lives in the chat's state,** as an MLS app component in the direct chat's GroupContext (`0xf910` or `0xf911`,
+  one for each member; [mdk.md](mdk.md#radio-records-in-the-chats-state)): never a message, never in a group, never
+  published. Nothing shows in either chat.
+- **Writing.** With a radio, the core writes its record in every direct chat whose state doesn't have it: when the
+  radio is attached, when a chat starts or changes, and every minute. A different radio, other settings or a change of
+  membership make a new record with a new key.
+- **Reading.** The core reads the contact's component at start and on every new epoch of the chat. A request's records
+  are read once it is accepted.
+- **Older builds** send version 0, the address and settings alone, as an app event of kind 9911. It is still read, and
+  no longer sent.
+- **What shows.** A contact with a MeshCore radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under
+  "Your contacts by mesh".
+- **Meshtastic.** Records are made, stored and picked by mesh, tested with mock radios. No Meshtastic radio can be
+  paired yet, and only MeshCore sends.
 
 **The format.** [radio-format-v0.md](radio-format-v0.md) describes a chat message in one packet (#38), with test
 vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements it (#39), and `core/fuzz` fuzzes its
@@ -143,8 +141,18 @@ account. Trying it on a real radio waits for hardware day (#12).
 - **`MeshCoreRadio`** (`core/src/radio/meshcore.rs`):
   - `connect_serial(port)` connects over USB serial on desktops. A radio that doesn't answer its greeting, or that is
     dropped, lets go of the port, so that it can be opened again (#24).
+  - `connect_tcp(host, port)` connects over TCP on desktops, and watches the link from the start. The radio lab
+    reaches its Bluetooth radio this way, through a bridge on the same computer
+    ([radio-lab.md](radio-lab.md#the-bluetooth-bridge), #135). The app doesn't offer Bluetooth or TCP pairing.
   - `over(commands, dispatcher)` works over meshcore-rs's command handler and event dispatcher. That is for a link
     the app runs itself, such as Bluetooth on phones (#23), and for tests.
+  - `watch_link(every)` checks a link that can end silently: no more frames arrive, and what is written goes
+    nowhere. A check asks for the battery level (command 20), which changes nothing and puts nothing on the air. Two
+    checks in a row without any answer count as a lost link: `Disconnected` follows, and the core looks for the paired
+    radio again as after any lost link ([Pairing](#pairing)). `connect_tcp` checks every 10 seconds, so such a drop is
+    noticed within about 30. A connection that closes is noticed at once.
+  - `advertise()` has the radio announce itself to the radios in direct range. It changes no setting. Only the radio
+    lab uses it.
 - **`MockMesh` and `MockRadio`** (`core/src/radio/mock.rs`): radios on a mesh in memory. They hear each other, confirm
   delivery, and can be taken out of range. They're for tests and for interface work without hardware. `MockPorts`
   plugs them into mock USB ports, for pairing (#24).
@@ -184,7 +192,7 @@ With two radios, `path_spike` measures the three paths for the app's packets (#3
 
 | Platform | Link | Features |
 | --- | --- | --- |
-| Desktop | USB serial | `serial` |
+| Desktop | USB serial; TCP for the radio lab's Bluetooth bridge (#135) | `serial`, `tcp` |
 | iOS, Android | Bluetooth through the app (#23), passed in with `MeshCoreRadio::over` | none |
 
 - With no feature, the protocol code still builds, and `cargo check` passes for iOS and Android with every feature.
@@ -277,12 +285,16 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
 
 - **Ports.** Each fake listens on 127.0.0.1, on a free port unless `Config::port` names one, so tests run in parallel.
 - **Commands.** App start, device query, contacts, sending a direct message and collecting received ones, with the
-  message-waiting and send-confirmed pushes, reading and setting the clock (never backwards), and sending an advert.
-  An advert is stamped with the sender's clock, and a radio that holds the sender as a contact reports it only if it
-  is later than the last one it took. Any other command gets the "unsupported" error. `set_clock` puts a clock off,
-  and `lose_next_messages` loses a chosen number of messages.
+  message-waiting and send-confirmed pushes, reading and setting the clock (never backwards), sending an advert (#134)
+  and the battery level (#135). An advert is stamped with the sender's clock. A radio that holds the sender as a contact
+  reports it only if it is later than the last one it took; one that doesn't adds the sender, if it has room. Any other
+  command gets the "unsupported" error. `set_clock` puts a clock off, and `lose_next_messages` loses a chosen number of
+  messages.
 - **Pairs.** `pair` starts two radios that hear each other and hold each other as contacts; `link` does so for two that
-  are already running. `add_contact` adds more.
+  are already running. `add_contact` adds more. `put_in_range` makes two radios hear each other without making them
+  contacts: each adds the other when it hears it announce itself.
+- **A lost link.** `go_quiet` makes the link to the app go quiet without closing it, as a lost Bluetooth link looks to
+  meshcore-rs. An app that connects again is served as usual.
 - **Knobs** (`Config`, per radio):
 
   | Field | Effect |
@@ -293,12 +305,13 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
   | `max_contacts` | Size of the contact table. Reported halved, as firmware does |
   | `seed` | Repeats the same choice of what is lost or duplicated |
   | `reply_latency` | How long the radio takes to answer its app, 20 ms by default (see [meshcore-rs](#meshcore-rs)) |
+  | `frequency_khz` | The frequency the radio reports, 869 618 by default |
 
 - **Fixtures.** `Fixture::load` reads captured frames and `FakeRadio::replay` answers with them. A fixture is a text
   file with one frame per line, in order: `app` or `radio`, a space, then the payload in hex without the stream
   framing. `#` starts a comment line. The app's commands are compared by their first byte only; `replay_mismatches` and
   `replay_remaining` tell whether the app followed the capture.
-- **What it isn't.** One hop, no routes, new contacts from adverts, channels or airtime. The signal strength is always 7.25 dB. Its
+- **What it isn't.** One hop, no routes, channels or airtime, and no push for a new contact. The signal strength is always 7.25 dB. Its
   frames follow the layouts above, not a comparison with a real radio, and the fixture in `fake-radio/tests/fixtures`
   is built by hand until real captures exist (#133).
 
@@ -306,6 +319,11 @@ let radio = MeshCoreRadio::over(link.commands().clone(), link.dispatcher()).awai
 
 `fake-radio/tests/issue_132_fake_radio.rs` runs meshcore-rs against the fake: each command, a pair, each knob and the
 replay. `core/tests/issue_132_radio_over_tcp.rs` runs `MeshCoreRadio` over a pair.
+
+`core/tests/issue_135_ble_link.rs` covers the link that ends silently, against a fake that goes quiet: the lost link
+is reported, the core opens the paired radio again without a restart, and radios that announce themselves become
+contacts. `core/tests/issue_135_ble_bridge.rs` runs the Bluetooth bridge with a fake radio behind it (Macs only).
+The same over real Bluetooth is the radio lab's run ([radio-lab.md](radio-lab.md#the-bluetooth-bridge)).
 
 `core/tests/radio.rs`:
 
