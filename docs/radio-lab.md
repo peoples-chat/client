@@ -4,7 +4,7 @@
 `pnpm verify`, which needs no hardware.
 
 ```sh
-pnpm verify:radio             # checks every USB radio, then that each still responds
+pnpm verify:radio             # checks every USB radio, then tests the first two on the air
 pnpm verify:radio --dry-run   # lists the radios it found and their firmware
 ```
 
@@ -20,11 +20,47 @@ pnpm verify:radio --dry-run   # lists the radios it found and their firmware
    frequency, bandwidth, spreading factor and coding rate against `[lab]`, and its transmit power against
    `max_tx_power_dbm`. All radios are checked, every difference is reported, and then the run fails.
 5. **Checks that each radio still responds**, by asking for its contacts. A dry run stops after step 4.
+6. **Sets each radio's clock** to the computer's time (`set_time`, command 6), and prints what it read before and
+   after. This happens once every radio has passed the checks, and before anything goes on the air. A radio ignores an
+   advert that isn't stamped later than the last one it took from that contact, so one whose clock is behind goes
+   unheard. The clock isn't a protected setting; the MeshCore app sets it on every connect. A radio doesn't move its
+   clock back: one that is ahead keeps its time, and the run says so and goes on.
 
-The harness sends nothing over the air. The message tests come with #134, and Bluetooth with #135: a radio without a
-`usb_serial` is listed as not checked.
+A run that isn't dry then goes on to the [over-the-air tests](#the-over-the-air-tests). Bluetooth comes with #135: a
+radio without a `usb_serial` is listed as not checked.
 
 It exits with 0 when all passed, 1 when something failed, 2 for a wrong argument and 130 when interrupted.
+
+## The over-the-air tests
+
+After the checks, the first two USB radios in the file are tested on the air (#134, `messages.rs`). Two apps, each with
+its own core and an empty data folder, become contacts through a relay inside the harness. Each core pairs its radio
+over USB as the app does, and writes its radio record, with its radio key (#128), into the chat's state, which the
+relay carries. The relay is then shut, so only the radios can carry what follows.
+
+| Check | Passes when |
+| --- | --- |
+| Pairing (#24) | Each app pairs its radio, and warns about the preset unless it is EU/UK (Narrow) |
+| Address records (#34, #128) | Each app has the other's current record: its radio and its radio key |
+| Reachability (#44) | Neither contact is reachable by radio until their radio's advert is heard |
+| Messages (#40, #41) | A message each way arrives and is acknowledged within 60 s, with at most one retry |
+| Reconnecting (#24) | The second radio's serial port is closed for 5 s; the app opens it again by itself, and the next message arrives |
+
+The times to arrive and to be acknowledged are printed, with the radio's own estimate.
+
+**What goes on the air:** one zero-hop advert from each radio (sent again up to twice if not heard), three short
+messages, any retry, and the radios' own acknowledgements.
+
+**When an advert isn't reported** after three tries, the run fails, and says what the sender's clock reads, the advert
+time the other radio holds for it, and the computer's time. No message is sent instead. If the held time is in the
+future, setting the clocks can't help: that contact's stored time has to go first.
+
+The app itself doesn't set a radio's clock; only the harness does.
+
+**Closing the port isn't a power cycle.** The radio keeps running. The harness closes the port, tells the app the link
+ended, and hides the port until it "plugs it in" again.
+
+`pnpm verify` runs the same tests against two fake radios (`hardware_tests.rs`).
 
 ## The lab file
 
@@ -77,7 +113,7 @@ Cycling a hub port restarts only a radio that has no battery of its own.
 
 It never changes a radio's firmware, frequency, preset or power. Every frame goes through the harness's own serial
 link (`link.rs`), which lets only these companion commands through: app start (1), send text (2), contacts (4), time
-(5), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and device query (22).
+(5), set time (6), advert (7), add or update a contact (9), next message (10), reset path (13), battery (20) and device query (22).
 Anything else is refused and logged as `blocked`.
 
 ## The frame log
@@ -91,10 +127,14 @@ Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame, in ord
 - `dir` is `to_radio`, `from_radio`, or `blocked` for a command the harness refused to send.
 - `frame` is the companion frame in hex, without the serial link's start byte and length. A `from_radio` frame can be
   handed to meshcore-rs's `MessageReader::handle_rx` as it is, so the log serves as fixtures for a fake radio.
-- The radio's Bluetooth PIN and every position (the radio's own and its contacts') are zeroed, because fixtures end
-  up in the repository. Lengths don't change.
+- The radio's Bluetooth PIN and every position (the radio's own, its contacts' and those in adverts heard) are zeroed,
+  because fixtures end up in the repository. Lengths don't change.
 
-A log still holds public keys, contact names and, in later tests, message packets. Look at one before committing it.
+Next to the log, each run saves one fixture per radio, `frames-…-R1.frames`, in the format the fake radio's
+`Fixture::load` reads ([radio.md](radio.md#fake-radios-over-tcp)). They are saved also when a test fails.
+
+A log and its fixtures still hold public keys, contact names and message packets. Look at them before committing or
+publishing them.
 
 ## Adding a hardware test
 

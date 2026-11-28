@@ -182,5 +182,7 @@ fn queued_view(queued: &Queued) -> Message {
         transport: Transport::Internet,
         delivery: Some(DeliveryState::Waiting),
         cancellable: true,
+        // Its time starts when it goes (#124).
+        expires_at: None,
     }
 }

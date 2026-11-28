@@ -55,6 +55,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
 | `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40, #45) |
 | `cancelMessage(chatId, messageId)` | `cancel_message` | | `messageRemoved` | Done (#46) |
+| `markRead(chatId)` | `mark_read` | | | Done (#124) |
 | `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `radioPorts()` | `radio_ports` (computers only) | `RadioPort[]` | | Done (#24) |
@@ -72,7 +73,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
-| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id, or a message disappeared. `chatId` can be an invitation's id | Done (#46, #124) |
+| `disappearingChanged` | `chatId`, `disappearAfter` (optional) | Someone in the chat turned disappearing messages on or off, or changed the timer | Done (#124) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
@@ -88,8 +90,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
-| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `disappearAfter` (optional, seconds, #124) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -285,8 +287,26 @@ that comes before the user accepts an invitation is added to the invitation: `me
 - `sentAt` is the sender's clock, in whole seconds. After a restart, messages sent within the same second can come back
   in another order.
 
+**Disappearing messages** (#124, `core/src/app/expiry.rs`). peoples.chat doesn't offer the timer, but anyone in a
+chat can set it: Marmot lets any admin ([message-retention-v1](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/app-components/message-retention-v1.md#L68-L70)),
+both people are admins in a chat MDK starts, and White Noise for Android offers it in direct chats.
+
+- **The chat's timer** is `disappearAfter`, in seconds; `disappearingChanged` follows it. The chat says "Messages
+  disappear 1 week after they are sent." under its header while it is on.
+- **Each message sent while it is on** has `expiresAt`: the sender's clock when it was sent, plus the timer then. A
+  later change to the timer doesn't change it. Expiry is advisory, since it counts from the sender's clock.
+- **When its time is up**, the core takes the message away with `messageRemoved`, also from an invitation, and the
+  snapshot no longer has it. A radio message loses its text in `radio.json` then; its id stays, for the replay check.
+- **From disk.** MDK deletes expired messages only when asked (`sweep_expired_retention`), and holds back one the user
+  hasn't read, or a whole chat while a message in it expired less than 5 seconds ago. The core asks soon after start, 6
+  seconds after the latest expiry, after `markRead`, and every minute.
+- **`markRead(chatId)`** says the user has seen the chat up to its newest message. The interface calls it while it
+  shows the chat. MDK's read mark stays on this device: nothing is sent, so the other person isn't told.
+- A message that waits for a path (#46) gets its time once it goes.
+
 **Not built yet:**
 
+- turning disappearing messages on from peoples.chat;
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
 - editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
 
