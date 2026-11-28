@@ -246,6 +246,7 @@ impl Radio for MeshCoreRadio {
             },
             firmware: device.as_ref().and_then(|device| device.version.clone()),
             model: device.and_then(|device| device.model),
+            meshtastic: None,
         })
     }
 

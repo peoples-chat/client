@@ -10,7 +10,6 @@
 //! on) and a few short messages, plus the retries. The Bluetooth run (`ble.rs`) sends its own.
 
 use std::io::Write;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
@@ -21,8 +20,8 @@ use peoples_chat_core::interface::{
     Chat, DeliveryState, Direction, Mesh, RadioConnection, RadioIssue, Reach, Transport,
 };
 use peoples_chat_core::radio::{
-    EXPECTED_PRESET, MeshCoreRadio, Port, Radio, RadioContact, RadioError, RadioEvent, RadioInfo,
-    RadioPorts, Sent,
+    EXPECTED_PRESET, Mesh as RadioMesh, MeshCoreRadio, Port, Radio, RadioContact, RadioError,
+    RadioEvent, RadioInfo, RadioPorts, Sent,
 };
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -259,7 +258,8 @@ impl RadioPorts for LabPorts {
 /// One side of the test: a phone, its core and its radio.
 struct Side {
     label: String,
-    phone: Phone,
+    /// Holds the core's data folder for as long as the side lives.
+    _phone: Phone,
     core: Core,
     ports: Arc<LabPorts>,
 }
@@ -275,18 +275,10 @@ impl Side {
         }
         Self {
             label: entry.label.clone(),
-            phone,
+            _phone: phone,
             core,
             ports,
         }
-    }
-
-    fn account_key(&self) -> String {
-        self.core
-            .snapshot()
-            .account
-            .map(|account| account.public_key)
-            .unwrap_or_default()
     }
 
     fn chat(&self, chat_id: &str) -> Option<Chat> {
@@ -305,11 +297,6 @@ impl Side {
             .map(|paired| paired.connection)
     }
 
-    /// The radio key this phone has stored for the contact `account`, from `radio.json`.
-    fn stored_radio_of(&self, account: &str) -> Option<String> {
-        stored_radio(self.phone.data_dir(), account)
-    }
-
     fn retries(&self) -> usize {
         self.core
             .radio_transmissions()
@@ -317,12 +304,6 @@ impl Side {
             .filter(|sent| sent.reason == "retry")
             .count()
     }
-}
-
-fn stored_radio(data_dir: &Path, account: &str) -> Option<String> {
-    let text = std::fs::read_to_string(data_dir.join("radio.json")).ok()?;
-    let store: serde_json::Value = serde_json::from_str(&text).ok()?;
-    Some(store["contacts"][account]["key"].as_str()?.to_owned())
 }
 
 /// Waits up to `wait` until `done` returns something.
@@ -412,22 +393,26 @@ async fn scenario(
         let _ = writeln!(out, "ok {}: paired on {path}, {warning}", side.label);
     }
 
-    // Address records (#34).
-    let radio_keys = [ada, bea].map(|side| {
-        side.core
+    // Address records (#34), with the radio keys (#128): both come with the chat's state.
+    for (side, other) in [(ada, bea), (bea, ada)] {
+        let other_radio = other
+            .core
             .snapshot()
             .radio
             .paired
-            .map(|paired| paired.public_key.to_ascii_lowercase())
-    });
-    for (side, other, other_radio) in [(ada, bea, &radio_keys[1]), (bea, ada, &radio_keys[0])] {
-        let account = other.account_key();
+            .map(|paired| paired.public_key.to_ascii_lowercase());
         within(
             waits.app,
             &format!("{}: {}'s address record", side.label, other.label),
             || {
                 let meshes = side.chat(&chat_id)?.contact.meshes;
-                (meshes == [Mesh::MeshCore] && side.stored_radio_of(&account) == *other_radio)
+                let record = side
+                    .core
+                    .radio_contact_record(&chat_id, RadioMesh::MeshCore)?;
+                let current = other.core.radio_own_record(&chat_id, RadioMesh::MeshCore)?;
+                (meshes == [Mesh::MeshCore]
+                    && Some(record.addr.key()) == other_radio.as_deref()
+                    && record == current)
                     .then_some(())
             },
         )
@@ -488,12 +473,14 @@ async fn scenario(
     Ok(())
 }
 
-/// Waits until both phones have the chat's radio keys in the same epoch.
+/// Waits until both phones have the chat settled in the same epoch.
 async fn settled(wait: Duration, ada: &Core, bea: &Core, chat_id: &str) -> Result<(), String> {
     let deadline = Instant::now() + wait;
     loop {
-        if let (Ok(a), Ok(b)) = (ada.radio_keys(chat_id).await, bea.radio_keys(chat_id).await)
-            && a.epoch == b.epoch
+        if let (Ok(a), Ok(b)) = (
+            ada.chat_membership(chat_id).await,
+            bea.chat_membership(chat_id).await,
+        ) && a.epoch == b.epoch
         {
             return Ok(());
         }

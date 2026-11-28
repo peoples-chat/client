@@ -39,14 +39,14 @@ It exits with 0 when all passed, 1 when something failed, 2 for a wrong argument
 ## The over-the-air tests
 
 After the checks, the first two USB radios in the file are tested on the air (#134, `messages.rs`). Two apps, each with
-its own core and an empty data folder, become contacts through a relay inside the harness, which also carries their
-radio address records. The relay is then shut, so only the radios can carry what follows. Each core pairs its radio
-over USB as the app does.
+its own core and an empty data folder, become contacts through a relay inside the harness. Each core pairs its radio
+over USB as the app does, and writes its radio record, with its radio key (#128), into the chat's state, which the
+relay carries. The relay is then shut, so only the radios can carry what follows.
 
 | Check | Passes when |
 | --- | --- |
 | Pairing (#24) | Each app pairs its radio, and warns about the preset unless it is EU/UK (Narrow) |
-| Address records (#34) | Each app stores the other radio's key |
+| Address records (#34, #128) | Each app has the other's current record: its radio and its radio key |
 | Reachability (#44) | Neither contact is reachable by radio until their radio's advert is heard |
 | Messages (#40, #41) | A message each way arrives and is acknowledged within 60 s, with at most one retry |
 | Reconnecting (#24) | The second radio's serial port is closed for 5 s; the app opens it again by itself, and the next message arrives |

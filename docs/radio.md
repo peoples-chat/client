@@ -9,30 +9,28 @@ reachable and the contact's radio has been heard (#44, #45), or while the switch
 a radio over USB ([Pairing](#pairing), #24); phones will over Bluetooth (#23). The path for the packets comes with #36.
 [radio-format-v0.md](radio-format-v0.md#in-the-core) describes how the core sends and receives.
 
-**Addresses.** Each app learns its contacts' radios from their radio address records (#34), with nobody doing
-anything:
+**Addresses and keys** (#34, #128). Each app learns its contacts' radios, and the keys they encrypt with, from their
+radio address records, with nobody doing anything. The decisions are on
+[#128](https://github.com/peoples-chat/client/issues/128).
 
-- **The record** (`core/src/radio/address.rs`) is small, versioned JSON: the mesh, the radio's public key, its LoRa
-  settings (frequency in kHz, bandwidth in Hz, spreading factor, coding rate) and when it was made, in milliseconds.
-
-  ```json
-  {"v":0,"mesh":"meshcore","key":"…64 hex…","freq":869618,"bw":62500,"sf":8,"cr":8,"at":1795300000000}
-  ```
-
-- **It travels** as an app event of kind 9911 inside the direct chat ([mdk.md](mdk.md#app-events)): never in a group,
-  never published.
-- **Sending.** With a radio, the core sends its record in every direct chat that hasn't had this one: when the radio
-  is attached, when a chat starts, and every minute for chats it couldn't reach. A different radio, or the same one with
-  other settings, makes a new record; the same radio keeps the time of its first record, so it isn't sent again.
-- **Receiving.** The newest record of a chat's contact becomes their radio in `radio.json`. Records that came while the
-  app was closed are read when it starts, and those in a request when it is accepted. A record of another version or
-  mesh, or with a malformed key or settings out of LoRa's range, changes nothing.
-- **What shows.** A contact with a radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under "Your
-  contacts by mesh".
-
-**Keys.** Radio messages are encrypted with keys derived from the chat's MLS state (#37), with one key per direction.
-`core/src/radio/keys.rs` derives them, and [spikes/37-radio-keys.md](spikes/37-radio-keys.md) has the finding,
-including the rules for epochs and nonces.
+- **The record** (`core/src/radio/address.rs`), version 1, is small canonical JSON: the mesh (`meshcore` or
+  `meshtastic`), the radio's name and address, its LoRa settings, the app's random radio key for this chat and its
+  number, and when it was made. [radio-format-v0.md](radio-format-v0.md#where-the-keys-come-from) has every field and
+  the rules for the keys.
+- **It lives in the chat's state,** as an MLS app component in the direct chat's GroupContext (`0xf910` or `0xf911`,
+  one for each member; [mdk.md](mdk.md#radio-records-in-the-chats-state)): never a message, never in a group, never
+  published. Nothing shows in either chat.
+- **Writing.** With a radio, the core writes its record in every direct chat whose state doesn't have it: when the
+  radio is attached, when a chat starts or changes, and every minute. A different radio, other settings or a change of
+  membership make a new record with a new key.
+- **Reading.** The core reads the contact's component at start and on every new epoch of the chat. A request's records
+  are read once it is accepted.
+- **Older builds** send version 0, the address and settings alone, as an app event of kind 9911. It is still read, and
+  no longer sent.
+- **What shows.** A contact with a MeshCore radio has `meshes: ["meshCore"]`, and Settings → Radio counts them under
+  "Your contacts by mesh".
+- **Meshtastic.** Records are made, stored and picked by mesh, tested with mock radios. No Meshtastic radio can be
+  paired yet, and only MeshCore sends.
 
 **The format.** [radio-format-v0.md](radio-format-v0.md) describes a chat message in one packet (#38), with test
 vectors from `scripts/radio_vectors.py`. `core/src/radio/format.rs` implements it (#39), and `core/fuzz` fuzzes its

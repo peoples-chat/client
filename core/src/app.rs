@@ -23,12 +23,12 @@ use crate::invite;
 use crate::invites::{InviteRecord, Invites};
 use crate::known_chats::KnownChats;
 use crate::messaging::{
-    ChatForm, ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions,
-    NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
+    ChatForm, ChatItem, DirectChat, EpochChange, InviteToken, Messaging, MessagingError,
+    MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage,
+    canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
-use crate::radio::RadioKeys;
 use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
@@ -771,31 +771,8 @@ impl Core {
             .ok_or_else(|| failed("send the message", "the message is missing after sending"))
     }
 
-    /// The keys for radio messages in the chat `chat_id`, in its current MLS epoch (#37). For the
-    /// radio transport inside the core (#39), not for an interface: the keys never leave the core.
-    pub async fn radio_keys(&self, chat_id: &str) -> Result<RadioKeys, CommandError> {
-        let account = self.account()?;
-        let chat = self
-            .chat(chat_id)
-            .ok_or_else(|| CommandError::new("This chat no longer exists."))?;
-        let secret = self
-            .inner
-            .messaging
-            .chat_secret(&account.public_key, chat_id)
-            .await
-            .map_err(|error| failed("derive the radio keys", error))?;
-        RadioKeys::derive(
-            &secret.secret,
-            secret.epoch,
-            &account.public_key,
-            &chat.contact.public_key,
-        )
-        .map_err(|error| failed("derive the radio keys", error))
-    }
-
     /// Updates the account's own key in the chat `chat_id`. Once the relays confirm it, the
-    /// chat is in a new MLS epoch, with new radio keys. MDK does this by itself every 24 to 36
-    /// days.
+    /// chat is in a new MLS epoch. MDK does this by itself every 24 to 36 days.
     pub async fn update_own_key(&self, chat_id: &str) -> Result<(), CommandError> {
         let account = self.account()?;
         if self.chat(chat_id).is_none() {
@@ -879,6 +856,9 @@ impl Core {
     /// and keeps them up to date. Chats whose contacts' names are known go in now; the rest
     /// arrive as events once their names are. Follows the relays too, for each chat's reach.
     async fn follow(&self, account_hex: &str) {
+        // Chats' new epochs from before the chats are read, so that no change to a chat's state
+        // is missed (#128).
+        let mut epochs = self.inner.messaging.follow_epochs();
         // Messages first: a message that arrives while the chats are being read is then either
         // in a chat's history already or among the messages followed from here.
         let messages = self.inner.messaging.follow_messages(account_hex).await;
@@ -962,6 +942,16 @@ impl Core {
                 tokio::time::sleep(CONTACT_REFRESH).await;
             }
         });
+        let core = Arc::downgrade(&self.inner);
+        let epoch_watcher = tokio::spawn(async move {
+            while let Some(change) = epochs.next().await {
+                let Some(core) = upgrade(&core) else { return };
+                match change {
+                    EpochChange::Chat(chat_id) => core.radio_chat_changed(&chat_id),
+                    EpochChange::Missed => core.refresh_radio_records().await,
+                }
+            }
+        });
         // Disappearing messages, soon after start (#124).
         let expiry_watcher = tokio::spawn(expiry::watch_expiry(
             Arc::downgrade(&self.inner),
@@ -971,6 +961,7 @@ impl Core {
             chat_watcher,
             message_watcher,
             contact_watcher,
+            epoch_watcher,
             expiry_watcher,
         ];
         if let Some(relays) = relays {
@@ -1000,6 +991,7 @@ impl Core {
         // The relays the chat goes through may decide its reach.
         self.reach().set_chat_relays(&chat.id, &chat.relays);
         self.refresh_reach(Instant::now());
+        self.radio_chat_changed(&chat.id);
         // Someone may have turned disappearing messages on or off (#124).
         self.disappearing_changed(&chat);
         if self.reflects(&chat) {
