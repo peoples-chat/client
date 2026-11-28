@@ -65,6 +65,8 @@ async fn run() -> ExitCode {
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),
+        chat_media_servers: Vec::new(),
+        lookup_relays: Vec::new(),
     })
     .await
     .expect("the core starts");
