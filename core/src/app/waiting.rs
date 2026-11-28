@@ -149,7 +149,7 @@ impl Core {
 
     /// Takes the message out of the chat, and emits [`CoreEvent::MessageRemoved`] if it was
     /// there.
-    fn remove_message(&self, chat_id: &str, message_id: &str) {
+    pub(super) fn remove_message(&self, chat_id: &str, message_id: &str) {
         let mut state = self.state();
         let Some(chat) = state.chats.iter_mut().find(|chat| chat.id == chat_id) else {
             return;

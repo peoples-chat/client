@@ -30,7 +30,9 @@ use crate::radio::RadioKeys;
 use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
+use crate::vault::Vault;
 
+mod copies;
 mod pairing;
 mod radio;
 mod waiting;
@@ -77,6 +79,8 @@ struct Inner {
     outbox: Outbox,
     /// Chats whose waiting messages are being sent.
     flushing: Mutex<std::collections::HashSet<String>>,
+    /// Encrypts the message text the core keeps itself (#127).
+    vault: Arc<Vault>,
 }
 
 impl Core {
@@ -92,8 +96,10 @@ impl Core {
             log::warn!("could not check the radio confirmations: {error}");
             Vec::new()
         });
-        let outbox = Outbox::open(&options.data_dir);
+        let data_dir = options.data_dir.clone();
         let messaging = Messaging::open(options).await?;
+        let vault = Arc::new(Vault::new(messaging.secret_store()));
+        let outbox = Outbox::open(&data_dir, vault.clone());
         // The proof of concept has one account per device.
         let account = match messaging.accounts()?.into_iter().next() {
             Some(existing) => Some(account_view(
@@ -131,8 +137,12 @@ impl Core {
                 radio: radio::RadioParts::default(),
                 outbox,
                 flushing: Mutex::new(std::collections::HashSet::new()),
+                vault,
             }),
         };
+        if let Some(account) = &account {
+            core.use_data_key(&account.public_key);
+        }
         // The switch, and the paired radio until the shell gives the core its ports (#24).
         core.radio_changed();
         if let Some(account) = account {
@@ -186,6 +196,7 @@ impl Core {
         .map_err(|error| failed("create the account", error))?;
 
         log::info!("account created");
+        self.use_data_key(&account.public_key);
         self.state().account = Some(account.clone());
         self.emit(CoreEvent::AccountCreated {
             account: account.clone(),
@@ -445,6 +456,9 @@ impl Core {
         self.clear_radio();
         if let Err(error) = self.inner.outbox.clear() {
             log::warn!("could not remove the waiting messages: {error}");
+        }
+        if let Err(error) = self.inner.vault.forget() {
+            log::warn!("could not remove the data key: {error}");
         }
         self.emit(CoreEvent::AccountDeleted);
         // The paired radio went with the account, but the device can still pair one (#24).
@@ -870,6 +884,8 @@ impl Core {
                 None
             }
         };
+        // Radio messages whose relay copies came while the app was closed (#127).
+        self.settle_radio_copies(account_hex);
         let mut unnamed = Vec::new();
         for chat in chats.current() {
             self.reach().set_chat_relays(&chat.id, &chat.relays);
@@ -911,7 +927,12 @@ impl Core {
             while let Some(item) = messages.next().await {
                 let Some(core) = upgrade(&core) else { return };
                 match item {
-                    ChatItem::Text(message) => core.apply_message(&message),
+                    ChatItem::Text(message) => {
+                        // MDK has it, so the core's own copy of its text goes (#127).
+                        core.drop_radio_text(&message.id);
+                        core.apply_message(&message);
+                    }
+                    ChatItem::Unshown { message_id } => core.drop_radio_text(&message_id),
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
                     ChatItem::RadioAddress(address) => core.radio_address_received(&address),
                 }
@@ -1219,7 +1240,10 @@ impl Core {
             match self.inner.messaging.chat_messages(account_hex, chat_id) {
                 Ok(messages) => messages
                     .iter()
-                    .map(|message| message_view(message, store.message(&message.id).as_ref()))
+                    .map(|message| {
+                        self.drop_radio_text(&message.id);
+                        message_view(message, store.message(&message.id).as_ref())
+                    })
                     .collect(),
                 Err(error) => {
                     log::warn!("could not read a chat's messages: {error}");
@@ -1230,7 +1254,7 @@ impl Core {
         let mut more: Vec<Message> = kept
             .iter()
             .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
-            .map(radio_view)
+            .filter_map(|radio| self.radio_only_message(account_hex, radio))
             .collect();
         // Messages that wait for a path (#46).
         more.extend(self.queued_messages(chat_id));
@@ -1456,7 +1480,7 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
 }
 
 /// A message that came by radio, before its relay copy has.
-fn radio_view(radio: &RadioMessage) -> Message {
+fn radio_view(radio: &RadioMessage, text: String) -> Message {
     Message {
         id: radio.id.clone(),
         direction: if radio.outgoing {
@@ -1464,7 +1488,7 @@ fn radio_view(radio: &RadioMessage) -> Message {
         } else {
             Direction::In
         },
-        text: radio.text.clone(),
+        text,
         sent_at: radio.sent_at,
         transport: Transport::Radio,
         delivery: radio.outgoing.then_some(if radio.confirmed {

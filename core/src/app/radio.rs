@@ -627,7 +627,10 @@ impl Core {
                     chat_id: chat_id.to_owned(),
                     id: message_id.clone(),
                     outgoing: true,
-                    text: text.to_owned(),
+                    // MDK has the message already, so the radio store never needs its text.
+                    sealed: None,
+                    plain: None,
+                    expires_at: None,
                     sent_at: message.sent_at,
                     ack: Some(sent.ack.clone()),
                     retry_acks: Vec::new(),
@@ -874,11 +877,32 @@ impl Core {
             sent_at: u64::from(received.sent_at) * 1000,
             acknowledged: false,
         };
+        // Out of MDK's reach until its relay copy comes, so the core sees to its expiry (#124).
+        let expires_at = self
+            .inner
+            .messaging
+            .disappearing_secs(&account.public_key, &message.chat_id)
+            .await
+            .map(|secs| message.sent_at.saturating_add(secs.saturating_mul(1000)));
+        let gone = expires_at.is_some_and(|at| at <= now_ms());
+        let sealed = if gone {
+            None
+        } else {
+            self.inner
+                .vault
+                .seal(&message.text, &message.id)
+                .inspect_err(|error| {
+                    log::warn!("could not encrypt a message received by radio: {error}");
+                })
+                .ok()
+        };
         let kept = self.inner.radio_store.add_message(RadioMessage {
             chat_id: message.chat_id.clone(),
             id: message.id.clone(),
             outgoing: false,
-            text: message.text.clone(),
+            expires_at: expires_at.filter(|_| sealed.is_some()),
+            sealed,
+            plain: None,
             sent_at: message.sent_at,
             ack: None,
             retry_acks: Vec::new(),
@@ -891,7 +915,21 @@ impl Core {
             // Shown anyway; after a restart it is gone until its relay copy arrives.
             log::warn!("could not keep a message received by radio: {error}");
         }
+        // Kept for its id only: a replay of it shows nothing.
+        if gone {
+            return;
+        }
         self.apply_message(&message);
+        // The relay copy may have come while this one was being taken.
+        if self
+            .inner
+            .messaging
+            .has_message(&account.public_key, &message.chat_id, &message.id)
+        {
+            self.drop_radio_text(&message.id);
+        } else {
+            self.expire_radio_copy_later(&message.id, expires_at);
+        }
     }
 
     fn open_packet(
@@ -905,11 +943,11 @@ impl Core {
                 .radio_store
                 .message(id)
                 .is_some_and(|message| message.chat_id == chat_id)
+                // Also one MDK has as deleted: its packet must not bring the text back.
                 || self
                     .inner
                     .messaging
-                    .chat_message(&account.public_key, chat_id, id)
-                    .is_some()
+                    .has_message(&account.public_key, chat_id, id)
         };
         self.inbox().receive(packet, from_chat, known)
     }

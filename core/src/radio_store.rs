@@ -7,15 +7,16 @@
 //!   (`docs/radio-format-v0.md`).
 //! - **The contacts' radios:** the address book, which their radio address records fill (#34),
 //!   and which record this phone shared in each chat.
-//! - **Every message that travelled by radio,** sent or received, with its id. A received one is
-//!   in no other store until its relay copy arrives, and the ids catch a replayed packet after a
-//!   restart (#42). A sent one keeps the codes its confirmation may carry, and whether one came
-//!   in time (#41).
+//! - **Every message that travelled by radio,** sent or received, with its id and chat. The ids
+//!   catch a replayed packet after a restart (#42). A sent one keeps the codes its confirmation
+//!   may carry, and whether one came in time (#41). A received one is in no other store until its
+//!   relay copy arrives, so until then it keeps its text, encrypted (#127). A sent one never
+//!   does: MDK has it from the start.
 //! - **Every transmission the app caused** in the last two days, with its airtime and reason: the
 //!   hourly airtime cap counts them (#51), and they show that the app sends nothing by itself
 //!   (#52).
 //!
-//! The file is small, and written whole on every change.
+//! The file is small, written whole on every change, and readable by its owner only.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,16 +24,27 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
+use crate::private_file;
 use crate::radio::RadioAddress;
+use crate::vault::Sealed;
 
 /// A message that travelled by radio.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RadioMessage {
+pub(crate) struct RadioMessage {
     pub chat_id: String,
     /// MDK's id for the message, which its relay copy has too.
     pub id: String,
     pub outgoing: bool,
-    pub text: String,
+    /// Incoming, while MDK doesn't have the message: its text, encrypted (#127).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<Sealed>,
+    /// The text of a message kept before #127, until it is sealed or dropped.
+    #[serde(default, rename = "text", skip_serializing_if = "Option::is_none")]
+    pub plain: Option<String>,
+    /// While the text is kept, in a chat whose messages disappear: when this one does, in
+    /// milliseconds since the Unix epoch (#124).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
     /// When the sender sent it, in milliseconds since the Unix epoch (whole seconds).
     pub sent_at: u64,
     /// Outgoing: the code that the other radio's confirmation carries.
@@ -56,6 +68,13 @@ pub struct RadioMessage {
     /// within the same second.
     #[serde(default)]
     pub kept_at: u64,
+}
+
+impl RadioMessage {
+    /// Whether the store still keeps the message's text.
+    pub fn holds_text(&self) -> bool {
+        self.sealed.is_some() || self.plain.is_some()
+    }
 }
 
 /// The radio paired over a cable (#24).
@@ -142,16 +161,35 @@ pub struct RadioStore {
 }
 
 impl RadioStore {
-    /// The store in `data_dir`. A damaged file is kept aside as `radio.json.damaged`. What it
-    /// held is lost, and so are the counters: no chat sends again in an epoch it may have sent
-    /// in before.
+    /// The store in `data_dir`. A damaged file is kept aside as `radio.json.damaged`, unless it
+    /// holds message text from before it was encrypted (#127): then it is removed. What it held
+    /// is lost, and so are the counters: no chat sends again in an epoch it may have sent in
+    /// before.
     pub fn open(data_dir: &Path) -> Self {
         let path = data_dir.join("radio.json");
+        let aside = path.with_extension("json.damaged");
+        // Left over from a crash.
+        if let Err(error) = private_file::remove(&path.with_extension("json.tmp")) {
+            log::warn!("could not remove a leftover of the radio store: {error}");
+        }
+        private_file::restrict(&path);
+        if std::fs::read(&aside).is_ok_and(|bytes| has_plain_text(&bytes)) {
+            if let Err(error) = private_file::remove(&aside) {
+                log::warn!("could not remove an old damaged radio store: {error}");
+            }
+        } else {
+            private_file::restrict(&aside);
+        }
         let data = match std::fs::read(&path) {
             Ok(json) => serde_json::from_slice(&json).unwrap_or_else(|error| {
                 log::error!("the radio store is damaged, and its counters are lost: {error}");
-                if let Err(error) = std::fs::rename(&path, path.with_extension("json.damaged")) {
-                    log::warn!("could not keep the damaged radio store aside: {error}");
+                let put_away = if has_plain_text(&json) {
+                    private_file::remove(&path)
+                } else {
+                    std::fs::rename(&path, &aside)
+                };
+                if let Err(error) = put_away {
+                    log::warn!("could not put the damaged radio store away: {error}");
                 }
                 Data {
                     counters_lost: true,
@@ -311,6 +349,59 @@ impl RadioStore {
             .cloned()
     }
 
+    /// The messages whose text is still kept.
+    pub fn messages_with_text(&self) -> Vec<RadioMessage> {
+        self.lock()
+            .messages
+            .iter()
+            .filter(|message| message.holds_text())
+            .cloned()
+            .collect()
+    }
+
+    /// Drops the text of the message `id`, and keeps what replay checks and confirmations need
+    /// (#127). Returns whether it had any.
+    pub fn forget_text(&self, id: &str) -> std::io::Result<bool> {
+        let mut data = self.lock();
+        let Some(message) = data
+            .messages
+            .iter_mut()
+            .find(|message| message.id == id && message.holds_text())
+        else {
+            return Ok(false);
+        };
+        message.sealed = None;
+        message.plain = None;
+        message.expires_at = None;
+        self.save(&data)?;
+        Ok(true)
+    }
+
+    /// Takes the plain text kept before #127 out of the file: a sent message's is dropped, and a
+    /// received one's is encrypted by `seal`, given the text and the message's id. What `seal`
+    /// can't do now stays, for the next start.
+    pub fn seal_plain(
+        &self,
+        seal: impl Fn(&str, &str) -> std::io::Result<Sealed>,
+    ) -> std::io::Result<()> {
+        let mut data = self.lock();
+        let mut changed = false;
+        for message in &mut data.messages {
+            let Some(plain) = &message.plain else {
+                continue;
+            };
+            if !message.outgoing {
+                message.sealed = Some(seal(plain, &message.id)?);
+            }
+            message.plain = None;
+            changed = true;
+        }
+        if changed {
+            self.save(&data)?;
+        }
+        Ok(())
+    }
+
     /// The chat's messages that travelled by radio, oldest first.
     pub fn messages_in(&self, chat_id: &str) -> Vec<RadioMessage> {
         self.lock()
@@ -438,29 +529,26 @@ impl RadioStore {
     /// Forgets everything, as when the account is deleted.
     pub fn clear(&self) -> std::io::Result<()> {
         *self.lock() = Data::default();
-        match std::fs::remove_file(&self.path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-            _ => Ok(()),
-        }
+        private_file::remove(&self.path.with_extension("json.tmp"))?;
+        private_file::remove(&self.path.with_extension("json.damaged"))?;
+        private_file::remove(&self.path)
     }
 
     fn save(&self, data: &Data) -> std::io::Result<()> {
-        if let Some(folder) = self.path.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
         let json = serde_json::to_vec(data).map_err(std::io::Error::other)?;
-        // Written whole and synced, then moved into place, so that a crash leaves the old file
-        // or the new one: a counter that went out is never forgotten.
-        let temporary = self.path.with_extension("json.tmp");
-        let mut file = std::fs::File::create(&temporary)?;
-        std::io::Write::write_all(&mut file, &json)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, &self.path)
+        // A crash leaves the old file or the new one: a counter that went out is never
+        // forgotten.
+        private_file::replace(&self.path, &json)
     }
 
     fn lock(&self) -> MutexGuard<'_, Data> {
         self.data.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Whether a store that can't be parsed holds message text from before #127.
+fn has_plain_text(json: &[u8]) -> bool {
+    json.windows(7).any(|window| window == b"\"text\":")
 }
 
 /// Whether `message` is one this phone sent by radio whose confirmation is still awaited.
@@ -477,7 +565,9 @@ mod tests {
             chat_id: "chat".to_owned(),
             id: id.to_owned(),
             outgoing: true,
-            text: "Hello".to_owned(),
+            sealed: None,
+            plain: None,
+            expires_at: None,
             sent_at: 1_795_300_000_000,
             ack: Some(ack.to_owned()),
             retry_acks: Vec::new(),
@@ -561,6 +651,76 @@ mod tests {
         let timed_out = |id: &str| reopened.message(id).unwrap().timed_out;
         assert!(timed_out("overdue") && timed_out("older"));
         assert!(!timed_out("awaited") && !timed_out("confirmed") && !timed_out("received"));
+    }
+
+    #[test]
+    fn issue_127_dropped_text_leaves_what_replays_and_confirmations_need() {
+        let data = tempfile::tempdir().unwrap();
+        let vault = crate::vault::test_vault(data.path());
+        let store = RadioStore::open(data.path());
+        store
+            .add_message(RadioMessage {
+                outgoing: false,
+                sealed: Some(vault.seal("Hello", "in").unwrap()),
+                expires_at: Some(5_000),
+                ..sent("in", "")
+            })
+            .unwrap();
+        store.add_message(sent("out", "0001")).unwrap();
+        assert_eq!(store.messages_with_text().len(), 1);
+
+        assert!(store.forget_text("in").unwrap());
+        assert!(!store.forget_text("in").unwrap());
+        assert!(!store.forget_text("out").unwrap());
+        let reopened = RadioStore::open(data.path());
+        assert!(reopened.messages_with_text().is_empty());
+        let kept = reopened.message("in").unwrap();
+        assert_eq!(
+            (kept.chat_id.as_str(), kept.sealed, kept.expires_at),
+            ("chat", None, None)
+        );
+        assert!(reopened.confirm("0001").unwrap().is_some());
+    }
+
+    #[test]
+    fn issue_127_text_kept_by_an_earlier_version_leaves_the_file() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("radio.json");
+        let aside = data.path().join("radio.json.damaged");
+        std::fs::write(
+            &path,
+            br#"{"messages":[
+                {"chat_id":"c","id":"in","outgoing":false,"text":"Received secret","sent_at":1},
+                {"chat_id":"c","id":"out","outgoing":true,"text":"Sent secret","sent_at":2}
+            ]}"#,
+        )
+        .unwrap();
+        std::fs::write(&aside, br#"{"messages":[{"text":"Old secret""#).unwrap();
+        let vault = crate::vault::test_vault(data.path());
+        let store = RadioStore::open(data.path());
+        assert!(!aside.exists());
+        store.seal_plain(|text, id| vault.seal(text, id)).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(!file.contains("secret"), "{file}");
+        let received = store.message("in").unwrap().sealed.unwrap();
+        assert_eq!(
+            vault.open(&received, "in").as_deref(),
+            Some("Received secret")
+        );
+        assert!(!store.message("out").unwrap().holds_text());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        // A damaged file with text from before is removed rather than kept aside.
+        std::fs::write(&path, br#"{"messages":[{"text":"Torn secret""#).unwrap();
+        RadioStore::open(data.path());
+        assert!(!aside.exists());
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(!file.contains("secret"), "{file}");
     }
 
     #[test]

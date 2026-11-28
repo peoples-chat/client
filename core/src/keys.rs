@@ -24,11 +24,14 @@ use marmot_account::{
 ///
 /// A key that can't move, for example because the keychain's prompt was declined, stays where it
 /// is. The home then uses that place, so that the account keeps working.
+///
+/// Returns the store the home uses too: the core keeps its data key there (#127), which moves
+/// along.
 pub(crate) fn open_account_home(
     data_dir: &Path,
     keychain_service: &str,
     keys_in_file: bool,
-) -> AccountHomeResult<AccountHome> {
+) -> AccountHomeResult<(AccountHome, Arc<dyn AccountSecretStore>)> {
     let file: Arc<dyn AccountSecretStore> = Arc::new(LocalFileSecretStore::new(data_dir));
     let keychain: Arc<dyn AccountSecretStore> =
         Arc::new(KeychainSecretStore::new(keychain_service)?);
@@ -53,8 +56,22 @@ pub(crate) fn open_account_home(
             stuck = true;
         }
     }
-    let store = if stuck { other } else { wanted };
-    Ok(AccountHome::open_with_secret_store(data_dir, store))
+    let (store, left) = if stuck {
+        (other, wanted)
+    } else {
+        (wanted, other)
+    };
+    for account in &accounts {
+        if let Err(error) =
+            crate::vault::move_data_key(&account.account_id_hex, left.as_ref(), store.as_ref())
+        {
+            log::warn!("a data key could not move: {error}");
+        }
+    }
+    Ok((
+        AccountHome::open_with_secret_store(data_dir, store.clone()),
+        store,
+    ))
 }
 
 /// Moves `account`'s key from one store to the other. It is removed from `from` only once `to`

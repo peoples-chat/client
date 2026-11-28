@@ -13,10 +13,12 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cgka_traits::{GroupId, TransportEndpoint};
+use marmot_account::AccountSecretStore;
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
     AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, MarmotDeployment, RelayLiveness,
@@ -337,6 +339,11 @@ pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    /// A chat message MDK has, or had, that isn't shown as text: deleted, withdrawn or removed,
+    /// for example. The core drops any copy of its own (#127).
+    Unshown {
+        message_id: String,
+    },
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -344,6 +351,11 @@ fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
         .map(ChatItem::Text)
         .or_else(|| invite_token(record).map(ChatItem::InviteToken))
         .or_else(|| radio_address(record).map(ChatItem::RadioAddress))
+        .or_else(|| {
+            (record.kind == CHAT_KIND).then(|| ChatItem::Unshown {
+                message_id: record.message_id_hex.clone(),
+            })
+        })
 }
 
 /// What comes in the account's chats as it is added or changes: text messages, for example
@@ -368,8 +380,15 @@ impl ChatItems {
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
-                        if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(chat_item(message));
+                        match change {
+                            TimelineMessageChange::Upsert { message, .. } => {
+                                self.ready.extend(chat_item(message));
+                            }
+                            TimelineMessageChange::Remove { message_id_hex, .. } => {
+                                self.ready.push_back(ChatItem::Unshown {
+                                    message_id: message_id_hex.clone(),
+                                });
+                            }
                         }
                     }
                 }
@@ -517,13 +536,15 @@ pub struct Messaging {
     media_server: String,
     allow_loopback: bool,
     profile_copies: Vec<String>,
+    /// Where account keys are, and the core's data key (#127).
+    secrets: Arc<dyn AccountSecretStore>,
 }
 
 impl Messaging {
     /// Opens the stores in the data folder and starts the runtime. Account keys live in the
     /// platform's key store. Must run inside a Tokio runtime, which MDK's relay tasks use.
     pub async fn open(options: MessagingOptions) -> Result<Self, MessagingError> {
-        let home = crate::keys::open_account_home(
+        let (home, secrets) = crate::keys::open_account_home(
             &options.data_dir,
             &options.keychain_service,
             options.keys_in_file,
@@ -555,7 +576,40 @@ impl Messaging {
                 .unwrap_or_else(|| DEFAULT_MEDIA_SERVER.to_owned()),
             allow_loopback: options.allow_loopback,
             profile_copies: options.profile_copies,
+            secrets,
         })
+    }
+
+    /// The store account keys are in.
+    pub(crate) fn secret_store(&self) -> Arc<dyn AccountSecretStore> {
+        self.secrets.clone()
+    }
+
+    /// Whether MDK has the message `message_id`, in any state: also deleted or withdrawn.
+    pub(crate) fn has_message(&self, account_hex: &str, chat_id: &str, message_id: &str) -> bool {
+        matches!(
+            self.runtime
+                .timeline_message(account_hex, chat_id, message_id),
+            Ok(Some(_))
+        )
+    }
+
+    /// After how many seconds the chat's messages disappear, if they do. Any admin sets it, from
+    /// an app that offers it.
+    pub(crate) async fn disappearing_secs(&self, account_hex: &str, chat_id: &str) -> Option<u64> {
+        let group_id = group_id(chat_id).ok()?;
+        match self
+            .runtime
+            .group_conversation_snapshot(account_hex, &group_id)
+            .await
+        {
+            Ok(snapshot) => Some(snapshot.group.message_retention.disappearing_message_secs)
+                .filter(|secs| *secs > 0),
+            Err(error) => {
+                log::warn!("could not read a chat's disappearing messages setting: {error}");
+                None
+            }
+        }
     }
 
     /// The relays new accounts publish to. Invite links name them as hints.
