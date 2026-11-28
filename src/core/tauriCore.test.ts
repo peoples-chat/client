@@ -173,6 +173,12 @@ describe("the JSON shared with the Rust core", () => {
     const deliveries = [{ since: 1795300170000, reason: "tooLarge" }, undefined];
     const checks: Record<CoreEvent["type"], (next: AppState) => void> = {
       chatAdded: (next) => expect(next.chats.map((c) => c.id)).toEqual(["chat-1", "chat-2"]),
+      chatChanged: (next) =>
+        expect([next.chats.map((c) => c.id), next.chats[1].state, next.chats[1].messages[1].sender?.name]).toEqual([
+          ["chat-1", "chat-2"],
+          "group",
+          "Frida Nygaard",
+        ]),
       messageAdded: (next) => {
         const messages = next.chats[1].messages;
         expect(messages[messages.length - 1].delivery).toBe("waiting");

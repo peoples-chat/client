@@ -82,7 +82,29 @@ export interface Message {
    * message away then with `messageRemoved`.
    */
   expiresAt?: number;
+  /**
+   * Who sent it: on incoming messages in a `group` chat, where it can be someone other than the
+   * contact (#125).
+   */
+  sender?: Sender;
 }
+
+/** Who sent a message (#125). */
+export interface Sender {
+  publicKey: PublicKey;
+  /** Their profile name, or the pseudonym derived from their key. */
+  name: string;
+}
+
+/**
+ * What a chat is now (#125). Only a `direct` chat sends by radio.
+ * - `direct`: the user and the contact, and nobody else.
+ * - `contactLeft`: the contact left the chat, or deleted their account. Nothing can be sent.
+ * - `group`: the chat got a name or another member, in another app. Messages say who sent them.
+ * - `removed`: the user is no longer in the chat, after leaving or being removed in another app.
+ *   Nothing can be sent.
+ */
+export type ChatState = "direct" | "contactLeft" | "group" | "removed";
 
 /**
  * How a chat's messages can travel now (#43).
@@ -92,10 +114,12 @@ export interface Message {
  */
 export type Reach = "internet" | "radio" | "unreachable";
 
-/** A direct chat with one contact. */
+/** A direct chat with one contact, or one that was direct (#125). */
 export interface Chat {
   id: string;
   contact: Contact;
+  /** What the chat is now. Left out while it is `direct`. */
+  state?: ChatState;
   /** Oldest first. */
   messages: Message[];
   reach: Reach;
@@ -258,6 +282,11 @@ export type CoreEvent =
   | { type: "accountCreated"; account: Account }
   | { type: "accountDeleted" }
   | { type: "chatAdded"; chat: Chat }
+  /**
+   * A chat stopped being direct, or ended (#125). Carries the whole chat, which replaces the one
+   * with its id.
+   */
+  | { type: "chatChanged"; chat: Chat }
   | { type: "invitationReceived"; invitation: Invitation }
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }

@@ -56,6 +56,13 @@
   white-space: pre-wrap;
 }
 
+/* Who sent an incoming message, in a chat that is no longer direct (#125). */
+.sender {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
 .meta {
   align-self: flex-end;
   display: flex;
