@@ -35,8 +35,9 @@ async fn an_invitation_opens_the_chat_once() {
     );
     assert_eq!(invite.joined_chat_id, None);
     assert_eq!(ada.snapshot().invites, vec![invite.clone()]);
+    // Relay updates may come first: a connection can open or close at any time.
     assert!(matches!(
-        ada_events.recv().await.unwrap(),
+        support::next_event(&mut ada_events).await,
         CoreEvent::InviteChanged { .. }
     ));
     let error = ada.create_invite("  ").await.unwrap_err();
