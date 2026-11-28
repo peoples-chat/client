@@ -67,10 +67,11 @@ static SENDS: AtomicU64 = AtomicU64::new(0);
 /// Relays for new accounts unless the app is built with others (#18). New accounts publish their
 /// relay lists, profile and KeyPackage here.
 ///
-/// These are public, general-purpose relays. Who runs the project's own relays is decided later
-/// (#11). They don't make accounts made here findable from White Noise: it looks a contact's
-/// relay lists up only on its own relays (#22), and that stays to be decided (#76).
+/// The project's own relay (#90, `relay/`), then three public, general-purpose relays. No two
+/// share an operator. They don't make accounts made here findable from White Noise: it looks a
+/// contact's relay lists up only on its own relays (#22), and that stays to be decided (#76).
 pub const DEFAULT_RELAYS: &[&str] = &[
+    PEOPLES_CHAT_RELAY,
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://relay.primal.net",
@@ -138,9 +139,11 @@ pub fn lookup_relays(relays: &[String]) -> Vec<String> {
     only_on_defaults(relays, WHITE_NOISE_RELAYS)
 }
 
-/// Relays the project runs, which the interface shows as run by peoples.chat (#88). None yet:
-/// who runs the project's relays is decided later (#11).
-pub const PROJECT_RELAYS: &[&str] = &[];
+/// The relay the project runs and pays for (#90). Its configuration is in `relay/`.
+pub const PEOPLES_CHAT_RELAY: &str = "wss://relay.peoples.chat";
+
+/// Relays the project runs, which the interface shows as run by peoples.chat (#88).
+pub const PROJECT_RELAYS: &[&str] = &[PEOPLES_CHAT_RELAY];
 
 /// Where the core keeps its messaging data and which relays it starts with.
 #[derive(Clone, Debug)]
@@ -1443,8 +1446,8 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatForm, DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers,
-        direct_chat, directory_relays, lookup_relays, profile_copy_relays,
+        ChatForm, DEFAULT_RELAYS, PROJECT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay,
+        chat_media_servers, direct_chat, directory_relays, lookup_relays, profile_copy_relays,
     };
     use marmot_app::{AppGroupRecord, SelfMembership};
 
@@ -1507,6 +1510,33 @@ mod tests {
         assert!(!chat.active);
     }
 
+    /// #90: new accounts use the project's relay, and the interface shows it as run by
+    /// peoples.chat. The other defaults stay, each with an operator of its own.
+    #[test]
+    fn issue_90_the_projects_relay_is_a_default_and_run_by_peoples_chat() {
+        assert_eq!(PROJECT_RELAYS, ["wss://relay.peoples.chat"]);
+        assert_eq!(
+            DEFAULT_RELAYS,
+            [
+                "wss://relay.peoples.chat",
+                "wss://relay.damus.io",
+                "wss://nos.lol",
+                "wss://relay.primal.net",
+            ]
+        );
+        // Every project relay is a default, spelled as the core compares relays.
+        for relay in PROJECT_RELAYS {
+            assert_eq!(canonical_relay(relay), *relay);
+            assert!(DEFAULT_RELAYS.contains(relay), "{relay}");
+        }
+        // Only one default is the project's: the others belong to independent operators.
+        let own = DEFAULT_RELAYS
+            .iter()
+            .filter(|relay| PROJECT_RELAYS.contains(relay))
+            .count();
+        assert_eq!(own, 1);
+    }
+
     #[test]
     fn profiles_are_copied_to_white_noise_only_from_the_default_relays() {
         let owned = |relays: &[&str]| relays.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
@@ -1517,6 +1547,7 @@ mod tests {
             profile_copy_relays(&owned(&[
                 "wss://relay.primal.net/",
                 "WSS://nos.lol",
+                "wss://Relay.Peoples.Chat",
                 "wss://relay.damus.io"
             ])),
             white_noise
@@ -1528,10 +1559,10 @@ mod tests {
             &["wss://relay.peoples.chat"],
             &["wss://nos.lol", "wss://relay.primal.net"],
             &[
-                "wss://relay.damus.io",
+                "wss://relay.peoples.chat",
                 "wss://nos.lol",
                 "wss://relay.primal.net",
-                "wss://relay.peoples.chat",
+                "ws://127.0.0.1:7777",
             ],
             &[],
         ] {

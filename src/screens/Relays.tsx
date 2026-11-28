@@ -16,7 +16,7 @@ export function Relays() {
   const { relays } = useAppState();
 
   return (
-    <div className={layout.screen}>
+    <div className={layout.screen} data-testid="relays-screen">
       <ScreenHeader title="Relays and servers" bordered onLeading={navigation.back} />
       <main className={layout.scroll}>
         <p className={styles.intro}>{intro(relays.length)}</p>
@@ -27,6 +27,7 @@ export function Relays() {
             icon="globe"
             label={relayName(relay.url)}
             description={<Description relay={relay} />}
+            testId={`relay-${relayName(relay.url)}`}
           />
         ))}
         <ActionRow icon="plus" label="Add a relay" accent chevron={false} disabled />
