@@ -107,6 +107,16 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
+    /// The sender changed the text since sending it; `text` is the latest (#122).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
+    /// The sender deleted it for everyone. `text` is empty (#122).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+    /// It never reached the chat: it lost a race between two versions of the chat's state, and
+    /// the other side doesn't have it (#122).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub withdrawn: bool,
     /// When the message disappears, in milliseconds since the Unix epoch, for a message sent
     /// while the chat's messages disappear (#124). It counts from the sender's clock. The core
     /// takes the message away then with `messageRemoved`.
@@ -394,8 +404,15 @@ pub enum CoreEvent {
         message_id: String,
         delivery: DeliveryState,
     },
+    /// A message the snapshot has changed (#122): the sender edited or deleted it, or it was
+    /// withdrawn. Carries the whole message, which replaces the one with its id.
+    MessageChanged {
+        chat_id: String,
+        message: Message,
+    },
     /// A message is gone: the user cancelled it while it waited, or it went, and came back
-    /// under MDK's id (#46), or it disappeared once its time was up (#124).
+    /// under MDK's id (#46), or it disappeared once its time was up (#124). Or it is gone from
+    /// this device otherwise (#122).
     MessageRemoved {
         chat_id: String,
         message_id: String,

@@ -826,6 +826,7 @@ impl Core {
                     confirm_by: Some(due(wait)),
                     timed_out: false,
                     kept_at: now_ms(),
+                    deleted: false,
                     expires_at: message.expires_at,
                     expired: false,
                 };
@@ -1053,6 +1054,9 @@ impl Core {
             text: received.text.clone(),
             sent_at: u64::from(received.sent_at) * 1000,
             acknowledged: false,
+            edited: false,
+            deleted: false,
+            withdrawn: false,
             // A packet doesn't say; the chat's timer now does, from the sender's clock (#124).
             expires_at: self.expiry_for(&received.chat_id, u64::from(received.sent_at) * 1000),
         };
@@ -1068,6 +1072,7 @@ impl Core {
             confirm_by: None,
             timed_out: false,
             kept_at: now_ms(),
+            deleted: false,
             expires_at: message.expires_at,
             expired: false,
         });

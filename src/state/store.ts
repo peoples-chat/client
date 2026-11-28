@@ -107,6 +107,26 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
       };
     }
 
+    case "messageChanged": {
+      const replace = (messages: Message[]) => {
+        const known = messages.find((m) => m.id === event.message.id);
+        if (!known || sameMessage(known, event.message)) return messages;
+        return messages.map((m) => (m.id === event.message.id ? event.message : m));
+      };
+      if (state.chats.some((c) => c.id === event.chatId)) {
+        return updateChat(state, event.chatId, (chat) => {
+          const messages = replace(chat.messages);
+          return messages === chat.messages ? chat : { ...chat, messages };
+        });
+      }
+      // Messages that came before the user accepted an invitation change too.
+      const invitation = state.invitations.find((i) => i.id === event.chatId);
+      if (!invitation) return state;
+      const messages = replace(invitation.messages);
+      if (messages === invitation.messages) return state;
+      return { ...state, invitations: state.invitations.map((i) => (i === invitation ? { ...i, messages } : i)) };
+    }
+
     case "disappearingChanged":
       return updateChat(state, event.chatId, (chat) =>
         chat.disappearAfter === event.disappearAfter ? chat : { ...chat, disappearAfter: event.disappearAfter },
@@ -150,6 +170,23 @@ export function applyEvent(state: AppState, event: CoreEvent): AppState {
         : { ...state, invites: [...state.invites, event.invite] };
     }
   }
+}
+
+function sameMessage(a: Message, b: Message): boolean {
+  return (
+    a.id === b.id &&
+    a.direction === b.direction &&
+    a.text === b.text &&
+    a.sentAt === b.sentAt &&
+    a.transport === b.transport &&
+    a.delivery === b.delivery &&
+    (a.cancellable ?? false) === (b.cancellable ?? false) &&
+    (a.edited ?? false) === (b.edited ?? false) &&
+    (a.deleted ?? false) === (b.deleted ?? false) &&
+    (a.withdrawn ?? false) === (b.withdrawn ?? false) &&
+    a.sender?.publicKey === b.sender?.publicKey &&
+    a.sender?.name === b.sender?.name
+  );
 }
 
 /** Whether two chats show the same. Both come from the core as JSON. */

@@ -24,8 +24,8 @@ use crate::invites::{InviteRecord, Invites};
 use crate::known_chats::KnownChats;
 use crate::messaging::{
     ChatForm, ChatItem, DirectChat, EpochChange, InviteToken, Messaging, MessagingError,
-    MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage,
-    canonical_relay,
+    MessagingOptions, NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, Removal, RemovedMessage,
+    TextMessage, canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
@@ -759,6 +759,9 @@ impl Core {
                 text: text.to_owned(),
                 sent_at: now_ms() / 1000 * 1000,
                 acknowledged: false,
+                edited: false,
+                deleted: false,
+                withdrawn: false,
                 expires_at: self.expiry_for(chat_id, now_ms() / 1000 * 1000),
             });
         self.apply_message(&sent);
@@ -929,6 +932,7 @@ impl Core {
                     ChatItem::Text(message) => core.apply_message(&message),
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
                     ChatItem::RadioAddress(address) => core.radio_address_received(&address),
+                    ChatItem::Removed(removed) => core.apply_removal(&removed),
                     ChatItem::Expired { message_id } => core.message_expired(&message_id),
                 }
             }
@@ -1158,10 +1162,15 @@ impl Core {
         }
     }
 
-    /// Records a message that was added or changed, and emits what changed: a new message, or
-    /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
-    /// doesn't have yet is in that chat's history when it arrives.
+    /// Records a message that was added or changed, and emits what changed: a new message, an
+    /// outgoing one that a relay has now acknowledged, or one the sender edited or deleted, or
+    /// that was withdrawn (#122). A message for a chat the snapshot doesn't have yet is in that
+    /// chat's history when it arrives.
     fn apply_message(&self, message: &TextMessage) {
+        if message.deleted {
+            // The radio store keeps its own copy of radio messages' text (#40).
+            self.forget_radio_text(&message.id);
+        }
         // The user's own message may come before MDK has stamped its expiry (#124).
         let stamped;
         let message = if message.outgoing && message.expires_at.is_none() {
@@ -1199,31 +1208,108 @@ impl Core {
             return;
         };
 
+        let mut late_radio_copy = false;
         let event = match messages.iter_mut().find(|known| known.id == view.id) {
             // A radio send in the chat adds its own message when it is done, as radio (#40).
             None if waits => return,
+            // Something the snapshot never showed, deleted or withdrawn already: there is
+            // nothing to show for it now. A restart shows it as it is then.
+            None if view.deleted || view.withdrawn => return,
             None => {
                 messages.push(view.clone());
-                CoreEvent::MessageAdded {
+                Some(CoreEvent::MessageAdded {
                     chat_id: message.chat_id.clone(),
                     message: view,
+                })
+            }
+            Some(known) => {
+                // A deletion is final: the radio copy of a deleted message may come after it.
+                // So is a withdrawal: MDK may take the row away for it, and a later copy of the
+                // message doesn't take it back.
+                let deleted = known.deleted || view.deleted;
+                late_radio_copy = deleted && !message.deleted;
+                let content = (
+                    if deleted { String::new() } else { view.text },
+                    !deleted && view.edited,
+                    deleted,
+                    known.withdrawn || view.withdrawn,
+                );
+                let content_changed = content
+                    != (
+                        known.text.clone(),
+                        known.edited,
+                        known.deleted,
+                        known.withdrawn,
+                    );
+                // Delivery only moves forward: waiting, timed out, sent, confirmed.
+                let delivery_moved = delivery_rank(view.delivery) > delivery_rank(known.delivery);
+                if delivery_moved {
+                    known.delivery = view.delivery;
+                }
+                if content_changed {
+                    (known.text, known.edited, known.deleted, known.withdrawn) = content;
+                    // Edited, deleted or withdrawn (#122).
+                    Some(CoreEvent::MessageChanged {
+                        chat_id: message.chat_id.clone(),
+                        message: known.clone(),
+                    })
+                } else if delivery_moved && let Some(delivery) = view.delivery {
+                    Some(CoreEvent::DeliveryChanged {
+                        chat_id: message.chat_id.clone(),
+                        message_id: view.id,
+                        delivery,
+                    })
+                } else {
+                    None
                 }
             }
-            // Delivery only moves forward: waiting, timed out, sent, confirmed.
-            Some(known)
-                if delivery_rank(view.delivery) > delivery_rank(known.delivery)
-                    && let Some(delivery) = view.delivery =>
-            {
-                known.delivery = view.delivery;
-                CoreEvent::DeliveryChanged {
-                    chat_id: message.chat_id.clone(),
-                    message_id: view.id,
-                    delivery,
+        };
+        if let Some(event) = event {
+            self.emit(event);
+        }
+        drop(guard);
+        if late_radio_copy {
+            self.forget_radio_text(&message.id);
+        }
+    }
+
+    /// Takes a message that MDK took out of a chat's timeline (#122). One that was withdrawn
+    /// stays, marked so, and [`CoreEvent::MessageChanged`] says so. One that is gone from this
+    /// device goes from the snapshot too, with [`CoreEvent::MessageRemoved`].
+    fn apply_removal(&self, removed: &RemovedMessage) {
+        let mut guard = self.state();
+        let Some(messages) = messages_of(&mut guard, &removed.chat_id) else {
+            return;
+        };
+        let Some(index) = messages.iter().position(|known| known.id == removed.id) else {
+            return;
+        };
+        let event = match removed.removal {
+            Removal::Withdrawn if messages[index].withdrawn => return,
+            Removal::Withdrawn => {
+                messages[index].withdrawn = true;
+                CoreEvent::MessageChanged {
+                    chat_id: removed.chat_id.clone(),
+                    message: messages[index].clone(),
                 }
             }
-            Some(_) => return,
+            Removal::Gone => {
+                messages.remove(index);
+                CoreEvent::MessageRemoved {
+                    chat_id: removed.chat_id.clone(),
+                    message_id: removed.id.clone(),
+                }
+            }
         };
         self.emit(event);
+    }
+
+    /// Removes the text of the message `id` from the radio store, if it travelled by radio:
+    /// its sender deleted it (#122).
+    fn forget_radio_text(&self, id: &str) {
+        if let Err(error) = self.inner.radio_store.forget_text(id) {
+            log::warn!("could not remove a deleted message's text from the radio store: {error}");
+        }
     }
 
     /// Takes the relays' connections as they are now, and updates each chat's reach with them.
@@ -1334,9 +1420,15 @@ impl Core {
             match self.inner.messaging.chat_messages(account_hex, chat_id) {
                 Ok(messages) => messages
                     .iter()
-                    .map(|message| Message {
-                        sender: self.sender_in(chat_state, message),
-                        ..message_view(message, store.message(&message.id).as_ref())
+                    .map(|message| {
+                        // Deleted while the app was closed (#122).
+                        if message.deleted {
+                            self.forget_radio_text(&message.id);
+                        }
+                        Message {
+                            sender: self.sender_in(chat_state, message),
+                            ..message_view(message, store.message(&message.id).as_ref())
+                        }
                     })
                     .collect(),
                 Err(error) => {
@@ -1455,6 +1547,19 @@ impl Core {
         // Having no listener is fine: the core runs without a web view.
         let _ = self.inner.events.send(event);
     }
+}
+
+/// The messages of the chat or invitation `chat_id` in `state`: an invitation has those that
+/// came before the user accepts it.
+fn messages_of<'a>(state: &'a mut Snapshot, chat_id: &str) -> Option<&'a mut Vec<Message>> {
+    if let Some(chat) = state.chats.iter_mut().find(|chat| chat.id == chat_id) {
+        return Some(&mut chat.messages);
+    }
+    state
+        .invitations
+        .iter_mut()
+        .find(|invitation| invitation.id == chat_id)
+        .map(|invitation| &mut invitation.messages)
 }
 
 fn upgrade(core: &Weak<Inner>) -> Option<Core> {
@@ -1639,6 +1744,9 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
         },
         delivery: message.outgoing.then_some(delivery),
         cancellable: false,
+        edited: message.edited,
+        deleted: message.deleted,
+        withdrawn: message.withdrawn,
         sender: None,
         expires_at: message
             .expires_at
@@ -1666,6 +1774,9 @@ fn radio_view(radio: &RadioMessage) -> Message {
             DeliveryState::Waiting
         }),
         cancellable: false,
+        edited: false,
+        deleted: radio.deleted,
+        withdrawn: false,
         sender: None,
         expires_at: radio.expires_at,
     }
@@ -1698,6 +1809,145 @@ fn failed(action: &str, error: impl std::fmt::Display) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A core over an empty data folder, with keys in a file and a relay nobody answers on.
+    async fn offline_core(data: &std::path::Path) -> Core {
+        // Linux CI has no secret service; use the in-memory store, as the integration tests do.
+        if keyring_core::get_default_store().is_none() {
+            keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+        }
+        Core::start(MessagingOptions {
+            data_dir: data.to_path_buf(),
+            relays: vec!["ws://127.0.0.1:9".to_owned()],
+            keychain_service: "chat.peoples.client.test-issue-122".to_owned(),
+            keys_in_file: true,
+            allow_loopback: true,
+            media_server: None,
+            profile_copies: Vec::new(),
+            chat_media_servers: Vec::new(),
+            lookup_relays: Vec::new(),
+        })
+        .await
+        .unwrap()
+    }
+
+    fn sent_text(id: &str, text: &str) -> TextMessage {
+        TextMessage {
+            chat_id: "chat".to_owned(),
+            id: id.to_owned(),
+            outgoing: true,
+            sender_hex: "aa".repeat(32),
+            text: text.to_owned(),
+            sent_at: 1_795_300_000_000,
+            acknowledged: true,
+            edited: false,
+            deleted: false,
+            withdrawn: false,
+            expires_at: None,
+        }
+    }
+
+    fn next(events: &mut broadcast::Receiver<CoreEvent>) -> CoreEvent {
+        loop {
+            match events.try_recv().unwrap() {
+                CoreEvent::RelaysChanged { .. } | CoreEvent::RadioChanged { .. } => {}
+                event => return event,
+            }
+        }
+    }
+
+    /// A message of the user's that lost a race between two versions of the chat's state:
+    /// MDK says so with an upsert that carries the engine's reason, or by taking the row away.
+    /// Either way it shows as not delivered, not as "Sent" (#122).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn issue_122_a_withdrawn_message_shows_as_not_delivered() {
+        let data = tempfile::tempdir().unwrap();
+        let core = offline_core(data.path()).await;
+        core.state().chats.push(Chat {
+            id: "chat".to_owned(),
+            contact: Contact {
+                public_key: "dd".repeat(32),
+                name: "Bea Holm".to_owned(),
+                photo: None,
+                meshes: Vec::new(),
+            },
+            messages: Vec::new(),
+            reach: Reach::Internet,
+            radio_issue: None,
+            disappear_after: None,
+            state: ChatState::Direct,
+        });
+        let mut events = core.subscribe();
+        let messages = |core: &Core| core.chat("chat").unwrap().messages;
+
+        core.apply_message(&sent_text("m1", "First"));
+        core.apply_message(&sent_text("m2", "Second"));
+        assert!(matches!(next(&mut events), CoreEvent::MessageAdded { .. }));
+        assert!(matches!(next(&mut events), CoreEvent::MessageAdded { .. }));
+        assert_eq!(messages(&core)[0].delivery, Some(DeliveryState::Sent));
+
+        // An upsert with the engine's reason.
+        core.apply_message(&TextMessage {
+            withdrawn: true,
+            ..sent_text("m1", "First")
+        });
+        let CoreEvent::MessageChanged { chat_id, message } = next(&mut events) else {
+            panic!("expected messageChanged");
+        };
+        assert_eq!(chat_id, "chat");
+        assert_eq!(message.id, "m1");
+        assert!(message.withdrawn);
+        assert_eq!(message.text, "First");
+        assert_eq!(messages(&core)[0], message);
+        // A later copy doesn't take it back, and the same news twice changes nothing.
+        core.apply_message(&sent_text("m1", "First"));
+        core.apply_message(&TextMessage {
+            withdrawn: true,
+            ..sent_text("m1", "First")
+        });
+        assert!(messages(&core)[0].withdrawn);
+
+        // MDK takes the row away.
+        let removal = |id: &str, removal| RemovedMessage {
+            chat_id: "chat".to_owned(),
+            id: id.to_owned(),
+            removal,
+        };
+        core.apply_removal(&removal("m2", Removal::Withdrawn));
+        let CoreEvent::MessageChanged { message, .. } = next(&mut events) else {
+            panic!("expected messageChanged");
+        };
+        assert_eq!(message.id, "m2");
+        assert!(message.withdrawn);
+        core.apply_removal(&removal("m2", Removal::Withdrawn));
+        assert!(events.try_recv().is_err(), "the same withdrawal twice");
+        assert_eq!(messages(&core).len(), 2);
+
+        // A message gone from this device goes from the snapshot too; unknown ones change
+        // nothing.
+        core.apply_removal(&removal("m1", Removal::Gone));
+        assert_eq!(
+            next(&mut events),
+            CoreEvent::MessageRemoved {
+                chat_id: "chat".to_owned(),
+                message_id: "m1".to_owned(),
+            }
+        );
+        core.apply_removal(&removal("m9", Removal::Gone));
+        core.apply_message(&TextMessage {
+            withdrawn: true,
+            ..sent_text("m9", "Never shown")
+        });
+        assert!(events.try_recv().is_err(), "nothing for unknown messages");
+        assert_eq!(
+            messages(&core)
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            ["m2"]
+        );
+        core.close().await.unwrap();
+    }
 
     #[test]
     fn the_projects_relays_come_first_and_say_who_runs_them() {
@@ -1746,6 +1996,9 @@ mod tests {
             text: "Hello".to_owned(),
             sent_at: 0,
             acknowledged: outgoing,
+            edited: false,
+            deleted: false,
+            withdrawn: false,
             expires_at: None,
         }
     }

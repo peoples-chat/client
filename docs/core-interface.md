@@ -74,7 +74,8 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
-| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id, or a message disappeared. `chatId` can be an invitation's id | Done (#46, #124) |
+| `messageChanged` | `chatId`, `message` | A message the snapshot has was edited, deleted or withdrawn. The whole message replaces the one with its id. `chatId` can be an invitation's id | Done (#122) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id, or a message disappeared, or MDK removed it from this device. `chatId` can be an invitation's id | Done (#46, #124, #122) |
 | `disappearingChanged` | `chatId`, `disappearAfter` (optional) | Someone in the chat turned disappearing messages on or off, or changed the timer | Done (#124) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
@@ -92,7 +93,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `npub`, `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
 | `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `disappearAfter` (optional, seconds, #124), `state` (optional: `contactLeft`, `group`, `removed`; left out while `direct`, #125) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124), `sender` (optional: `publicKey`, `name`; incoming messages in a `group` chat, #125) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124), `edited`, `deleted`, `withdrawn` (each optional, #122), `sender` (optional: `publicKey`, `name`; incoming messages in a `group` chat, #125) |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
 | `SentInvite` | `id`, `name`, `link`, `createdAt`, `expiresAt`, `joinedChatId` (once used) |
 | `Relay` | `url`, `operator` (`peoplesChat`, `independent`), `status` (`connected`, `connecting`, `unreachable`) |
@@ -309,6 +310,19 @@ that comes before the user accepts an invitation is added to the invitation: `me
 - `sentAt` is the sender's clock, in whole seconds. After a restart, messages sent within the same second can come back
   in another order.
 
+**Edits, deletions and withdrawn messages** (#122). Another app, such as White Noise, can edit or delete its user's
+messages. The core follows MDK's changes to messages the snapshot has, and `messageChanged` carries the message as it
+is now:
+
+- An edit: `text` is the new text, and `edited` is set. The message keeps its place and time.
+- A deletion for everyone: `deleted` is set and `text` is empty. The interface shows "This message was deleted." The
+  radio store's copy of the text goes too.
+- A withdrawn message lost a race between two versions of the chat's state, so the other side never got it: `withdrawn`
+  is set, and the interface shows it as not delivered, whatever `delivery` says. It stays withdrawn.
+- A restart shows the same from MDK's history, except a withdrawn message that MDK took away entirely: it is gone then.
+- A message MDK removes from this device goes with `messageRemoved`; an expired one is below (#124).
+- Changes to a message the snapshot never showed, such as one deleted before it arrived, emit nothing.
+
 **Disappearing messages** (#124, `core/src/app/expiry.rs`). peoples.chat doesn't offer the timer, but anyone in a
 chat can set it: Marmot lets any admin ([message-retention-v1](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/app-components/message-retention-v1.md#L68-L70)),
 both people are admins in a chat MDK starts, and White Noise for Android offers it in direct chats.
@@ -330,7 +344,7 @@ both people are admins in a chat MDK starts, and White Noise for Android offers 
 
 - turning disappearing messages on from peoples.chat;
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
-- editing, deleting and reactions. Messages from other apps that use them, and media or stickers, aren't shown.
+- editing and deleting the user's own messages, and reactions. Media and stickers aren't shown.
 
 ## Reach
 

@@ -188,6 +188,9 @@ fn queued_view(queued: &Queued) -> Message {
         transport: Transport::Internet,
         delivery: Some(DeliveryState::Waiting),
         cancellable: true,
+        edited: false,
+        deleted: false,
+        withdrawn: false,
         sender: None,
         // Its time starts when it goes (#124).
         expires_at: None,

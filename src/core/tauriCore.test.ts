@@ -150,6 +150,8 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
     expect(state.chats[0].messages[2].delivery).toBe("timedOut");
     expect(state.chats[0].messages[2].expiresAt).toBe(1795904890000);
+    expect([state.chats[0].messages[3].deleted, state.chats[0].messages[3].text]).toEqual([true, ""]);
+    expect([state.chats[0].messages[4].withdrawn, state.chats[0].messages[4].delivery]).toEqual([true, "sent"]);
     expect(state.invitations[0].from.name).toBe("Karen Winther");
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);
@@ -184,6 +186,11 @@ describe("the JSON shared with the Rust core", () => {
       },
       messageRemoved: (next) => expect(next.chats[1].messages.map((m) => m.cancellable)).toEqual([undefined]),
       deliveryChanged: (next) => expect(next.chats[1].messages[0].delivery).toBe("sent"),
+      messageChanged: (next) =>
+        expect([next.chats[0].messages[0].text, next.chats[0].messages[0].edited]).toEqual([
+          "Are you coming to the meeting at four?",
+          true,
+        ]),
       reachChanged: (next) =>
         expect(next.chats.map((c) => [c.reach, c.radioIssue])).toEqual([
           ["radio", undefined],

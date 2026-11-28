@@ -274,14 +274,22 @@ pub struct TextMessage {
     pub sent_at: u64,
     /// Outgoing only: a relay has acknowledged it.
     pub acknowledged: bool,
+    /// The sender changed its text since sending it (#122). `text` is the latest.
+    pub edited: bool,
+    /// The sender deleted it for everyone (#122). MDK has emptied `text`.
+    pub deleted: bool,
+    /// It lost a race between two versions of the chat's state, so it never reached the chat
+    /// (#122).
+    pub withdrawn: bool,
     /// When it disappears, in milliseconds since the Unix epoch (whole seconds), if it was sent
     /// while the chat's messages disappear (#124). MDK pins it to the message: the sender's
     /// clock when it was sent, plus the chat's timer then.
     pub expires_at: Option<u64>,
 }
 
-/// The text message in `record`, unless it is something else: a system row, media, a sticker,
-/// a deleted message, or one withdrawn when the chat's state was settled.
+/// The text message in `record`, unless it is something else: a system row, media or a
+/// sticker. A deleted chat message is one too, without its text: MDK no longer tells what it
+/// was.
 fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
     let outgoing = match record.direction.as_str() {
         "sent" => true,
@@ -292,17 +300,10 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
         .tags
         .iter()
         .any(|tag| tag.first().is_some_and(|name| name == "sticker"));
-    // A message no relay would take stays: MDK keeps it, and it shows as not sent yet.
-    let withdrawn = record
-        .invalidation_status
-        .as_deref()
-        .is_some_and(|status| status != LOCAL_PUBLISH_FAILED);
     if record.kind != CHAT_KIND
-        || record.deleted
         || record.media.is_some()
         || record.agent_text_stream.is_some()
         || sticker
-        || withdrawn
     {
         return None;
     }
@@ -315,10 +316,23 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
             && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+        edited: !record.deleted && record.edit.is_some(),
+        deleted: record.deleted,
+        withdrawn: is_withdrawn(record),
         expires_at: record
             .retention_expires_at
             .map(|seconds| seconds.saturating_mul(1000)),
     })
+}
+
+/// Whether MDK withdrew `record` when the chat's state was settled: it was on the losing side
+/// of two versions of the chat's state. A message no relay would take isn't: MDK keeps it, and
+/// it shows as not sent yet.
+fn is_withdrawn(record: &TimelineMessageRecord) -> bool {
+    record
+        .invalidation_status
+        .as_deref()
+        .is_some_and(|status| status != LOCAL_PUBLISH_FAILED)
 }
 
 /// An invitation's token that the other person sent in a chat (#95).
@@ -362,10 +376,51 @@ pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    /// MDK took a message out of the chat's timeline, other than for its time being up (#122).
+    Removed(RemovedMessage),
     /// MDK deleted the message `message_id` because its time was up (#124).
     Expired {
         message_id: String,
     },
+}
+
+/// A message MDK took out of a chat's timeline, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedMessage {
+    pub chat_id: String,
+    pub id: String,
+    pub removal: Removal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removal {
+    /// It lost a race between two versions of the chat's state: it never reached the chat.
+    Withdrawn,
+    /// It is gone from this device: the user discarded an own message that reached no one.
+    Gone,
+}
+
+/// The removal in `change`, unless it is something else. `NoLongerMatchesQuery` is about the
+/// subscription's query, which asks for every message, not about the message. `Pruned` is an
+/// expired message, which [`ChatItem::Expired`] takes (#124).
+fn removed_message(chat_id: &str, change: &TimelineMessageChange) -> Option<RemovedMessage> {
+    let TimelineMessageChange::Remove {
+        message_id_hex,
+        reason,
+    } = change
+    else {
+        return None;
+    };
+    let removal = match reason {
+        TimelineRemoveReason::Invalidated => Removal::Withdrawn,
+        TimelineRemoveReason::Cleared => Removal::Gone,
+        TimelineRemoveReason::Pruned | TimelineRemoveReason::NoLongerMatchesQuery => return None,
+    };
+    Some(RemovedMessage {
+        chat_id: chat_id.to_owned(),
+        id: message_id_hex.clone(),
+        removal,
+    })
 }
 
 fn chat_item(record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -396,19 +451,25 @@ impl ChatItems {
                         .extend(page.messages.iter().filter_map(chat_item));
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
+                    let chat_id = &projection.update.group_id_hex;
                     for change in &projection.update.timeline_changes {
                         match change {
                             TimelineMessageChange::Upsert { message, .. } => {
                                 self.ready.extend(chat_item(message));
                             }
-                            // The retention sweep deleted it (#124). Deletions are #122's.
+                            // The retention sweep deleted it (#124).
                             TimelineMessageChange::Remove {
                                 message_id_hex,
                                 reason: TimelineRemoveReason::Pruned,
                             } => self.ready.push_back(ChatItem::Expired {
                                 message_id: message_id_hex.clone(),
                             }),
-                            TimelineMessageChange::Remove { .. } => {}
+                            // Withdrawn, or gone from this device otherwise (#122).
+                            TimelineMessageChange::Remove { .. } => {
+                                self.ready.extend(
+                                    removed_message(chat_id, change).map(ChatItem::Removed),
+                                );
+                            }
                         }
                     }
                 }
@@ -1443,8 +1504,10 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatForm, DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers,
-        direct_chat, directory_relays, lookup_relays, profile_copy_relays,
+        ChatForm, DEFAULT_RELAYS, Removal, RemovedMessage, TimelineMessageChange,
+        TimelineMessageRecord, TimelineRemoveReason, WHITE_NOISE_RELAYS, canonical_relay,
+        chat_media_servers, direct_chat, directory_relays, lookup_relays, profile_copy_relays,
+        removed_message, text_message,
     };
     use marmot_app::{AppGroupRecord, SelfMembership};
 
@@ -1505,6 +1568,120 @@ mod tests {
         let chat = direct_chat(&me, &removed);
         assert_eq!(chat.form, ChatForm::Direct);
         assert!(!chat.active);
+    }
+
+    /// A chat message as MDK records it, with `change` made to its JSON.
+    fn record(change: impl FnOnce(&mut serde_json::Value)) -> TimelineMessageRecord {
+        let mut json = serde_json::json!({
+            "message_id_hex": "aa".repeat(32),
+            "source_message_id_hex": "bb".repeat(32),
+            "source_epoch": 3,
+            "retention_seconds": null,
+            "retention_expires_at": null,
+            "direction": "received",
+            "group_id_hex": "cc".repeat(16),
+            "sender": "dd".repeat(32),
+            "plaintext": "Meet at the old mill",
+            "kind": 9,
+            "tags": [],
+            "timeline_at": 1_795_300_000,
+            "received_at": 1_795_300_001,
+            "reply_to_message_id_hex": null,
+            "reply_preview": null,
+            "media": null,
+            "agent_text_stream": null,
+            "reactions": { "by_emoji": {}, "user_reactions": [] },
+            "deleted": false,
+            "deleted_by_message_id_hex": null,
+            "invalidation_status": null,
+        });
+        change(&mut json);
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn issue_122_edits_deletions_and_withdrawals_are_read_from_mdk() {
+        let plain = text_message(&record(|_| {})).unwrap();
+        assert!(!plain.edited && !plain.deleted && !plain.withdrawn);
+        assert_eq!(plain.text, "Meet at the old mill");
+
+        // An edit: MDK puts the new text in the record and sums the edits up.
+        let edited = text_message(&record(|json| {
+            json["plaintext"] = "Meet at the new mill".into();
+            json["edit"] = serde_json::json!({
+                "edit_count": 1,
+                "latest_edit_message_id_hex": "ee".repeat(32),
+                "edited_at": 1_795_300_060,
+            });
+        }))
+        .unwrap();
+        assert!(edited.edited && !edited.deleted);
+        assert_eq!(edited.text, "Meet at the new mill");
+
+        // A deletion: MDK empties the text. The message stays, as deleted.
+        let deleted = text_message(&record(|json| {
+            json["plaintext"] = "".into();
+            json["deleted"] = true.into();
+            json["deleted_by_message_id_hex"] = "ff".repeat(32).into();
+        }))
+        .unwrap();
+        assert!(deleted.deleted && !deleted.edited);
+        assert_eq!(deleted.text, "");
+
+        // Withdrawn when the chat's state was settled: the engine's reason.
+        for reason in [
+            "LosingBranch",
+            "BeyondAnchor",
+            "SupersededByBranchSelection",
+        ] {
+            let withdrawn = text_message(&record(|json| {
+                json["direction"] = "sent".into();
+                json["invalidation_status"] = reason.into();
+            }))
+            .unwrap();
+            assert!(withdrawn.withdrawn, "{reason}");
+            assert!(withdrawn.outgoing);
+        }
+        // A message no relay would take is not withdrawn: it waits to go again.
+        let failed = text_message(&record(|json| {
+            json["direction"] = "sent".into();
+            json["invalidation_status"] = "local_publish_failed".into();
+        }))
+        .unwrap();
+        assert!(!failed.withdrawn);
+    }
+
+    #[test]
+    fn issue_122_removals_say_whether_the_message_was_withdrawn_or_is_gone() {
+        let chat = "cc".repeat(16);
+        let remove = |reason| TimelineMessageChange::Remove {
+            message_id_hex: "aa".repeat(32),
+            reason,
+        };
+        let removed = |removal| {
+            Some(RemovedMessage {
+                chat_id: chat.clone(),
+                id: "aa".repeat(32),
+                removal,
+            })
+        };
+        assert_eq!(
+            removed_message(&chat, &remove(TimelineRemoveReason::Invalidated)),
+            removed(Removal::Withdrawn)
+        );
+        assert_eq!(
+            removed_message(&chat, &remove(TimelineRemoveReason::Cleared)),
+            removed(Removal::Gone)
+        );
+        // An expired message is #124's: `ChatItem::Expired` takes it.
+        assert_eq!(
+            removed_message(&chat, &remove(TimelineRemoveReason::Pruned)),
+            None
+        );
+        assert_eq!(
+            removed_message(&chat, &remove(TimelineRemoveReason::NoLongerMatchesQuery)),
+            None
+        );
     }
 
     #[test]
