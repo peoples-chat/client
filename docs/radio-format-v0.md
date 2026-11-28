@@ -97,6 +97,40 @@ at most four keys per mesh.
 **Behind on the chat's state.** The records travel over the relays only. A receiver that hasn't fetched the sender's
 current record drops the packet, and the relay copy of the message follows.
 
+## Someone added to a direct chat
+
+The records are meant for the two members alone, but they are part of the chat's state, and whoever joins the chat gets
+its state. peoples.chat has no way to add a member to a chat. Another app, White Noise for example, does, and need not
+remove the records first ([#163](https://github.com/peoples-chat/client/issues/163)).
+
+**What the app does** once it sees, in a chat it knows as direct, anyone but the account and its contact. It looks when
+the chat changes or moves to a new epoch, before each radio send, at start, and every minute while it has a radio.
+
+- It empties its own component. MDK v0.18.0 can replace a component, not remove one, so an empty entry stays. Only an
+  admin can write, and the change waits for a relay like any other.
+- It never uses or accepts any key the new member could have read: its own keys that the chat's state had, and the
+  contact's keys for the chat. It keeps their hashes, so one that is still in the chat's state, or comes back there,
+  stays refused, also if the chat is direct again later.
+- It makes new keys for this chat and for every other direct chat with the contact, and writes them where the chat is
+  direct. The new key for this chat is written only if the chat is direct again.
+
+**What is protected:** messages sent by radio after the app has seen the new member. They are sealed with keys the new
+member never had.
+
+**What stays exposed** when another app adds the member without removing the records:
+
+- **The records themselves.** The Welcome carries both components: the new member learns each member's radio name,
+  radio address, radio settings and radio key. A key can be dropped; the radio's name and address can't be taken back.
+- **The contact's component.** The app writes only its own. The contact's stays until an app of the contact's clears
+  it, so members added after that one read it too.
+- **Packets from before.** The new member can open any packet of this chat that they recorded off the air and that was
+  sealed with a key in the Welcome.
+- **Until the app has seen it.** It has to fetch the change from a relay. Until then it may still seal with an exposed
+  key, and accept a packet under one, for example during an internet outage.
+- **Added and gone again unseen.** An app that was closed while someone was added and removed again can find only the
+  two members when it looks. It then keeps the old keys.
+- **Other devices.** Each device of an account retires keys only once it has seen the new member itself.
+
 ## The packet
 
 Numbers are big-endian.

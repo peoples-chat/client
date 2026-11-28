@@ -1151,6 +1151,9 @@ impl Core {
         drop(state);
         if added && chat_state.is_direct() {
             self.radio_chat_added(&chat.id);
+        } else if added || changed {
+            // Someone may have been added who can read its radio records (#163).
+            self.radio_chat_changed(&chat.id);
         }
         if changed {
             // Only a direct chat goes by radio.

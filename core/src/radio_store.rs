@@ -18,12 +18,13 @@
 //!
 //! The file is small, and written whole on every change.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::radio::{
@@ -183,6 +184,10 @@ struct Data {
     /// Oldest first, for the last two days.
     #[serde(default)]
     transmissions: Vec<Transmission>,
+    /// The SHA-256, in hex, of every radio key that someone outside its chat could read (#163).
+    /// Such a key opens and seals nothing any more.
+    #[serde(default)]
+    exposed: BTreeSet<String>,
 }
 
 pub struct RadioStore {
@@ -377,6 +382,8 @@ impl RadioStore {
             .filter_map(RadioRecord::from_value)
             // A key of this phone's own, sent back to it, would open its own packets.
             .filter(|record| !is_own_key(&data, &record.rk))
+            // One that someone outside the chat could read is never taken again (#163).
+            .filter(|record| !data.exposed.contains(&digest(&record.rk)))
             .collect();
         let keys = data.contact_keys.entry(chat_id.to_owned()).or_default();
         for mesh in [Mesh::MeshCore.name(), Mesh::Meshtastic.name()] {
@@ -416,6 +423,48 @@ impl RadioStore {
                 records,
             },
         );
+        self.save(&data)?;
+        Ok(true)
+    }
+
+    /// Someone who is neither the account nor its contact is in the chat `chat_id`, so they could
+    /// read the radio keys in its state (#163): those of `in_state`, in hex, this phone's keys
+    /// the state has had, and the contact's keys it has held.
+    ///
+    /// If any of them is new here: none of them is used or accepted again, the contact's records
+    /// of the chat are forgotten, and this phone gets new keys in this chat and in `others`, the
+    /// contact's direct chats, which are then due to be written. Returns whether that happened.
+    pub fn expose(
+        &self,
+        chat_id: &str,
+        in_state: &[String],
+        others: &[String],
+        now_ms: u64,
+    ) -> std::io::Result<bool> {
+        let mut data = self.lock();
+        let own = data.own_records.get(chat_id).into_iter().flatten();
+        let held = data.contact_keys.get(chat_id).into_iter().flatten();
+        let new: Vec<String> = own
+            .filter(|(_, own)| own.published)
+            .map(|(_, own)| own.record.rk.as_str())
+            .chain(held.map(|kept| kept.key.as_str()))
+            .chain(in_state.iter().map(String::as_str))
+            .map(digest)
+            .filter(|key| !data.exposed.contains(key))
+            .collect();
+        if new.is_empty() {
+            return Ok(false);
+        }
+        data.exposed.extend(new);
+        data.contact_records.remove(chat_id);
+        data.contact_keys.remove(chat_id);
+        for chat_id in std::iter::once(chat_id).chain(others.iter().map(String::as_str)) {
+            for own in data.own_records.get_mut(chat_id).into_iter().flatten() {
+                let mut record = own.1.record.clone();
+                record.rk = hex::encode(new_radio_key().as_slice());
+                *own.1 = successor(&own.1.record, record, own.1.members.clone(), now_ms);
+            }
+        }
         self.save(&data)?;
         Ok(true)
     }
@@ -718,6 +767,11 @@ fn successor(
         next_counter: 0,
         published: false,
     }
+}
+
+/// What [`Data::exposed`] keeps of `key`, in hex.
+fn digest(key: &str) -> String {
+    hex::encode(Sha256::digest(key.to_ascii_lowercase()))
 }
 
 /// Whether `key`, in hex, is one of this phone's own current keys.
@@ -1093,6 +1147,58 @@ mod tests {
             .set_contact_records("b", "eve", vec![reflected], 100)
             .unwrap();
         assert!(store.receiving_keys("b", "meshcore", 100).is_empty());
+    }
+
+    #[test]
+    fn issue_163_an_exposed_key_is_never_used_or_accepted_again() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        let info = radio(Mesh::MeshCore);
+        // Own records in two chats with the contact, `a` and `b`, both written.
+        for chat in ["a", "b"] {
+            store
+                .keep_own_records(chat, Some(&info), Some(&members(1)), 1_000)
+                .unwrap();
+            let component = store.own_component(chat).unwrap();
+            store.set_published(chat, &component).unwrap();
+        }
+        let own = |store: &RadioStore, chat: &str| store.own_record(chat, "meshcore").unwrap();
+        let (in_a, in_b) = (own(&store, "a"), own(&store, "b"));
+        let contacts = contact_record(Mesh::MeshCore, 1);
+        store
+            .set_contact_records("a", "bea", vec![contacts.clone()], 100)
+            .unwrap();
+        let in_state = vec![contacts["rk"].as_str().unwrap().to_owned()];
+
+        let others = ["b".to_owned()];
+        assert!(store.expose("a", &in_state, &others, 2_000).unwrap());
+        for (chat, before) in [("a", &in_a), ("b", &in_b)] {
+            let after = own(&store, chat);
+            assert_ne!(after.record.rk, before.record.rk, "{chat}");
+            assert_eq!(after.record.rkn, before.record.rkn + 1, "{chat}");
+            assert!(!after.published, "{chat}");
+        }
+        assert!(store.receiving_keys("a", "meshcore", 2_000).is_empty());
+        assert!(store.contact_records("a").is_empty());
+
+        // Once only, also after a restart and with the old keys still in the chat's state.
+        let reopened = RadioStore::open(data.path());
+        let rotated = own(&reopened, "b");
+        assert!(!reopened.expose("a", &in_state, &others, 3_000).unwrap());
+        assert_eq!(own(&reopened, "b"), rotated);
+
+        // The exposed key is refused wherever it comes back; a new one is taken.
+        let fresh = contact_record(Mesh::MeshCore, 2);
+        for chat in ["a", "b"] {
+            reopened
+                .set_contact_records(chat, "bea", vec![contacts.clone()], 4_000)
+                .unwrap();
+            assert!(reopened.receiving_keys(chat, "meshcore", 4_000).is_empty());
+        }
+        reopened
+            .set_contact_records("a", "bea", vec![fresh], 4_000)
+            .unwrap();
+        assert_eq!(numbers(&reopened, "meshcore", 4_000), vec![(2, None)]);
     }
 
     fn record(key: &str, at: u64) -> RadioAddress {

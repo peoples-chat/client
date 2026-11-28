@@ -367,6 +367,9 @@ them. The record and the rules: [radio-format-v0.md](radio-format-v0.md#where-th
   again.
 - Without a relay, the change waits (`PendingPublish`), the component still reads as before, and MDK publishes it
   later by itself. Messages can still be written meanwhile.
+- A component can't be removed: `update_app_component` only replaces its bytes, empty ones included. `invite_members`
+  takes no component changes, so an invitation can't clear one in its own commit. What the core does when someone is
+  added to a direct chat: [radio-format-v0.md](radio-format-v0.md#someone-added-to-a-direct-chat).
 
 ## Relay reachability
 

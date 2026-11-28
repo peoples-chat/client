@@ -283,8 +283,98 @@ impl Core {
     }
 
     async fn sync_radio_records(&self, chat_id: &str) {
+        self.retire_exposed_keys(chat_id).await;
         self.read_contact_records(chat_id).await;
         self.keep_own_records(chat_id).await;
+    }
+
+    /// A chat the core knows as direct that has someone else in it, because another app added
+    /// them (#163): they can read the radio records in its state. This account's component is
+    /// emptied (MDK can't remove one), none of the chat's keys is used or accepted again, and
+    /// the contact's direct chats get new ones. Only this account's component: each member
+    /// writes its own.
+    async fn retire_exposed_keys(&self, chat_id: &str) {
+        // Two statements: each locks the state.
+        let account = self.state().account.clone();
+        let (Some(account), Some(chat)) = (account, self.chat(chat_id)) else {
+            return;
+        };
+        let contact = &chat.contact.public_key;
+        let Ok(membership) = self.chat_membership(chat_id).await else {
+            return;
+        };
+        if !membership
+            .members
+            .iter()
+            .any(|(member, _)| member != &account.public_key && member != contact)
+        {
+            return;
+        }
+        let others: Vec<String> = self
+            .state()
+            .chats
+            .iter()
+            .filter(|other| {
+                other.id != chat_id
+                    && other.state.is_direct()
+                    && &other.contact.public_key == contact
+            })
+            .map(|other| other.id.clone())
+            .collect();
+        let retired = {
+            let _one_at_a_time = self.inner.radio.records.lock().await;
+            let messaging = &self.inner.messaging;
+            let own_component = radio_component_id(&account.public_key, contact);
+            let mut keys = Vec::new();
+            let mut own_is_there = false;
+            for component in [
+                own_component,
+                radio_component_id(contact, &account.public_key),
+            ] {
+                match messaging
+                    .app_component(&account.public_key, chat_id, component)
+                    .await
+                {
+                    Ok(Some(data)) => {
+                        let records = decode_component(&data);
+                        own_is_there |= component == own_component && !records.is_empty();
+                        keys.extend(
+                            records
+                                .iter()
+                                .filter_map(RadioRecord::from_value)
+                                .map(|record| record.rk.clone()),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(error) => log::info!("could not read a chat's radio records: {error}"),
+                }
+            }
+            // The keys first, so that none seals or opens anything while the change waits.
+            let retired = self
+                .inner
+                .radio_store
+                .expose(chat_id, &keys, &others, now_ms());
+            if own_is_there
+                && let Err(error) = messaging
+                    .set_app_component(&account.public_key, chat_id, own_component, Vec::new())
+                    .await
+            {
+                log::info!("an exposed radio record waits to be removed: {error}");
+            }
+            retired.unwrap_or_else(|error| {
+                log::warn!("could not retire exposed radio keys: {error}");
+                false
+            })
+        };
+        if retired {
+            log::info!("a chat's radio keys could be read by someone else, and are retired");
+            self.contact_meshes_changed(contact);
+            self.reach_changed();
+            // The new keys go into the contact's direct chats now.
+            for other in &others {
+                self.keep_own_records(other).await;
+            }
+        }
     }
 
     /// Takes the records the contact has in the state of the chat `chat_id`. Those in a chat
@@ -439,7 +529,7 @@ impl Core {
     }
 
     /// The contact's record in the chat `chat_id` for `mesh`, as kept: its key is the one their
-    /// packets on that mesh are opened with (#128).
+    /// packets on that mesh are opened with (#128), unless someone else could read it (#163).
     pub fn radio_contact_record(&self, chat_id: &str, mesh: RadioMesh) -> Option<RadioRecord> {
         self.inner
             .radio_store
@@ -634,7 +724,9 @@ impl Core {
                 chat.contact.name
             )));
         };
-        // A new key first, if the membership changed: a member who left can't read this.
+        // A new key first, if the membership changed: a member who left can't read this, and
+        // neither can one who was just added (#163).
+        self.retire_exposed_keys(chat_id).await;
         self.keep_own_records(chat_id).await;
         let own = self
             .inner
@@ -904,7 +996,9 @@ impl Core {
     /// internet doesn't carry it instead, and the hour's airtime allows. Returns how long to wait
     /// for this try's confirmation.
     async fn retry_by_radio(&self, awaited: &Awaited, retry: &Retry) -> Option<Duration> {
-        let chat = self.chat(&awaited.chat_id)?;
+        // A chat that stopped being direct may have a member who can read the packet's key
+        // (#163).
+        let chat = self.radio_chat(&awaited.chat_id)?;
         if let Err(issue) = self.contact_radio_reach(&chat.contact.public_key) {
             log::info!("no radio retry: {issue:?}");
             return None;
