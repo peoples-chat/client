@@ -25,6 +25,10 @@ pub struct Preset {
     pub max_tx_power_dbm: u8,
 }
 
+/// The bridge's port when radios.toml names none. `tools/ble-bridge/LabFile.swift` has the
+/// same.
+pub const BRIDGE_PORT: u16 = 5535;
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct RadioEntry {
     pub label: String,
@@ -39,6 +43,10 @@ pub struct RadioEntry {
     /// Where `uhubctl` switches the radio's power: `<hub location>:<port>`. A value in angle
     /// brackets says why there is none.
     pub hub_port: Option<String>,
+    /// Where the Bluetooth bridge (#135) passes this radio's frames, on 127.0.0.1.
+    pub bridge_port: Option<u16>,
+    /// Where the bridge takes commands about the link. By default the port after `bridge_port`.
+    pub bridge_control_port: Option<u16>,
 }
 
 /// A port of a hub that `uhubctl` can switch.
@@ -49,6 +57,15 @@ pub struct HubPort {
 }
 
 impl RadioEntry {
+    pub fn bridge_port(&self) -> u16 {
+        self.bridge_port.unwrap_or(BRIDGE_PORT)
+    }
+
+    pub fn bridge_control_port(&self) -> u16 {
+        self.bridge_control_port
+            .unwrap_or_else(|| self.bridge_port().saturating_add(1))
+    }
+
     /// Where the radio's power is switched, if anywhere.
     pub fn hub(&self) -> Result<Option<HubPort>, String> {
         let Some(text) = self.hub_port.as_deref().map(str::trim) else {
@@ -109,6 +126,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
         }
         labels.push(&radio.label);
         let Some(serial) = &radio.usb_serial else {
+            // A Bluetooth radio is checked like the others before anything is sent, so its entry
+            // must say what to expect.
+            if let Some(name) = &radio.ble_name {
+                for (field, value) in [("ble_name", name), ("firmware", &radio.firmware)] {
+                    if value.trim().is_empty() || placeholder(value) {
+                        return Err(format!("{}: {field} isn't filled in", radio.label));
+                    }
+                }
+            }
             continue;
         };
         for (field, value) in [("usb_serial", serial), ("firmware", &radio.firmware)] {

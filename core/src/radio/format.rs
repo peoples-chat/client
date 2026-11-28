@@ -18,7 +18,7 @@ use super::keys::RadioKey;
 
 /// The format's version, in the first byte's high 4 bits.
 pub const FORMAT_VERSION: u8 = 0;
-/// Version and type, epoch hint, the counter's low 16 bits, and the send time.
+/// Version and type, key hint, the counter's low 16 bits, and the send time.
 pub const HEADER_BYTES: usize = 8;
 /// The Poly1305 tag.
 pub const TAG_BYTES: usize = 16;
@@ -57,8 +57,8 @@ impl PacketKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     pub kind: PacketKind,
-    /// The chat's MLS epoch, modulo 256.
-    pub epoch_hint: u8,
+    /// The number of the sender's key that sealed it, modulo 256.
+    pub key_hint: u8,
     /// The low 16 bits of the sender's counter. [`full_counter`] rebuilds the rest.
     pub counter_low: u16,
     /// When the message was sent, in seconds since the Unix epoch, as in its Nostr event.
@@ -79,7 +79,7 @@ impl Header {
             .ok_or(PacketError::UnknownKind(packet[0] & 0x0F))?;
         Ok(Self {
             kind,
-            epoch_hint: packet[1],
+            key_hint: packet[1],
             counter_low: u16::from_be_bytes([packet[2], packet[3]]),
             sent_at: u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]),
         })
@@ -88,7 +88,7 @@ impl Header {
     fn to_bytes(self) -> [u8; HEADER_BYTES] {
         let mut bytes = [0; HEADER_BYTES];
         bytes[0] = FORMAT_VERSION << 4 | self.kind.code();
-        bytes[1] = self.epoch_hint;
+        bytes[1] = self.key_hint;
         bytes[2..4].copy_from_slice(&self.counter_low.to_be_bytes());
         bytes[4..8].copy_from_slice(&self.sent_at.to_be_bytes());
         bytes
@@ -124,12 +124,18 @@ pub struct OpenedText {
     pub sent_at: u32,
 }
 
-/// Seals `text` into a packet with the sender's key for `epoch`. `counter` must never have been
-/// used with this key before: the sender stores the next one before the packet goes out.
-pub fn seal_text(key: &RadioKey, epoch: u64, counter: u64, sent_at: u32, text: &str) -> Vec<u8> {
+/// Seals `text` into a packet with the sender's key number `key_number`. `counter` must never
+/// have been used with this key before: the sender stores the next one before the packet goes out.
+pub fn seal_text(
+    key: &RadioKey,
+    key_number: u64,
+    counter: u64,
+    sent_at: u32,
+    text: &str,
+) -> Vec<u8> {
     let header = Header {
         kind: PacketKind::Text,
-        epoch_hint: epoch as u8,
+        key_hint: key_number as u8,
         counter_low: counter as u16,
         sent_at,
     }
@@ -235,19 +241,29 @@ fn nonce(counter: u64) -> Nonce {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::radio::RadioKeys;
+    use zeroize::Zeroizing;
 
     const ADA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const BEA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    /// Ada's keys for the vectors' chat: the secret 00 01 … 1f.
-    fn ada() -> RadioKeys {
-        RadioKeys::derive(&(0..32).collect::<Vec<u8>>(), 7, ADA, BEA).unwrap()
+    /// The vectors' keys: Ada's and Bea's.
+    fn vector_key(hex_key: &str) -> RadioKey {
+        let mut key = Zeroizing::new([0; 32]);
+        hex::decode_to_slice(hex_key, key.as_mut()).unwrap();
+        key
+    }
+
+    fn ada_key() -> RadioKey {
+        vector_key("805f65bf8627f9d3a3849c2e330d9c6f9f5936495b5212c5597526bcda48ead7")
+    }
+
+    fn bea_key() -> RadioKey {
+        vector_key("05e43f1c7156b5f6b36d01742b86cf32a9753e57767d2e1bbc6ee99158d62d5d")
     }
 
     struct Vector {
         from_ada: bool,
-        epoch: u64,
+        key_number: u64,
         counter: u64,
         sent_at: u32,
         text: &'static str,
@@ -260,7 +276,7 @@ mod tests {
     const VECTORS: [Vector; 3] = [
         Vector {
             from_ada: true,
-            epoch: 7,
+            key_number: 7,
             counter: 0,
             sent_at: 1795300000,
             text: "Hello Bea",
@@ -270,7 +286,7 @@ mod tests {
         },
         Vector {
             from_ada: false,
-            epoch: 7,
+            key_number: 7,
             counter: 300,
             sent_at: 1795300060,
             text: "Hej! Ses vi i morgen? ☔",
@@ -280,7 +296,7 @@ mod tests {
         },
         Vector {
             from_ada: true,
-            epoch: 263,
+            key_number: 263,
             counter: 70000,
             sent_at: 1795300120,
             text: "Still here.",
@@ -292,16 +308,15 @@ mod tests {
 
     #[test]
     fn matches_the_test_vectors() {
-        let ada = ada();
         for vector in VECTORS {
             let (key, sender) = if vector.from_ada {
-                (&ada.send, ADA)
+                (&ada_key(), ADA)
             } else {
-                (&ada.receive, BEA)
+                (&bea_key(), BEA)
             };
             let packet = seal_text(
                 key,
-                vector.epoch,
+                vector.key_number,
                 vector.counter,
                 vector.sent_at,
                 vector.text,
@@ -323,7 +338,7 @@ mod tests {
     #[test]
     fn the_longest_text_fills_one_text_message() {
         assert_eq!(MAX_RADIO_TEXT_BYTES, 96);
-        let key = ada().send;
+        let key = ada_key();
         let longest = "x".repeat(MAX_RADIO_TEXT_BYTES);
         assert!(fits(&longest));
         let packet = seal_text(&key, 7, 1, 1795300180, &longest);
@@ -337,31 +352,31 @@ mod tests {
 
     #[test]
     fn refuses_what_it_must() {
-        let ada = ada();
-        let packet = seal_text(&ada.send, 7, 0, 1795300000, "Hello Bea");
+        let ada = ada_key();
+        let packet = seal_text(&ada, 7, 0, 1795300000, "Hello Bea");
 
-        // Reflected back to Ada, as if Bea had sent it.
+        // Opened with another key, as when a packet is reflected back to its sender.
         assert_eq!(
-            open_text(&ada.receive, &packet, 0),
+            open_text(&bea_key(), &packet, 0),
             Err(PacketError::NotAuthentic)
         );
         // Any changed byte, in the header too.
         for index in 0..packet.len() {
             let mut changed = packet.clone();
             changed[index] ^= 1;
-            assert!(open_text(&ada.send, &changed, 0).is_err(), "byte {index}");
+            assert!(open_text(&ada, &changed, 0).is_err(), "byte {index}");
         }
         // The right low bits with the wrong full counter.
         assert_eq!(
-            open_text(&ada.send, &packet, 1 << 16),
+            open_text(&ada, &packet, 1 << 16),
             Err(PacketError::NotAuthentic)
         );
         assert_eq!(
-            open_text(&ada.send, &packet, 1),
+            open_text(&ada, &packet, 1),
             Err(PacketError::CounterMismatch)
         );
         assert_eq!(
-            open_text(&ada.send, &packet[..OVERHEAD_BYTES - 1], 0),
+            open_text(&ada, &packet[..OVERHEAD_BYTES - 1], 0),
             Err(PacketError::TooShort(OVERHEAD_BYTES - 1))
         );
 
@@ -417,7 +432,7 @@ mod tests {
     /// The fuzz target in `core/fuzz` does this at length; this keeps a short version in CI.
     #[test]
     fn malformed_input_never_panics() {
-        let key = ada().send;
+        let key = ada_key();
         let mut state = 0x9E37_79B9_7F4A_7C15_u64;
         let mut next = move || {
             state ^= state << 13;

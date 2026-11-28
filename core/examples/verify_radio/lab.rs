@@ -12,6 +12,7 @@ use peoples_chat_core::radio::{
 use tokio::time::Instant;
 use tokio_serial::SerialPortBuilderExt;
 
+use crate::ble;
 use crate::config::{Config, Preset, RadioEntry};
 use crate::link::{FrameLog, Io, Link};
 use crate::power::Power;
@@ -52,6 +53,16 @@ pub struct Timing {
     pub back: Duration,
     /// How often to look for it meanwhile.
     pub poll: Duration,
+    /// How long the Bluetooth bridge (#135) may take to have its radio: also after a drop.
+    pub ble_connect: Duration,
+    /// How often the link to a radio behind the bridge is checked.
+    pub watch: Duration,
+    /// How long a lost link may go unnoticed: two checks in a row must go unanswered.
+    pub lost: Duration,
+    /// How long a message may take from one radio to the other.
+    pub message: Duration,
+    /// How long radios may take to add each other after they announced themselves.
+    pub contacts: Duration,
 }
 
 impl Default for Timing {
@@ -60,6 +71,11 @@ impl Default for Timing {
             reply: Duration::from_secs(5),
             back: Duration::from_secs(60),
             poll: Duration::from_secs(1),
+            ble_connect: Duration::from_secs(45),
+            watch: Duration::from_secs(10),
+            lost: Duration::from_secs(45),
+            message: Duration::from_secs(45),
+            contacts: Duration::from_secs(30),
         }
     }
 }
@@ -118,6 +134,9 @@ pub struct Lab<'a> {
     pub power: &'a dyn Power,
     pub log: Arc<FrameLog>,
     pub timing: Timing,
+    /// Whether to run against the radios on Bluetooth, through the bridge (#135). Without,
+    /// they are listed and not checked.
+    pub bluetooth: bool,
 }
 
 impl Lab<'_> {
@@ -310,19 +329,41 @@ impl Lab<'_> {
     /// The whole run. Every USB radio is checked before any test starts. A dry run lists what it
     /// finds, and never touches a radio's power or clock. Any other run sets every clock.
     pub async fn run(&self, dry_run: bool, out: &mut (dyn Write + Send)) -> Result<(), String> {
-        for station in self.stations(dry_run, out).await? {
+        let (stations, over_bluetooth) = self.usb_stations(dry_run, self.bluetooth, out).await?;
+        // Bluetooth radios (#135). Each is checked against the lab through the bridge before
+        // anything is sent to it. A dry run stops there.
+        let mut result = Ok(());
+        for entry in over_bluetooth {
+            let usb = if dry_run { None } else { stations.first() };
+            result = ble::run(self, entry, usb, out).await;
+            if result.is_err() {
+                break;
+            }
+        }
+        for station in stations {
             station.close().await;
         }
-        Ok(())
+        result
     }
 
     /// Every USB radio of the lab file, found and checked, and (unless it's a dry run) asked
-    /// whether it responds. Hardware tests start from these.
+    /// whether it responds. Hardware tests start from these; radios on Bluetooth are left alone.
     pub async fn stations(
         &self,
         dry_run: bool,
         out: &mut (dyn Write + Send),
     ) -> Result<Vec<Station>, String> {
+        Ok(self.usb_stations(dry_run, false, out).await?.0)
+    }
+
+    /// The USB radios, checked, and the Bluetooth radios to reach through the bridge, if
+    /// `bluetooth` is set. Otherwise those are listed as not checked.
+    async fn usb_stations(
+        &self,
+        dry_run: bool,
+        bluetooth: bool,
+        out: &mut (dyn Write + Send),
+    ) -> Result<(Vec<Station>, Vec<&RadioEntry>), String> {
         let preset = &self.config.lab;
         let _ = writeln!(
             out,
@@ -336,8 +377,13 @@ impl Lab<'_> {
         );
         let mut stations = Vec::new();
         let mut problems = Vec::new();
+        let mut over_bluetooth = Vec::new();
         for entry in &self.config.radios {
             if entry.usb_serial.is_none() {
+                if entry.ble_name.is_some() && bluetooth {
+                    over_bluetooth.push(entry);
+                    continue;
+                }
                 let _ = writeln!(
                     out,
                     "{}: not on USB ({}), not checked",
@@ -396,7 +442,7 @@ impl Lab<'_> {
                 self.set_clock(station, out).await?;
             }
         }
-        Ok(stations)
+        Ok((stations, over_bluetooth))
     }
 }
 
@@ -477,13 +523,20 @@ pub fn mismatches(preset: &Preset, entry: &RadioEntry, info: &RadioInfo) -> Vec<
 }
 
 fn describe(station: &Station) -> String {
-    let info = &station.info;
-    let settings = info.settings;
     format!(
-        "{}: {} (USB {}), firmware {}, key {}…, {} MHz, {} kHz, SF {}, CR {}, {} dBm",
+        "{}: {} (USB {}), {}",
         station.entry.label,
         station.port,
         station.entry.usb_serial.as_deref().unwrap_or_default(),
+        describe_info(&station.info)
+    )
+}
+
+/// A radio's firmware, key and settings, as the run lists them.
+pub fn describe_info(info: &RadioInfo) -> String {
+    let settings = info.settings;
+    format!(
+        "firmware {}, key {}…, {} MHz, {} kHz, SF {}, CR {}, {} dBm",
         info.firmware.as_deref().unwrap_or("unknown"),
         info.public_key.get(..12).unwrap_or(&info.public_key),
         settings.frequency_mhz,

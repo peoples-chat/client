@@ -80,8 +80,8 @@ async fn settled(one: &Core, other: &Core, chat_id: &str) {
     let deadline = Instant::now() + WAIT;
     loop {
         if let (Ok(a), Ok(b)) = (
-            one.radio_keys(chat_id).await,
-            other.radio_keys(chat_id).await,
+            one.chat_membership(chat_id).await,
+            other.chat_membership(chat_id).await,
         ) && a.epoch == b.epoch
         {
             return;

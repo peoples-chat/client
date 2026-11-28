@@ -16,7 +16,7 @@ use crate::lock::LabLock;
 use crate::path_spike::fake::FakeMesh;
 use crate::path_spike::plan::Options;
 use crate::power::Uhubctl;
-use crate::{End, Paths, Task, spike, task, verify};
+use crate::{End, Mode, Paths, Task, spike, task, verify};
 
 /// The fake mesh's radios are on EU/UK narrow, firmware v1.18.0.
 const LAB: &str = r#"
@@ -99,6 +99,7 @@ impl Bench {
             power: &self.power,
             log: self.log.clone(),
             timing: Timing::default(),
+            bluetooth: false,
         }
     }
 
@@ -283,7 +284,14 @@ fn issue_140_the_command_line_never_lets_the_spike_change_power_or_pick_ports() 
             period: Duration::from_secs(75 * 60)
         })
     );
-    assert_eq!(task(&[]), Ok(Task::Check { dry_run: false }));
+    assert_eq!(task(&[]), Ok(Task::Check(Mode::default())));
+    assert_eq!(
+        task(&args("--usb-only --dry-run")),
+        Ok(Task::Check(Mode {
+            dry_run: true,
+            usb_only: true
+        }))
+    );
     for (line, says) in [
         ("--path-spike --tx-power 2", "never changes a radio's power"),
         ("--path-spike --radio-off", "can't switch a radio off"),
