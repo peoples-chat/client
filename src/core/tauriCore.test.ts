@@ -78,6 +78,7 @@ describe("Tauri core", () => {
       send_message: message,
       set_force_radio: { forced: true },
       cancel_message: null,
+      mark_read: null,
       radio_ports: [port],
       pair_radio: shared.snapshot.radio,
       forget_radio: { forced: false, canPair: true },
@@ -95,6 +96,7 @@ describe("Tauri core", () => {
     expect(await core.sendMessage("chat-1", "Yes, around three.")).toEqual(message);
     expect(await core.setForceRadio(true)).toEqual({ forced: true });
     await core.cancelMessage("chat-1", "queued-1");
+    await core.markRead("chat-1");
     expect(await core.radioPorts()).toEqual([port]);
     expect(await core.pairRadio(port.path)).toEqual(shared.snapshot.radio);
     expect(await core.forgetRadio()).toEqual({ forced: false, canPair: true });
@@ -111,6 +113,7 @@ describe("Tauri core", () => {
       'send_message {"chatId":"chat-1","text":"Yes, around three."}',
       'set_force_radio {"forced":true}',
       'cancel_message {"chatId":"chat-1","messageId":"queued-1"}',
+      'mark_read {"chatId":"chat-1"}',
       "radio_ports",
       'pair_radio {"port":"/dev/cu.usbmodem1101"}',
       "forget_radio",
@@ -146,6 +149,7 @@ describe("the JSON shared with the Rust core", () => {
     expect(state.account?.name).toBe("Emil Dahl");
     expect(state.chats[0].messages[1].delivery).toBe("confirmed");
     expect(state.chats[0].messages[2].delivery).toBe("timedOut");
+    expect(state.chats[0].messages[2].expiresAt).toBe(1795904890000);
     expect(state.invitations[0].from.name).toBe("Karen Winther");
     expect(state.account?.about).toBe("Aarhus. Usually reachable by radio.");
     expect(state.invites.map((i) => [i.name, i.joinedChatId])).toEqual([["Sofie", undefined]]);
@@ -179,6 +183,7 @@ describe("the JSON shared with the Rust core", () => {
           ["radio", undefined],
           ["unreachable", "notHeard"],
         ]),
+      disappearingChanged: (next) => expect(next.chats.map((c) => c.disappearAfter)).toEqual([604800, 3600]),
       relaysChanged: (next) => expect(next.relays.map((r) => r.status)).toEqual(["connected", "unreachable"]),
       accountChanged: (next) =>
         expect([next.account?.name, next.account?.about, next.account?.photo?.slice(0, 23)]).toEqual([

@@ -39,10 +39,12 @@
             "text": "Are you still there?",
             "sentAt": 1795300090000,
             "transport": "radio",
-            "delivery": "timedOut"
+            "delivery": "timedOut",
+            "expiresAt": 1795904890000
           }
         ],
-        "reach": "radio"
+        "reach": "radio",
+        "disappearAfter": 604800
       }
     ],
     "invitations": [
@@ -157,6 +159,11 @@
       "chatId": "chat-2",
       "reach": "unreachable",
       "radioIssue": "notHeard"
+    },
+    {
+      "type": "disappearingChanged",
+      "chatId": "chat-2",
+      "disappearAfter": 3600
     },
     {
       "type": "relaysChanged",
