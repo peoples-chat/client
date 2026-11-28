@@ -4,6 +4,8 @@
 //! pnpm verify:radio              # checks every radio, then tests them on the air
 //! pnpm verify:radio --dry-run    # lists the radios found and their firmware
 //! pnpm verify:radio --usb-only   # leaves the radios on Bluetooth alone
+//! pnpm verify:radio --path-spike --offline   # the path spike between R1 and R2 (#140)
+//! pnpm verify:radio --adverts 75             # how often they advertise on their own (#140)
 //! ```
 //!
 //! It holds the lab lock for the whole run, finds radios by their USB serial numbers, refuses
@@ -14,6 +16,7 @@
 //! bridge in `tools/ble-bridge/`, and skipped when the bridge isn't running: the harness itself
 //! never touches Bluetooth. Details: `docs/radio-lab.md`.
 
+mod adverts;
 mod ble;
 #[cfg(all(test, target_os = "macos"))]
 mod ble_tests;
@@ -25,17 +28,28 @@ mod lab;
 mod link;
 mod lock;
 mod messages;
+// The path spike (#36), which also runs on its own as an example. Parts of its command line
+// aren't used here.
+#[path = "../path_spike/main.rs"]
+#[allow(dead_code)]
+mod path_spike;
 mod power;
+#[cfg(test)]
+mod results_140;
+mod spike;
 /// The two-phone tests' own phones and relay.
 #[path = "../../tests/support/mod.rs"]
 mod support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_140;
 
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -46,9 +60,15 @@ use crate::messages::{Bench, Waits};
 use crate::power::Uhubctl;
 
 const USAGE: &str = "Usage: pnpm verify:radio [--dry-run] [--usb-only]
+       pnpm verify:radio --path-spike [--reverse] [path_spike options]
+       pnpm verify:radio --adverts MINUTES
+       pnpm verify:radio --fixtures FRAME_LOG FOLDER NAME   (no radios)
 
   --dry-run    lists the radios and checks them against the lab; sends nothing
   --usb-only   leaves the radios on Bluetooth alone
+
+The path spike and the adverts listen use the first two USB radios only.
+path_spike options: --paths, --texts, --repeat, --flood-repeat, --via, --offline, --out, …
 
 Environment:
   RADIOS_TOML     the lab file (default: ~/factory/radios.toml)
@@ -145,7 +165,62 @@ where
     end
 }
 
-fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
+/// What a run does once it holds the lab.
+#[derive(Debug, PartialEq)]
+enum Task {
+    /// The checks, and unless it's a dry run the tests on the air.
+    Check(Mode),
+    /// The path spike between the first two USB radios.
+    PathSpike {
+        options: path_spike::plan::Options,
+        reverse: bool,
+    },
+    /// Listen for the radios' own adverts.
+    Adverts { period: Duration },
+}
+
+/// Reads the command line of a run on the radios.
+fn task(args: &[String]) -> Result<Task, String> {
+    // pnpm passes the separator on.
+    let args: Vec<String> = args.iter().filter(|arg| *arg != "--").cloned().collect();
+    if args
+        .iter()
+        .all(|arg| arg == "--dry-run" || arg == "--usb-only")
+    {
+        return Ok(Task::Check(Mode {
+            dry_run: args.iter().any(|arg| arg == "--dry-run"),
+            usb_only: args.iter().any(|arg| arg == "--usb-only"),
+        }));
+    }
+    match args.split_first() {
+        None => Ok(Task::Check(Mode::default())),
+        Some((first, rest)) if first == "--path-spike" => {
+            let reverse = rest.iter().any(|arg| arg == "--reverse");
+            let rest: Vec<String> = rest
+                .iter()
+                .filter(|arg| *arg != "--reverse")
+                .cloned()
+                .collect();
+            Ok(Task::PathSpike {
+                options: spike::options(&rest)?,
+                reverse,
+            })
+        }
+        Some((first, [minutes])) if first == "--adverts" => {
+            let minutes: u64 = minutes
+                .parse()
+                .ok()
+                .filter(|minutes| (1..=24 * 60).contains(minutes))
+                .ok_or("--adverts takes a number of minutes")?;
+            Ok(Task::Adverts {
+                period: Duration::from_secs(minutes * 60),
+            })
+        }
+        Some((other, _)) => Err(format!("Unknown argument {other:?}")),
+    }
+}
+
+fn verify(paths: &Paths, task: Task, out: &mut (dyn Write + Send)) -> End {
     // Before the lock: a missing lab file needs no radios.
     let config = match config::load(&paths.config) {
         Ok(config) => config,
@@ -164,9 +239,17 @@ fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
             power: &power,
             log: log.clone(),
             timing: Timing::default(),
-            bluetooth: !mode.usb_only,
+            // The measurements (#140) use the USB radios only.
+            bluetooth: matches!(task, Task::Check(mode) if !mode.usb_only),
         };
-        let result = checks_and_tests(&lab, Waits::default(), mode.dry_run, out).await;
+        let result = match task {
+            Task::Check(mode) => checks_and_tests(&lab, Waits::default(), mode.dry_run, out).await,
+            Task::PathSpike { options, reverse } => lab
+                .path_spike(options, reverse, &paths.logs, out)
+                .await
+                .map(drop),
+            Task::Adverts { period } => lab.adverts(period, out).await.map(drop),
+        };
         // Whether the tests passed or not: a failed run's frames are worth having too.
         for fixture in fixtures::save(log.path())? {
             let _ = writeln!(out, "Fixture: {}", fixture.display());
@@ -204,25 +287,36 @@ async fn checks_and_tests(
 }
 
 fn main() {
-    let mut mode = Mode::default();
-    for argument in std::env::args().skip(1) {
-        match argument.as_str() {
-            "--dry-run" => mode.dry_run = true,
-            "--usb-only" => mode.usb_only = true,
-            // pnpm passes the separator on.
-            "--" => {}
-            "--help" | "-h" => {
-                println!("{USAGE}");
-                return;
-            }
-            other => {
-                eprintln!("Unknown argument {other:?}\n\n{USAGE}");
-                std::process::exit(2);
+    let args: Vec<String> = std::env::args().skip(1).filter(|arg| arg != "--").collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{USAGE}");
+        return;
+    }
+    if let [first, log, folder, name] = &args[..]
+        && first == "--fixtures"
+    {
+        let heading = "Captured from a real radio in the lab (#140), on the private lab preset:\n\
+                       869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm. The format: fake-radio/src/fixture.rs.";
+        match fixtures::write(log.as_ref(), folder.as_ref(), name, heading) {
+            Ok(written) => written
+                .iter()
+                .for_each(|path| println!("{}", path.display())),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
             }
         }
+        return;
     }
+    let task = match task(&args) {
+        Ok(task) => task,
+        Err(error) => {
+            eprintln!("{error}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
     let end = match Paths::from_env(|name| std::env::var_os(name).map(PathBuf::from)) {
-        Ok(paths) => verify(&paths, mode, &mut std::io::stdout()),
+        Ok(paths) => verify(&paths, task, &mut std::io::stdout()),
         Err(error) => End::Failed(error),
     };
     match end {

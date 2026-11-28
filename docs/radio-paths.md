@@ -1,11 +1,15 @@
 # Radio paths for the app's packets (#36)
 
 Which MeshCore mechanism should carry the app's radio packets between two companion radios? This page compares the
-candidates as the firmware source describes them, and explains how to measure them with the `path_spike` example.
+candidates as the firmware source describes them, gives what was [measured](#measured-in-the-lab) between two radios,
+[recommends](#recommendation) one, and explains how to measure again with the `path_spike` example.
 
-**Status: prepared on 23 November 2026, before the radios arrived. Nothing here is measured yet.** Hardware day fills in
-the blanks under [What hardware day fills in](#what-hardware-day-fills-in). The finding and the recommendation follow
-from those measurements.
+**Status: measured on 27 November 2026 (#140)** between the lab radios R1 and R2, on a desk, zero hop. Both are Seeed
+Wio Tracker L1 with companion firmware v1.18.0-81dbae5.
+
+**Every measured number here is on the private lab preset, 869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm, not EU/UK Narrow**
+(869.618 MHz, SF 8, CR 8). Times on air and times to arrive are longer on EU/UK Narrow. Nothing here says anything about
+range. A repeater hop and a stock MeshCore app are still to be tried (#36).
 
 ## The candidates
 
@@ -74,23 +78,206 @@ From the companion firmware at `companion-v1.18.0`.
 - **The radio has its own airtime budget.** Its default airtime factor of 1.0 allows half the time on air. The spike
   stays far below that.
 
-## What hardware day fills in
+## Measured in the lab
 
-| Question | Text message | Raw data | Channel data | From |
+All of this is on the private lab preset, **869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm, not EU/UK Narrow**, between two
+radios on a desk, with no repeater. Chat text is the text inside a format v0 packet.
+
+The captures, from `pnpm verify:radio --path-spike` ([radio-lab.md](radio-lab.md#measurements)):
+
+- **Every send:** [R1 to R2](radio-paths/lab-r1-to-r2.csv) (10 direct and 3 flood rounds, and the receiver away) and
+  [R2 to R1](radio-paths/lab-r2-to-r1.csv) (5 direct and 2 flood rounds).
+- **Every frame** of the R1 to R2 run, as fixtures for the fake radio (#132):
+  `fake-radio/tests/fixtures/lab-path-spike-R1.frames` and `…-R2.frames`.
+
+### Payload limit
+
+Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm). Each limit was met from both sides, and matches the source.
+
+| | Longest that arrived | One step longer | Chat text at the limit |
+| --- | --- | --- | --- |
+| Text message | 160 characters | 162: refused, `TABLE_FULL` | 96 B |
+| Raw data | 172 bytes | 173: sent on air, never passed on | 148 B |
+| Channel data | 165 bytes | 166: refused, `ILLEGAL_ARG` | 141 B |
+
+### Delivery, time to arrive and confirmation
+
+Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm). Each cell is delivered intact of sent, then the median time from
+handing the packet to radio A until radio B's app had it, then (`ack`) the median time until radio A reported the
+confirmation. Only text messages are confirmed. A refused send never went on air.
+
+**R1 to R2:**
+
+| Route | Chat text | Text message | Raw data | Channel data |
 | --- | --- | --- | --- | --- |
-| Delivered intact, zero hop, at each size | | | | the table |
-| Median time to arrive | | | | the table |
-| Median time to the confirmation | | | | the table |
-| The longest chat text that always arrived | | | | the summary under the table |
-| Logged on-air sizes match the worked-out ones | | | | `logged` against `on air` |
-| Copies of a flood heard: repeaters in range | | refused | | `copies` |
-| Receiver's link closed | | | | `--offline` |
-| Receiver switched off | | | | `--radio-off` |
-| Through one repeater | | | | `--via` |
-| What a stock MeshCore phone app shows on radio B | | | | by eye |
-| Whether opening the serial port restarts the radio, which empties its queue | | | | `--offline` |
+| zero hop | 10 B | 10/10, 324 ms, ack 653 ms | 10/10, 218 ms | 10/10, 273 ms |
+| zero hop | 48 B | 10/10, 468 ms, ack 798 ms | 10/10, 332 ms | 10/10, 365 ms |
+| zero hop | 96 B | 10/10, 656 ms, ack 985 ms | 10/10, 476 ms | 10/10, 510 ms |
+| zero hop | 97 B | refused | 10/10, 477 ms | 10/10, 510 ms |
+| zero hop | 126 B | refused | 10/10, 560 ms | 10/10, 604 ms |
+| zero hop | 141 B | refused | 10/10, 612 ms | 10/10, 656 ms |
+| zero hop | 142 B | refused | 10/10, 612 ms | refused |
+| zero hop | 148 B | refused | 10/10, 632 ms | refused |
+| zero hop | 149 B | refused | 0/10 | refused |
+| flood | 10 B | 3/3, 324 ms, ack 695 ms | refused | 3/3, 271 ms |
+| flood | 48 B | 3/3, 468 ms, ack 841 ms | refused | 3/3, 365 ms |
+| flood | 96 B | 3/3, 655 ms, ack 1026 ms | refused | 3/3, 511 ms |
+
+**R2 to R1:**
+
+| Route | Chat text | Text message | Raw data | Channel data |
+| --- | --- | --- | --- | --- |
+| zero hop | 10 B | 5/5, 323 ms, ack 653 ms | 5/5, 218 ms | 5/5, 272 ms |
+| zero hop | 48 B | 5/5, 469 ms, ack 799 ms | 5/5, 332 ms | 5/5, 365 ms |
+| zero hop | 96 B | 5/5, 656 ms, ack 985 ms | 5/5, 476 ms | 5/5, 510 ms |
+| zero hop | 97 B | refused | 5/5, 477 ms | 5/5, 511 ms |
+| zero hop | 126 B | refused | 5/5, 560 ms | 5/5, 604 ms |
+| zero hop | 141 B | refused | 5/5, 611 ms | 5/5, 655 ms |
+| zero hop | 142 B | refused | 5/5, 611 ms | refused |
+| zero hop | 148 B | refused | 5/5, 632 ms | refused |
+| zero hop | 149 B | refused | 0/5 | refused |
+| flood | 10 B | 2/2, 322 ms, ack 694 ms | refused | 2/2, 272 ms |
+| flood | 48 B | 2/2, 467 ms, ack 839 ms | refused | 2/2, 365 ms |
+| flood | 96 B | 2/2, 655 ms, ack 1026 ms | refused | 2/2, 511 ms |
+
+- Within its limit, every packet arrived intact and opened with the key. This is a strong link on a desk: it shows that
+  the paths work, not how often they deliver at a distance.
+- Every text message that was delivered was also confirmed.
+- Zero hop, R1 to R2, time to arrive was the worked-out airtime plus 46 to 62 ms.
+- The radio's own estimate of how long a confirmation may take was far longer than it took: 2.6 s to 4.6 s direct and
+  5.5 s to 10.8 s for a flood.
+- Each flood short enough to be logged was heard once: there is no repeater in range.
+
+### On-air length against the worked-out size
+
+Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm), zero hop, R1 to R2. "Logged" is the packet's length as radio B
+reported hearing it. A radio logs packets up to 173 bytes only. Every logged length, in both directions, was the
+worked-out one. The airtime is worked out from the length (#51), not measured.
+
+| Path | Chat text | Payload | Worked out | Logged | Airtime |
+| --- | --- | --- | --- | --- | --- |
+| text | 10 B | 46 B | 70 B | 70 B | 272.9 ms |
+| text | 48 B | 96 B | 118 B | 118 B | 416.3 ms |
+| text | 96 B | 160 B | 182 B | not logged | 600.6 ms |
+| raw | 10 B | 34 B | 36 B | 36 B | 170.5 ms |
+| raw | 48 B | 72 B | 74 B | 74 B | 283.1 ms |
+| raw | 96 B | 120 B | 122 B | 122 B | 426.5 ms |
+| raw | 97 B | 121 B | 123 B | 123 B | 426.5 ms |
+| raw | 126 B | 150 B | 152 B | 152 B | 508.4 ms |
+| raw | 141 B | 165 B | 167 B | 167 B | 559.6 ms |
+| raw | 142 B | 166 B | 168 B | 168 B | 559.6 ms |
+| raw | 148 B | 172 B | 174 B | not logged | 580.1 ms |
+| raw | 149 B | 173 B | 175 B | not logged | 580.1 ms |
+| channel | 10 B | 34 B | 53 B | 53 B | 221.7 ms |
+| channel | 48 B | 72 B | 85 B | 85 B | 313.9 ms |
+| channel | 96 B | 120 B | 133 B | 133 B | 457.2 ms |
+| channel | 97 B | 121 B | 133 B | 133 B | 457.2 ms |
+| channel | 126 B | 150 B | 165 B | 165 B | 549.4 ms |
+| channel | 141 B | 165 B | 181 B | not logged | 600.6 ms |
+
+### SNR and RSSI
+
+Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm). As radio R2 logged R1's packets, which it does up to 173 bytes.
+The app itself gets SNR for text and channel data, and SNR and RSSI for raw data.
+
+| Path | Packets logged | SNR | RSSI |
+| --- | --- | --- | --- |
+| text | 26 | 11.5 to 12.75 dB | -59 to -58 dBm |
+| raw | 70 | 11.25 to 12.5 dB | -59 to -58 dBm |
+| channel | 59 | 11.25 to 13 dB | -59 to -58 dBm |
+
+### The receiver away
+
+Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm). One 48-byte chat text on each path while radio B's USB link was
+closed, then the link opened again.
+
+| Path | What happened | Confirmation |
+| --- | --- | --- |
+| text | queued on the radio | 798 ms |
+| raw | lost | none |
+| channel | queued on the radio | none |
+
+Opening the serial port didn't restart the radio: what it had queued was still there.
+
+### Not tried
+
+| Question | Why |
+| --- | --- |
+| Receiver switched off (`--radio-off`) | The lab has no per-port power switch |
+| Through one repeater (`--via`) | The lab has no repeater. It stays on #36 |
+| What a stock MeshCore phone app shows | It stays on #36 |
+| EU/UK Narrow, other power, distance | The lab radios stay on the lab preset |
+
+## The text budget against 100 to 150 bytes
+
+The longest chat text that arrived intact every time, zero hop, on the lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5,
+2 dBm). The limits are in bytes, so they are the same on any preset.
+
+| Path | Chat text | Against the target |
+| --- | --- | --- |
+| text | 96 B | 4 B short of 100 |
+| raw | 148 B | inside 100 to 150 |
+| channel | 141 B | inside 100 to 150 |
+
+## Recommendation
+
+**Use text messages** (`SEND_TXT_MSG`), as format v0 already does.
+
+- All three paths delivered everything within their limits, so delivery rules none out here.
+- Only text messages had all of: waiting on the radio while the app was away, a confirmation, and flooding until the
+  radio knows a route.
+- **The price is the budget: 96 bytes, 4 short of the 100 to 150 the spec aims for.** It is also the most airtime: for
+  48 bytes of chat text 416 ms, against 283 ms for raw data and 314 ms for channel data, before the confirmation's own
+  packet (lab preset: 869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm; worked out).
+- **Channel data** is the runner-up, with 141 bytes. It has no confirmation and doesn't say who sent it, the radio drops
+  it first when its queue is full, and meshcore-rs 0.2.0 can't send or read it.
+- **Raw data** has the largest budget, 148 bytes, but was lost when the app was away, can't flood and isn't confirmed.
+
+**No proposal to MeshCore is needed for the PoC.** Text messages work with the firmware and meshcore-rs as they are. If
+100 bytes or more is a firm requirement, that changes: a binary direct message that is queued and confirmed like text
+would need a proposal (#58). The other way to gain the 4 bytes is a smaller overhead in the format, which this
+measurement doesn't look into.
+
+Posted [on #36](https://github.com/peoples-chat/client/issues/36#issuecomment-7213712045).
+
+## Adverts the radios send on their own
+
+For #44's one-hour window. Lab preset (869.850 MHz, 62.5 kHz, SF 7, CR 5, 2 dBm), not EU/UK Narrow.
+
+**Neither radio sent an advert on its own in 75 minutes.** Companion radios on firmware v1.18.0, with their default
+settings, don't advertise by themselves within an hour.
+
+`pnpm verify:radio --adverts 75` ran on the lab on 28 November 2026 (on `feaf2a9`, with the radio clocks correct since
+#148; result reported [on #140](https://github.com/peoples-chat/client/issues/140)). It listens on both radios for
+75 minutes, then has each radio send one zero-hop advert, and fails unless the other radio hears it.
+
+| Radio | Listened | Unprompted adverts from the other radio | From any other radio | Prompted advert from the other radio |
+| --- | --- | --- | --- | --- |
+| R1 | 4500 s | 0 | 0 | heard |
+| R2 | 4500 s | 0 | 0 | heard |
+
+The prompted adverts at the end show that both radios were listening the whole time.
+
+**For #44:** a contact counts as reachable by radio only if their radio was heard within the window. Without adverts,
+that happens only when messages flow, so #44 must not count on an unprompted advert within its hour.
+
+**Supporting data: 22 minutes of frame logs.** The frame logs of the two path-spike runs above, which were back to
+back from 09:12:52 to 09:35:12 on 27 November 2026, hold no advert either. Both radios' links were open the whole
+time, apart from the short `--offline` gaps.
+
+- **How it was counted.** Each radio reports every packet it hears as `LOG_RX_DATA` (code `0x88`). An advert is a
+  packet of type 4, so its header byte is `0x10` to `0x13`. None of the frames had one, from R1, R2 or any other radio.
+  The same count finds the 26 text packets in the table above, so the count is sound.
+- **Nothing prompted one.** The harness sent no advert command (code 7) during the runs.
+
+| Run | Listened | Adverts heard by R1 | Adverts heard by R2 |
+| --- | --- | --- | --- |
+| R1 to R2 | 14.7 min | 0 | 0 |
+| R2 to R1 | 7.4 min | 0 | 0 |
 
 ## Choosing the path
+
+The rule behind the recommendation, set before the measurements:
 
 1. **Rule out** a path that doesn't deliver the v0 packet intact, zero hop, nearly every time at the sizes the app
    sends.
@@ -100,17 +287,12 @@ From the companion firmware at `companion-v1.18.0`.
    3. it works without the app knowing a route, so it can flood;
    4. its text budget comes closer to the 100 to 150 bytes the spec aims for;
    5. it takes less airtime per message.
-3. **What the source predicts:**
-   - **Text messages** come out ahead on waiting, confirmation and routing. The price is 96 bytes of text, and base64
-     adds a third to the time on air.
-   - **Channel data** waits and floods. But it has no confirmation, which an app-level one would have to add at its own
-     airtime (#41), and it doesn't say who sent it.
-   - **Raw data** needs a route that the app has to learn, and is lost when the app isn't listening.
-4. **A proposal to MeshCore.** If text messages win, none is needed. If the budget matters more, a binary direct
-   message would need one: for example, a data type for text messages, or raw data that floods and waits on the radio.
-   That belongs with #58.
 
 ## Running the spike
+
+In the radio lab, run it through the harness, which takes the lab lock, finds the radios and logs every frame:
+`pnpm verify:radio --path-spike --offline` ([radio-lab.md](radio-lab.md#measurements)). Elsewhere, run it alone, as
+follows.
 
 You need two radios with companion firmware for USB, on the same preset (EU/UK narrow), plugged into one desktop. The
 expectations come from firmware v1.18.0, and the tool says so when a radio runs another version. Check each radio first

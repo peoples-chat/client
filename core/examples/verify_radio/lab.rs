@@ -121,7 +121,7 @@ impl std::fmt::Debug for Station {
 }
 
 impl Station {
-    async fn close(self) {
+    pub async fn close(self) {
         let _ = self.radio.disconnect().await;
         drop(self.radio);
         self.link.close().await;
@@ -329,6 +329,41 @@ impl Lab<'_> {
     /// The whole run. Every USB radio is checked before any test starts. A dry run lists what it
     /// finds, and never touches a radio's power or clock. Any other run sets every clock.
     pub async fn run(&self, dry_run: bool, out: &mut (dyn Write + Send)) -> Result<(), String> {
+        let (stations, over_bluetooth) = self.usb_stations(dry_run, self.bluetooth, out).await?;
+        // Bluetooth radios (#135). Each is checked against the lab through the bridge before
+        // anything is sent to it. A dry run stops there.
+        let mut result = Ok(());
+        for entry in over_bluetooth {
+            let usb = if dry_run { None } else { stations.first() };
+            result = ble::run(self, entry, usb, out).await;
+            if result.is_err() {
+                break;
+            }
+        }
+        for station in stations {
+            station.close().await;
+        }
+        result
+    }
+
+    /// Every USB radio of the lab file, found and checked, and (unless it's a dry run) asked
+    /// whether it responds. Hardware tests start from these; radios on Bluetooth are left alone.
+    pub async fn stations(
+        &self,
+        dry_run: bool,
+        out: &mut (dyn Write + Send),
+    ) -> Result<Vec<Station>, String> {
+        Ok(self.usb_stations(dry_run, false, out).await?.0)
+    }
+
+    /// The USB radios, checked, and the Bluetooth radios to reach through the bridge, if
+    /// `bluetooth` is set. Otherwise those are listed as not checked.
+    async fn usb_stations(
+        &self,
+        dry_run: bool,
+        bluetooth: bool,
+        out: &mut (dyn Write + Send),
+    ) -> Result<(Vec<Station>, Vec<&RadioEntry>), String> {
         let preset = &self.config.lab;
         let _ = writeln!(
             out,
@@ -345,7 +380,7 @@ impl Lab<'_> {
         let mut over_bluetooth = Vec::new();
         for entry in &self.config.radios {
             if entry.usb_serial.is_none() {
-                if entry.ble_name.is_some() && self.bluetooth {
+                if entry.ble_name.is_some() && bluetooth {
                     over_bluetooth.push(entry);
                     continue;
                 }
@@ -407,20 +442,7 @@ impl Lab<'_> {
                 self.set_clock(station, out).await?;
             }
         }
-        // Bluetooth radios (#135). Each is checked against the lab through the bridge before
-        // anything is sent to it. A dry run stops there.
-        let mut result = Ok(());
-        for entry in over_bluetooth {
-            let usb = if dry_run { None } else { stations.first() };
-            result = ble::run(self, entry, usb, out).await;
-            if result.is_err() {
-                break;
-            }
-        }
-        for station in stations {
-            station.close().await;
-        }
-        result
+        Ok((stations, over_bluetooth))
     }
 }
 

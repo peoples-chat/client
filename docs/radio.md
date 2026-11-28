@@ -42,7 +42,8 @@ what the user sends within an hourly budget:
 
 - **Time on air** follows Semtech's LoRa formula for an explicit header and a CRC, with a 16-symbol preamble to err
   on the long side. A MeshCore text message on air is 6 bytes plus the encrypted timestamp, flags and text in 16-byte
-  blocks. Hardware day checks both against measurements (#36).
+  blocks. In the lab, the lengths on air were the worked-out ones; the time on air itself wasn't measured
+  ([radio-paths.md](radio-paths.md#measured-in-the-lab)).
 - **In the EU/UK narrow preset** (SF8, 62.5 kHz, 4/8), the longest message the app sends (160 characters of base64)
   takes about 1.6 seconds, and a short one about 0.6 seconds.
 - **The cap** is 36 seconds an hour (`HOURLY_AIRTIME`): a tenth of the 10% duty cycle that the EU allows in 869.4 to
@@ -67,8 +68,10 @@ and it is all the app claims: a message is `confirmed`, or `timedOut` when no co
 - **How long the core waits** for each try: the radio's own estimate, which `SENT` carries, plus a second for the
   confirmation to come over the link from the radio (`CONFIRM_MARGIN`). Companion v1.18.0 estimates 0.5 s plus
   16 times the packet's airtime for a flood, and for a direct message 0.5 s plus 6 times the airtime and 0.25 s for
-  each link on the path: about 10 s to 27 s for the longest message in the EU/UK narrow preset. Hardware day measures
-  the real times (#36). `Core::set_radio_confirm_wait` replaces the estimate, for tests and tuning.
+  each link on the path: about 10 s to 27 s for the longest message in the EU/UK narrow preset. In the lab, on its
+  faster private preset and a desk, confirmations took 0.65 s to 1.2 s, far less than the estimate
+  ([radio-paths.md](radio-paths.md#measured-in-the-lab)). `Core::set_radio_confirm_wait` replaces the estimate, for
+  tests and tuning.
 - **One retry** (`RADIO_RETRIES`), because each try costs shared airtime. It goes only while the chat is still
   reachable by radio (the contact's radio heard, the same preset, airtime left), the hour's airtime has room for it,
   and no relay carries the message instead, unless radio is forced. It is logged with the reason `retry`.
@@ -176,7 +179,8 @@ In the app on the computer (`pnpm tauri dev`), Settings → Radio → Pair a rad
 radio ([Pairing](#pairing)). Quit `radio_info` first: only one program can hold the port.
 
 With two radios, `path_spike` measures the three paths for the app's packets (#36). Steps:
-[radio-paths.md](radio-paths.md#running-the-spike).
+[radio-paths.md](radio-paths.md#running-the-spike). What it measured in the lab:
+[radio-paths.md](radio-paths.md#measured-in-the-lab).
 
 ## meshcore-rs
 
@@ -267,8 +271,8 @@ These come from the firmware source at `companion-v1.18.0`.
 | `SEND_RAW_DATA` | No | No | 172 bytes | Along a path the app gives, never a flood; reaches only an app that is connected at the time |
 | Channel data on a private channel (62) | By the channel key | No | 165 bytes | No sender identity; not in meshcore-rs 0.2.0 |
 
-[radio-paths.md](radio-paths.md) compares the three in detail, from the firmware source. The `path_spike` example
-measures them between two radios.
+[radio-paths.md](radio-paths.md) compares the three in detail, from the firmware source and from measurements between
+two radios, and recommends text messages.
 
 ## Fake radios over TCP
 

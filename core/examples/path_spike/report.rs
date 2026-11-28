@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use crate::frames::Kind;
+use super::frames::Kind;
 
 /// What happened to one packet.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -7,6 +7,8 @@
 pnpm verify:radio              # checks every radio, then tests them on the air
 pnpm verify:radio --dry-run    # lists the radios it found and their firmware; sends nothing
 pnpm verify:radio --usb-only   # leaves the radios on Bluetooth alone
+pnpm verify:radio --path-spike --offline   # measures the MeshCore paths from R1 to R2 (#140)
+pnpm verify:radio --adverts 75             # listens for the radios' own adverts for 75 minutes (#140)
 ```
 
 `npm run verify:radio` runs the same script. The code is in `core/examples/verify_radio/`.
@@ -200,6 +202,23 @@ Frames to the Bluetooth radio go through meshcore-rs's TCP link and the bridge, 
 no list of commands filters them**. The harness reaches that radio only through `MeshCoreRadio`, which sends app start
 (1), send text (2), contacts (4), advert (7), next message (10), battery (20) and device query (22).
 
+The path spike's links also let through raw data (25), reading and setting a channel slot (31, 32) and channel data
+(62). It puts its test channel in a free slot and empties it at the end, and leaves each radio holding the other as a
+contact. It refuses `--tx-power` and `--radio-off`.
+
+## Measurements
+
+Both run after the checks above (with the clocks set), under the lock, on the first two USB radios of the lab file,
+instead of the over-the-air tests.
+
+- **`--path-spike`** runs [path_spike](radio-paths.md#running-the-spike) from the first radio to the second, or back
+  with `--reverse`. It takes the spike's other options. The CSV goes beside the frame log, or to `--out`. Interrupting
+  ends at once: the next run finds its test channel (`pc-spike`) and empties it.
+- **`--adverts MINUTES`** keeps both radios open, sends nothing, and reports every advert each one hears. At the end it
+  has each radio send one zero-hop advert, and fails unless the other hears it.
+- **`--fixtures FRAME_LOG FOLDER NAME`** uses no radios: it writes a frame log as fixtures for the fake radio (#132),
+  one file per radio.
+
 ## The frame log
 
 Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame to or from a USB radio, in order.
@@ -211,8 +230,8 @@ Each run writes `frames-<unix ms>-<pid>.jsonl`: one line for every frame to or f
 - `dir` is `to_radio`, `from_radio`, or `blocked` for a command the harness refused to send.
 - `frame` is the companion frame in hex, without the serial link's start byte and length. A `from_radio` frame can be
   handed to meshcore-rs's `MessageReader::handle_rx` as it is, so the log serves as fixtures for a fake radio.
-- The radio's Bluetooth PIN and every position (the radio's own, its contacts' and those in adverts heard) are zeroed,
-  because fixtures end up in the repository. Lengths don't change.
+- The radio's Bluetooth PIN, channel secrets and every position (the radio's own, its contacts' and those in adverts
+  heard) are zeroed, because fixtures end up in the repository. Lengths don't change.
 
 Next to the log, each run saves one fixture per radio, `frames-…-R1.frames`, in the format the fake radio's
 `Fixture::load` reads ([radio.md](radio.md#fake-radios-over-tcp)). They are saved also when a test fails.
@@ -222,7 +241,7 @@ publishing them.
 
 ## Adding a hardware test
 
-`Lab::run` in `lab.rs` has every checked radio as a `Station`, with its `MeshCoreRadio`: the same adapter the app
+`Lab::stations` in `lab.rs` has every checked radio as a `Station`, with its `MeshCoreRadio`: the same adapter the app
 uses. A test added there runs under the lock, after the checks, with its frames logged.
 
 The Bluetooth test is in `ble.rs`. `ble_tests.rs` runs it with the real bridge program and fake radios, and
