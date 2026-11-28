@@ -58,8 +58,9 @@ export function Account() {
             </h3>
             <p className={styles.confirmText} data-testid="delete-account-text">
               You leave every chat. Your messages, chats and encryption data are deleted from this phone, with
-              your account key. The relays delete your invitation key, so nobody can start a new chat with you.
-              Your name, photo and relay lists stay on the relays. This cannot be undone.
+              your account key. The app asks the relays to delete your invitation key, so nobody can start a new
+              chat with you. Your name, photo, follow list and relay lists stay on the relays. This cannot be
+              undone.
             </p>
             {error && (
               <p className={styles.error} role="alert">

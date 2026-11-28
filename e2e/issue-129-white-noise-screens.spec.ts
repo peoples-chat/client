@@ -6,7 +6,11 @@ const EVIDENCE = "evidence/129";
 
 type E2eWindow = { peoplesChatE2eScan?: (text: string) => void };
 
-/** A public key with no profile anywhere: BIP-340's first test vector, secret key 3. */
+/**
+ * BIP-340's first test vector, secret key 3. Someone has published a public profile for it (named
+ * "test" when this was written), and the scan preview reads that name from public relays, so the
+ * test only asks for some name (`/\S/`) rather than a fixed one.
+ */
 const OTHER_KEY_HEX = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
 
 describe("issue #129: screens White Noise users expect", () => {
@@ -50,8 +54,8 @@ describe("issue #129: screens White Noise users expect", () => {
     await expect($('[data-testid="account-delete"]')).toHaveText(expect.stringContaining("Deletes your key and chats from this phone"));
     await $('[data-testid="account-delete"]').click();
     const text = $('[data-testid="delete-account-text"]');
-    await expect(text).toHaveText(expect.stringContaining("invitation key"));
-    await expect(text).toHaveText(expect.stringContaining("stay on the relays"));
+    await expect(text).toHaveText(expect.stringContaining("asks the relays to delete your invitation key"));
+    await expect(text).toHaveText(expect.stringContaining("follow list and relay lists stay on the relays"));
     await expect(text).not.toHaveText(expect.stringContaining("Your profile is removed"));
     await browser.saveScreenshot(`${EVIDENCE}/delete-account.png`);
     await $('[data-testid="account-delete-cancel"]').click();
