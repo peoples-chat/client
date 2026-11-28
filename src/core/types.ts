@@ -85,6 +85,12 @@ export interface Message {
    * other side doesn't have it (#122).
    */
   withdrawn?: boolean;
+  /**
+   * When the message disappears, in milliseconds since the Unix epoch, for one sent while the
+   * chat's messages disappear (#124). It counts from the sender's clock. The core takes the
+   * message away then with `messageRemoved`.
+   */
+  expiresAt?: number;
 }
 
 /**
@@ -104,6 +110,11 @@ export interface Chat {
   reach: Reach;
   /** Why the chat isn't reachable by radio, when it is `unreachable` (#44). */
   radioIssue?: RadioIssue;
+  /**
+   * After how many seconds new messages disappear, when someone in the chat turned disappearing
+   * messages on (#124). Absent when they are off.
+   */
+  disappearAfter?: number;
 }
 
 /**
@@ -249,15 +260,18 @@ export type CoreEvent =
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
   /**
    * A message the state has changed (#122): the sender edited or deleted it, or it was withdrawn.
-   * The whole message replaces the one with its id.
+   * The whole message replaces the one with its id. `chatId` can be an invitation's id.
    */
   | { type: "messageChanged"; chatId: string; message: Message }
   /**
-   * A message is gone: cancelled while it waited, or gone out under the core's id (#46), or gone
-   * from this device.
+   * A message is gone: cancelled while it waited, or gone out under the core's id (#46), or it
+   * disappeared once its time was up (#124), or it is gone from this device otherwise (#122).
+   * `chatId` can be an invitation's id.
    */
   | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
+  /** Someone in the chat turned disappearing messages on or off, or changed the timer (#124). */
+  | { type: "disappearingChanged"; chatId: string; disappearAfter?: number }
   /** The account's relays changed, or their connections did. Carries all of them. */
   | { type: "relaysChanged"; relays: Relay[] }
   /** The user changed their profile (#93). */
@@ -317,6 +331,12 @@ export interface Core {
   sendMessage(chatId: string, text: string): Promise<Message>;
   /** Cancels a message that waits for a path (#46). One on its way can't be cancelled. */
   cancelMessage(chatId: string, messageId: string): Promise<void>;
+  /**
+   * The user has seen the chat up to its newest message (#124). Called while the chat is shown.
+   * Nothing is sent: the read mark stays on this device. Expired messages are deleted from disk
+   * only once they are read.
+   */
+  markRead(chatId: string): Promise<void>;
   /** Sends every message by radio, or stops doing so: a switch for testing (#40). */
   setForceRadio(forced: boolean): Promise<RadioStatus>;
   /** The USB ports a radio may be plugged into, where `canPair` is set (#24). */

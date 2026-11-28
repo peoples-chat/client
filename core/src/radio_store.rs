@@ -59,6 +59,14 @@ pub struct RadioMessage {
     /// The sender deleted it for everyone, and its text is gone from here too (#122).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleted: bool,
+    /// When it disappears, in milliseconds since the Unix epoch, if the chat's messages
+    /// disappeared when it was sent (#124). Its text is dropped then; its id stays, for the
+    /// replay check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// Its time was up, and its text is gone (#124).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expired: bool,
 }
 
 /// The radio paired over a cable (#24).
@@ -456,6 +464,37 @@ impl RadioStore {
         (used, frees_at)
     }
 
+    /// Drops the text of the messages whose time is up at `now_ms`, and of those in `ids`,
+    /// which MDK deleted (#124). Their ids, counters and confirmation codes stay, for the
+    /// replay check and late confirmations. Returns the messages it changed.
+    pub fn expire(&self, now_ms: u64, ids: &[String]) -> std::io::Result<Vec<RadioMessage>> {
+        let mut data = self.lock();
+        let mut changed = Vec::new();
+        for message in &mut data.messages {
+            let due =
+                message.expires_at.is_some_and(|at| at <= now_ms) || ids.contains(&message.id);
+            if due && !message.expired {
+                message.expired = true;
+                message.text.clear();
+                changed.push(message.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.save(&data)?;
+        }
+        Ok(changed)
+    }
+
+    /// When the next kept message's time is up, in milliseconds since the Unix epoch (#124).
+    pub fn next_expiry(&self) -> Option<u64> {
+        self.lock()
+            .messages
+            .iter()
+            .filter(|message| !message.expired)
+            .filter_map(|message| message.expires_at)
+            .min()
+    }
+
     /// Forgets everything, as when the account is deleted.
     pub fn clear(&self) -> std::io::Result<()> {
         *self.lock() = Data::default();
@@ -507,7 +546,53 @@ mod tests {
             timed_out: false,
             kept_at: 1_795_300_000_100,
             deleted: false,
+            expires_at: None,
+            expired: false,
         }
+    }
+
+    /// #124: a radio message's text goes when its time is up, or when MDK deleted its relay
+    /// copy, also across a restart. Its id stays, so a replayed packet is still caught.
+    #[test]
+    fn issue_124_radio_messages_lose_their_text_when_they_expire() {
+        let data = tempfile::tempdir().unwrap();
+        let store = RadioStore::open(data.path());
+        store
+            .add_message(RadioMessage {
+                expires_at: Some(2_000),
+                ..sent("timed", "0001")
+            })
+            .unwrap();
+        store.add_message(sent("pruned", "0002")).unwrap();
+        store.add_message(sent("kept", "0003")).unwrap();
+
+        // Not yet.
+        assert!(store.expire(1_999, &[]).unwrap().is_empty());
+        assert_eq!(store.message("timed").unwrap().text, "Hello");
+
+        let expired = store.expire(2_000, &["pruned".to_owned()]).unwrap();
+        let ids: Vec<&str> = expired.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["timed", "pruned"]);
+        // Once only.
+        assert!(
+            store
+                .expire(3_000, &["pruned".to_owned()])
+                .unwrap()
+                .is_empty()
+        );
+
+        let reopened = RadioStore::open(data.path());
+        for id in ["timed", "pruned"] {
+            let message = reopened.message(id).unwrap();
+            assert!(message.expired && message.text.is_empty(), "{id}");
+            assert!(message.ack.is_some(), "{id}");
+        }
+        assert_eq!(reopened.message("kept").unwrap().text, "Hello");
+        // The text is gone from the file too.
+        let json = std::fs::read_to_string(data.path().join("radio.json")).unwrap();
+        assert_eq!(json.matches("Hello").count(), 1);
+        // The id still catches a replay.
+        assert!(!reopened.add_message(sent("timed", "0009")).unwrap());
     }
 
     #[test]

@@ -185,5 +185,7 @@ fn queued_view(queued: &Queued) -> Message {
         edited: false,
         deleted: false,
         withdrawn: false,
+        // Its time starts when it goes (#124).
+        expires_at: None,
     }
 }

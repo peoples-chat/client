@@ -20,9 +20,10 @@ mod transport;
 
 pub use app::{Core, MAX_ABOUT_CHARS, MAX_NAME_CHARS, MIN_EXPORT_PASSWORD_CHARS};
 pub use messaging::{
-    ChatItem, ChatItems, DEFAULT_RELAYS, DirectChat, DirectChats, ExistingAccount, InviteToken,
-    Messaging, MessagingError, MessagingOptions, NewAccount, PROJECT_RELAYS, RadioAddressItem,
-    RelayLink, RelayLinks, TextMessage, WHITE_NOISE_RELAYS, profile_copy_relays,
+    CHAT_MEDIA_SERVERS, CLIENT_NAME, ChatItem, ChatItems, DEFAULT_RELAYS, DirectChat, DirectChats,
+    ExistingAccount, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
+    PROJECT_RELAYS, RadioAddressItem, RelayLink, RelayLinks, TextMessage, WHITE_NOISE_RELAYS,
+    chat_media_servers, lookup_relays, profile_copy_relays,
 };
 pub use radio_store::Transmission;
 pub use reach::DOWN_AFTER;

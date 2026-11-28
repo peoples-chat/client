@@ -31,6 +31,7 @@ use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
 
+mod expiry;
 mod pairing;
 mod radio;
 mod waiting;
@@ -65,6 +66,8 @@ struct Inner {
     /// Wakes the relays' watcher to look again at when a chat's reach changes next, as when a
     /// radio was heard (#44).
     reach_wake: Arc<tokio::sync::Notify>,
+    /// Wakes the watcher of disappearing messages (#124).
+    expiry: Arc<expiry::ExpiryWake>,
     /// Avatars made from profile photos (#94).
     avatars: Avatars,
     /// The invitations the user sent (#95).
@@ -125,6 +128,7 @@ impl Core {
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
                 reach_wake: Arc::new(tokio::sync::Notify::new()),
+                expiry: Arc::default(),
                 avatars,
                 invites,
                 radio_store,
@@ -497,6 +501,7 @@ impl Core {
             invitation: false,
             active: true,
             relays: Vec::new(),
+            disappear_after: None,
         };
         self.apply(&started, name, now_ms());
         // A personal invitation's token goes back to the inviter, whose app then opens the chat
@@ -658,6 +663,8 @@ impl Core {
             invitation: false,
             active: true,
             relays: Vec::new(),
+            // MDK's update of the chat brings its timer.
+            disappear_after: None,
         };
         self.apply(&accepted, invitation.from.name, invitation.received_at);
         self.chat(&invitation.id)
@@ -721,6 +728,7 @@ impl Core {
             .inner
             .messaging
             .chat_message(&account.public_key, chat_id, &message_id)
+            .map(|message| self.stamp_expiry(message))
             .unwrap_or_else(|| TextMessage {
                 chat_id: chat_id.to_owned(),
                 id: message_id.clone(),
@@ -731,6 +739,7 @@ impl Core {
                 edited: false,
                 deleted: false,
                 withdrawn: false,
+                expires_at: self.expiry_for(chat_id, now_ms() / 1000 * 1000),
             });
         self.apply_message(&sent);
         self.chat(chat_id)
@@ -918,6 +927,7 @@ impl Core {
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
                     ChatItem::RadioAddress(address) => core.radio_address_received(&address),
                     ChatItem::Removed(removed) => core.apply_removal(&removed),
+                    ChatItem::Expired { message_id } => core.message_expired(&message_id),
                 }
             }
         });
@@ -930,7 +940,17 @@ impl Core {
                 tokio::time::sleep(CONTACT_REFRESH).await;
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
+        // Disappearing messages, soon after start (#124).
+        let expiry_watcher = tokio::spawn(expiry::watch_expiry(
+            Arc::downgrade(&self.inner),
+            Arc::clone(&self.inner.expiry),
+        ));
+        let mut watchers = vec![
+            chat_watcher,
+            message_watcher,
+            contact_watcher,
+            expiry_watcher,
+        ];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
@@ -955,6 +975,8 @@ impl Core {
         // The relays the chat goes through may decide its reach.
         self.reach().set_chat_relays(&chat.id, &chat.relays);
         self.refresh_reach(Instant::now());
+        // Someone may have turned disappearing messages on or off (#124).
+        self.disappearing_changed(&chat);
         if self.reflects(&chat) {
             return;
         }
@@ -1050,6 +1072,7 @@ impl Core {
                 reach: self.reach().reach(&chat.id, Instant::now()),
                 // The radio's part follows right after, from `radio_chat_added`.
                 radio_issue: None,
+                disappear_after: chat.disappear_after,
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
@@ -1075,11 +1098,26 @@ impl Core {
             // The radio store keeps its own copy of radio messages' text (#40).
             self.forget_radio_text(&message.id);
         }
+        // The user's own message may come before MDK has stamped its expiry (#124).
+        let stamped;
+        let message = if message.outgoing && message.expires_at.is_none() {
+            stamped = self.stamp_expiry(message.clone());
+            &stamped
+        } else {
+            message
+        };
         let view = message_view(
             message,
             self.inner.radio_store.message(&message.id).as_ref(),
         );
         let waits = message.outgoing && self.radio_sending_in(&message.chat_id);
+        // Gone already (#124); one that expires later wakes the watcher, which takes it then.
+        if let Some(at) = view.expires_at {
+            if at <= now_ms() {
+                return;
+            }
+            self.inner.expiry.look_again();
+        }
         let mut guard = self.state();
         let Some(messages) = messages_of(&mut guard, &message.chat_id) else {
             return;
@@ -1310,7 +1348,9 @@ impl Core {
         let kept = store.messages_in(chat_id);
         let mut more: Vec<Message> = kept
             .iter()
-            .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
+            .filter(|radio| {
+                !radio.expired && !messages.iter().any(|message| message.id == radio.id)
+            })
             .map(radio_view)
             .collect();
         // Messages that wait for a path (#46).
@@ -1325,6 +1365,9 @@ impl Core {
             };
             messages.sort_by_key(|message| (message.sent_at, kept_at(&message.id)));
         }
+        // Those whose time is up are gone, whether or not MDK has deleted them yet (#124).
+        let now = now_ms();
+        messages.retain(|message| message.expires_at.is_none_or(|at| at > now));
         messages
     }
 
@@ -1549,6 +1592,9 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
         edited: message.edited,
         deleted: message.deleted,
         withdrawn: message.withdrawn,
+        expires_at: message
+            .expires_at
+            .or_else(|| radio.and_then(|radio| radio.expires_at)),
     }
 }
 
@@ -1575,6 +1621,7 @@ fn radio_view(radio: &RadioMessage) -> Message {
         edited: false,
         deleted: radio.deleted,
         withdrawn: false,
+        expires_at: radio.expires_at,
     }
 }
 
@@ -1620,6 +1667,8 @@ mod tests {
             allow_loopback: true,
             media_server: None,
             profile_copies: Vec::new(),
+            chat_media_servers: Vec::new(),
+            lookup_relays: Vec::new(),
         })
         .await
         .unwrap()
@@ -1636,6 +1685,7 @@ mod tests {
             edited: false,
             deleted: false,
             withdrawn: false,
+            expires_at: None,
         }
     }
 
@@ -1666,6 +1716,7 @@ mod tests {
             messages: Vec::new(),
             reach: Reach::Internet,
             radio_issue: None,
+            disappear_after: None,
         });
         let mut events = core.subscribe();
         let messages = |core: &Core| core.chat("chat").unwrap().messages;

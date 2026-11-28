@@ -591,10 +591,11 @@ impl Core {
             .send_text(&account.public_key, chat_id, text)
             .await
             .map_err(|error| failed("send the message", error))?;
-        let Some(message) =
-            self.inner
-                .messaging
-                .chat_message(&account.public_key, chat_id, &message_id)
+        let Some(message) = self
+            .inner
+            .messaging
+            .chat_message(&account.public_key, chat_id, &message_id)
+            .map(|message| self.stamp_expiry(message))
         else {
             return Err(failed(
                 "send the message",
@@ -636,6 +637,8 @@ impl Core {
                     timed_out: false,
                     kept_at: now_ms(),
                     deleted: false,
+                    expires_at: message.expires_at,
+                    expired: false,
                 };
                 self.keep_sent(&sent.ack, |store| store.add_message(kept).map(|_| ()));
                 self.await_confirmation(Awaited {
@@ -877,6 +880,8 @@ impl Core {
             edited: false,
             deleted: false,
             withdrawn: false,
+            // A packet doesn't say; the chat's timer now does, from the sender's clock (#124).
+            expires_at: self.expiry_for(&received.chat_id, u64::from(received.sent_at) * 1000),
         };
         let kept = self.inner.radio_store.add_message(RadioMessage {
             chat_id: message.chat_id.clone(),
@@ -891,6 +896,8 @@ impl Core {
             timed_out: false,
             kept_at: now_ms(),
             deleted: false,
+            expires_at: message.expires_at,
+            expired: false,
         });
         if let Err(error) = kept {
             // Shown anyway; after a restart it is gone until its relay copy arrives.

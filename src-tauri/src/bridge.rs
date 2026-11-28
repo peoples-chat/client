@@ -5,7 +5,9 @@
 use peoples_chat_core::interface::{
     Account, Chat, CommandError, Contact, CoreEvent, Message, RadioStatus, SentInvite, Snapshot,
 };
-use peoples_chat_core::{Core, DEFAULT_RELAYS, MessagingOptions, profile_copy_relays};
+use peoples_chat_core::{
+    Core, DEFAULT_RELAYS, MessagingOptions, chat_media_servers, lookup_relays, profile_copy_relays,
+};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_biometric::{AuthOptions, BiometricExt};
 use tokio::sync::OnceCell;
@@ -114,6 +116,19 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
             profile_copies.join(", ")
         );
     }
+    // On the public defaults, new chats get White Noise's media servers and people are also
+    // looked up on White Noise's relays (#120). A build with relays of its own gets neither.
+    let chat_media_servers = chat_media_servers(&relays);
+    if !chat_media_servers.is_empty() {
+        log::info!(
+            "media servers for new chats: {}",
+            chat_media_servers.join(", ")
+        );
+    }
+    let lookup_relays = lookup_relays(&relays);
+    if !lookup_relays.is_empty() {
+        log::info!("people are also looked up on: {}", lookup_relays.join(", "));
+    }
     let keys_in_file = keys_in_file();
     if keys_in_file {
         log::info!("account keys are kept in a file in the data folder, not in the keychain");
@@ -132,6 +147,8 @@ fn options<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MessagingOptions> {
             .filter(|server| !server.is_empty())
             .map(str::to_owned),
         profile_copies,
+        chat_media_servers,
+        lookup_relays,
     })
 }
 
@@ -339,6 +356,16 @@ pub async fn cancel_message<R: Runtime>(
         .await?
         .cancel_message(&chat_id, &message_id)
         .await
+}
+
+/// The user has seen the chat up to its newest message (#124).
+#[tauri::command]
+pub async fn mark_read<R: Runtime>(
+    app: AppHandle<R>,
+    slot: State<'_, CoreSlot>,
+    chat_id: String,
+) -> Result<(), CommandError> {
+    slot.get(&app).await?.mark_read(&chat_id).await
 }
 
 #[tauri::command]

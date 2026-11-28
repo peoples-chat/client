@@ -114,6 +114,11 @@ pub struct Message {
     /// the other side doesn't have it (#122).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub withdrawn: bool,
+    /// When the message disappears, in milliseconds since the Unix epoch, for a message sent
+    /// while the chat's messages disappear (#124). It counts from the sender's clock. The core
+    /// takes the message away then with `messageRemoved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 /// How a chat's messages can travel now (#43).
@@ -160,6 +165,10 @@ pub struct Chat {
     /// Why the chat isn't reachable by radio, when it is `unreachable` (#44).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radio_issue: Option<RadioIssue>,
+    /// After how many seconds new messages in the chat disappear, when someone in it turned
+    /// disappearing messages on (#124). Absent when they are off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disappear_after: Option<u64>,
 }
 
 /// One of the relays the account's messages travel through (#88).
@@ -355,7 +364,8 @@ pub enum CoreEvent {
         message: Message,
     },
     /// A message is gone: the user cancelled it while it waited, or it went, and came back
-    /// under MDK's id (#46). Or it is gone from this device.
+    /// under MDK's id (#46), or it disappeared once its time was up (#124). Or it is gone from
+    /// this device otherwise (#122).
     MessageRemoved {
         chat_id: String,
         message_id: String,
@@ -368,6 +378,13 @@ pub enum CoreEvent {
         /// Why the chat isn't reachable by radio, when it is `unreachable`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radio_issue: Option<RadioIssue>,
+    },
+    /// Someone in the chat turned disappearing messages on or off, or changed after how long
+    /// they disappear (#124). Without `disappear_after`, they are off.
+    DisappearingChanged {
+        chat_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disappear_after: Option<u64>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {

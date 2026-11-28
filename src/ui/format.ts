@@ -52,3 +52,21 @@ export const DELETED_TEXT = "This message was deleted.";
 export function shownText(message: { text: string; deleted?: boolean }): string {
   return message.deleted ? DELETED_TEXT : message.text;
 }
+
+const UNITS: [seconds: number, name: string][] = [
+  [7 * 86_400, "week"],
+  [86_400, "day"],
+  [3_600, "hour"],
+  [60, "minute"],
+  [1, "second"],
+];
+
+/**
+ * A disappearing-message timer in words (#124): "1 week", "8 hours", "90 seconds". The largest
+ * unit that divides it evenly, so that the number shown is exact.
+ */
+export function formatDuration(seconds: number): string {
+  const [size, name] = UNITS.find(([size]) => seconds % size === 0) ?? UNITS[UNITS.length - 1];
+  const count = Math.round(seconds / size);
+  return `${count} ${name}${count === 1 ? "" : "s"}`;
+}
