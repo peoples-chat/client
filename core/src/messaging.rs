@@ -55,7 +55,9 @@ const SECRET_RETRY: Duration = Duration::from_millis(100);
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
-/// It isn't text, so White Noise doesn't show it as a message.
+/// White Noise shows a kind it doesn't know, for Android as a bubble of its raw content and for
+/// iOS as an "Unsupported event" card (#123). That does no harm here: only the inviter's app,
+/// which is peoples.chat, receives the token.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
 /// The app's own kind for a radio address record (#34), which each app sends in its direct
 /// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
@@ -69,8 +71,8 @@ static SENDS: AtomicU64 = AtomicU64::new(0);
 /// relay lists, profile and KeyPackage here.
 ///
 /// These are public, general-purpose relays. Who runs the project's own relays is decided later
-/// (#11). nos.lol and relay.primal.net are also among the relays White Noise searches for relay
-/// lists, so White Noise users can find accounts made here.
+/// (#11). They don't make accounts made here findable from White Noise: it looks a contact's
+/// relay lists up only on its own relays (#22), and that stays to be decided (#76).
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
