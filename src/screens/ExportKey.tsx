@@ -104,7 +104,7 @@ export function ExportKey() {
             onSelect={setKind}
             icon="lock"
             title="Protected with a password"
-            description="Recommended. Opens in other Nostr apps."
+            description="Recommended. Opens in Nostr apps that read an ncryptsec. White Noise needs the plain key."
           />
           <KindOption
             kind="plain"
@@ -112,7 +112,7 @@ export function ExportKey() {
             onSelect={setKind}
             icon="eye"
             title="Plain key"
-            description="Shown as text, with no protection."
+            description="Shown as text (nsec), with no protection. White Noise signs in with this."
           />
         </div>
         {kind === "protected" && (
@@ -186,6 +186,7 @@ function KindOption({ kind, selected, onSelect, icon, title, description }: Kind
       type="button"
       role="radio"
       aria-checked={checked}
+      data-testid={`export-kind-${kind}`}
       className={`${styles.kind} ${checked ? styles.checked : ""}`}
       onClick={() => onSelect(kind)}
     >

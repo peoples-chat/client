@@ -49,7 +49,7 @@ The two core values are resilience and sovereignty. Every design choice below is
 1. **Use what exists.** Prefer the Marmot spec, its development kit (MDK) and stock radio firmware over custom parts.
 2. **Be honest on radio.** Show who is reachable and what will not send. Never imply internet-grade security or delivery.
 3. **Be a good guest.** Community meshes are shared. The app must never flood them.
-4. **Propose upstream.** Radio transport and guardian recovery should become shared Marmot features, not private extensions.
+4. **Propose upstream.** Chat over radio and guardian recovery should become shared Marmot features, not private extensions.
 
 ## Core user flows
 
@@ -181,7 +181,7 @@ Radio is a text-only fallback that reuses each chat's existing keys and members.
 
 Each paired radio produces one small record: mesh type, radio public key, region and preset, and a timestamp. A user with two radios has two records.
 
-- It travels as an ordinary message inside the user's one-to-one chats, never in group chats, so MLS already authenticates it.
+- It lives in the state of the user's one-to-one chats, never of group chats, so MLS already authenticates it. Each person writes their own record into the chat's state as an MLS app component, so no client shows it as a message and it comes with the chat to a new device (#119). Until then it travels as an app event of the app's own kind, which other clients may show as an unknown event.
 - It is shared with all of the user's direct contacts by default. A direct contact is someone the user has a one-to-one chat with, so people met only in groups never receive it. The user can exclude a contact or turn sharing off. It is never published, because radios announce their keys and sometimes their position over the air.
 - It is re-sent when the radio or its settings change.
 
@@ -342,7 +342,7 @@ Work runs in three stages. The proof of concept shows one chat surviving an outa
 
 &#91;embedded content: roadmap · 3 stages, 2 gates\]
 
-The proof of concept is a thin slice, not a finished messenger. It is one direct chat between two phones with two radios, on the Danish MeshCore network around Aarhus. Its first step doubles as the Tauri go or no-go test. Each gate must pass before the next stage starts, and no dates are set yet. Recovery in the MVP builds on MDK's linked devices and backups, which shipped in MDK 0.18.0. The radio transport proposal to Marmot goes out after the mesh gate.
+The proof of concept is a thin slice, not a finished messenger. It is one direct chat between two phones with two radios, on the Danish MeshCore network around Aarhus. Its first step doubles as the Tauri go or no-go test. Each gate must pass before the next stage starts, and no dates are set yet. Recovery in the MVP builds on MDK's linked devices and backups, which shipped in MDK 0.18.0. The chat-over-radio proposal to Marmot goes out after the mesh gate.
 
 ## Upstream work
 
@@ -350,19 +350,16 @@ Three parts of this design are new and should be proposed to Marmot, so that oth
 
 | Proposal | To | Content | Timing |
 | --- | --- | --- | --- |
-| Radio transport | Marmot, starting in its ideas folder | A transport that carries chat messages only. Invitations and membership changes stay on relays | After the proof of concept passes the mesh gate |
-| Radio address record | Marmot | A shared message format, so any client can carry the record even without radio support | During the proof of concept |
+| Chat over radio | Marmot, starting in its ideas folder | A feature that carries chat text over radio under keys of its own, not MLS messages. Invitations and membership changes stay on relays | After the proof of concept passes the mesh gate |
+| Radio address record | Marmot | A shared format for the record in the chat's state, so any client can keep it even without radio support | During the proof of concept |
 | Guardian recovery | Marmot, ideas folder | Share messages and the release flow, so a guardian can use any Marmot client | With recovery in the MVP |
 | App payloads in direct messages | MeshCore | A binary payload type for direct messages. Channels gained one in firmware v1.15.0, with app data types registered with MeshCore ([pull request](https://github.com/meshcore-dev/MeshCore/pull/1928)); direct messages have none in v1.18.0 | Only if the proof of concept shows a need |
 
-Marmot's ideas folder takes ideas, not specifications: an idea document defines no wire bytes and assigns no identifiers, such as component ids, event kinds or exporter labels ([ideas README](https://github.com/marmot-protocol/marmot/blob/master/ideas/README.md)). So the radio transport and guardian recovery proposals describe behaviour there, and leave byte formats and identifiers to a change to the specification itself.
+Marmot's ideas folder takes ideas, not specifications: an idea document defines no wire bytes and assigns no identifiers, such as component ids, event kinds or exporter labels ([ideas README](https://github.com/marmot-protocol/marmot/blob/master/ideas/README.md)). So the chat-over-radio and guardian recovery proposals describe behaviour there, and leave byte formats and identifiers to a change to the specification itself.
 
-Two facts make the transport proposal a good fit:
+The radio proposal is not a Marmot transport. A transport spec "describe[s] how a network carries Marmot MLS bytes" ([transports README](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/transports/README.md#L5)). The radio format carries no MLS message: it carries chat text under keys of its own. So it reads more like a feature with its own key schedule (#128) than a binding in the transports section.
 
-- The Marmot spec keeps transport open and already has a transports section ([Marmot spec](https://github.com/marmot-protocol/marmot)).
-- Its transport checklist allows a binding that carries only part of the protocol: envelopes for group messages and Welcomes are required only if the transport carries them ([transports README](https://github.com/marmot-protocol/marmot/blob/master/transports/README.md)). The QUIC binding, which carried no key packages or invitations, was retired in November 2026 ([pull request](https://github.com/marmot-protocol/marmot/pull/513)).
-
-Marmot requires every transport to support redundant delivery. Radio meets this as a second path: each radio message is also published to relays once the internet returns.
+Radio is a second path for the same chat: each radio message is also published to relays once the internet returns.
 
 Until these proposals are accepted, guardians and radio peers must use this app. Internet chats interoperate from the start.
 
@@ -420,5 +417,9 @@ Re-checked on 22 November 2026, for the corrections in the upstream work, recove
 - The [MDK 0.18.0 release notes](https://github.com/marmot-protocol/mdk/blob/v0.18.0/docs/release/0.18.0.md), and [mdk-core on crates.io](https://crates.io/crates/mdk-core)
 - MeshCore's [binary channel messages pull request](https://github.com/meshcore-dev/MeshCore/pull/1530), closed without merging, and the [group data pull request](https://github.com/meshcore-dev/MeshCore/pull/1928) that replaced it in firmware v1.15.0
 - The [MeshCore companion firmware v1.18.0](https://github.com/meshcore-dev/MeshCore/tree/companion-v1.18.0) source, and [meshcore-rs](https://github.com/andrewdavidmackenzie/meshcore-rs): its 0.2.0 release has no channel data, and its main branch adds `send_channel_data()`
+
+Re-checked on 27 November 2026, for the correction in the upstream work (#130):
+
+- Marmot's [transports README](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/transports/README.md#L5) at commit `36757fe`: a transport carries Marmot MLS bytes
 
 Other links in the text point to pages found by search and read only in excerpt.

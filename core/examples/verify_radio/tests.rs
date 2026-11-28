@@ -66,6 +66,7 @@ struct Radio {
     tx_power: u8,
     /// Stops answering after this many commands.
     hangs_after: Option<usize>,
+    clock: u32,
     /// The codes of the commands that reached it.
     commands: Vec<u8>,
 }
@@ -81,6 +82,7 @@ impl Radio {
             frequency: 869_850,
             tx_power: 2,
             hangs_after: None,
+            clock: 1_715_824_653,
             commands: Vec::new(),
         }
     }
@@ -169,6 +171,13 @@ async fn serve(bench: Bench, radio: usize, mut port: DuplexStream) {
             1 => vec![self_info(&state)],
             22 => vec![device_info(state.firmware)],
             4 => vec![vec![2, 0, 0, 0, 0], vec![4, 0, 0, 0, 0]],
+            // A clock that takes whatever it is set to.
+            5 => vec![[&[9][..], &state.clock.to_le_bytes()].concat()],
+            6 => {
+                let time = u32::from_le_bytes(command[1..5].try_into().unwrap());
+                bench.change(radio, |radio| radio.clock = time);
+                vec![vec![0]]
+            }
             _ => vec![vec![1, 1]],
         };
         for reply in replies {
@@ -264,7 +273,7 @@ async fn run(
     let log = FrameLog::create(folder.path()).unwrap();
     let lab = Lab {
         config,
-        usb: bench,
+        usb: Arc::new(bench.clone()),
         power: switch,
         log: log.clone(),
         timing: timing(),

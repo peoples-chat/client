@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use nostr_relay_builder::MockRelay;
-use nostr_sdk::prelude::{Keys, ToBech32};
+use nostr_sdk::prelude::{FromBech32, Keys, PublicKey, ToBech32};
 use peoples_chat_core::interface::{CommandError, CoreEvent, Snapshot};
 use peoples_chat_core::{Core, MessagingOptions};
 use serde_json::Value;
@@ -33,7 +33,7 @@ fn the_shared_json_matches_the_core_types() {
     }
     assert_eq!(
         kinds.len(),
-        14,
+        16,
         "the fixture needs one example of every event"
     );
 
@@ -50,12 +50,14 @@ fn kind(event: &CoreEvent) -> &'static str {
         CoreEvent::AccountCreated { .. } => "accountCreated",
         CoreEvent::AccountDeleted => "accountDeleted",
         CoreEvent::ChatAdded { .. } => "chatAdded",
+        CoreEvent::ChatChanged { .. } => "chatChanged",
         CoreEvent::InvitationReceived { .. } => "invitationReceived",
         CoreEvent::InvitationRemoved { .. } => "invitationRemoved",
         CoreEvent::MessageAdded { .. } => "messageAdded",
         CoreEvent::DeliveryChanged { .. } => "deliveryChanged",
         CoreEvent::MessageRemoved { .. } => "messageRemoved",
         CoreEvent::ReachChanged { .. } => "reachChanged",
+        CoreEvent::DisappearingChanged { .. } => "disappearingChanged",
         CoreEvent::RelaysChanged { .. } => "relaysChanged",
         CoreEvent::AccountChanged { .. } => "accountChanged",
         CoreEvent::ContactChanged { .. } => "contactChanged",
@@ -90,6 +92,8 @@ fn options(data_dir: &Path, relays: Vec<String>, keychain_service: &str) -> Mess
         allow_loopback: true,
         media_server: None,
         profile_copies: Vec::new(),
+        chat_media_servers: Vec::new(),
+        lookup_relays: Vec::new(),
     }
 }
 
@@ -109,6 +113,12 @@ async fn an_account_is_created_kept_across_a_restart_and_deleted() {
     let account = core.create_account("  Emil Dahl ").await.unwrap();
     assert_eq!(account.name, "Emil Dahl");
     assert_eq!(account.public_key.len(), 64);
+    // Issue #129: the npub White Noise takes, of the same key.
+    assert!(account.npub.starts_with("npub1"), "{}", account.npub);
+    assert_eq!(
+        PublicKey::from_bech32(&account.npub).unwrap().to_hex(),
+        account.public_key
+    );
     assert!(
         account.invite_link.starts_with("nostr:nprofile1"),
         "{}",

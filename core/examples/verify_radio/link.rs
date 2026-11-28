@@ -3,7 +3,8 @@
 //! Over serial, a frame is a start byte (`<` to the radio, `>` from it), its length in two
 //! little-endian bytes, and the payload. meshcore-rs speaks the protocol; this link frames what
 //! it writes and unframes what the radio sends, writes both to the frame log, and refuses any
-//! command that isn't on the list of ones that can't change firmware or radio settings.
+//! command that isn't on the list of ones that can't change firmware or radio settings. The
+//! clock isn't one of those settings: every run sets it, as the MeshCore app does.
 
 use std::fs::File;
 use std::io::Write;
@@ -33,6 +34,7 @@ const ALLOWED_COMMANDS: &[u8] = &[
     2,  // SEND_TXT_MSG
     4,  // GET_CONTACTS
     5,  // GET_DEVICE_TIME
+    6,  // SET_DEVICE_TIME: the clock is not a protected setting
     7,  // SEND_SELF_ADVERT
     9,  // ADD_UPDATE_CONTACT
     10, // SYNC_NEXT_MESSAGE
@@ -107,12 +109,6 @@ impl FrameLog {
 /// says about its Bluetooth PIN and anyone's position is zeroed. Lengths stay the same.
 fn redacted(direction: &str, frame: &[u8]) -> Vec<u8> {
     let mut frame = frame.to_vec();
-    if direction == "from_radio"
-        && let Some(position) = logged_advert_position(&frame)
-    {
-        frame[position].fill(0);
-        return frame;
-    }
     let secret = match (direction, frame.first()) {
         // CHANNEL_INFO and SET_CHANNEL: the channel's secret.
         ("from_radio", Some(18)) | ("to_radio" | "blocked", Some(32)) => 34..50,
@@ -124,6 +120,11 @@ fn redacted(direction: &str, frame: &[u8]) -> Vec<u8> {
         ("from_radio", Some(3 | 0x8a)) => 136..144,
         // ADD_UPDATE_CONTACT: the same.
         ("to_radio" | "blocked", Some(9)) => 136..144,
+        // LOG_RX_DATA: a packet as it was on the air, which for an advert holds a position.
+        ("from_radio", Some(0x88)) => match advert_position(&frame) {
+            Some(position) => position,
+            None => return frame,
+        },
         _ => return frame,
     };
     let end = secret.end.min(frame.len());
@@ -133,31 +134,24 @@ fn redacted(direction: &str, frame: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// Where the position sits in LOG_RX_DATA of an advert, if the advert gives one. The frame is
-/// `0x88 | SNR | RSSI | packet`, the packet `header | [transport codes] | path byte | path |
-/// payload`, and an advert's payload `key (32) | timestamp (4) | signature (64) | flags |
-/// [latitude, longitude] | …`.
-fn logged_advert_position(frame: &[u8]) -> Option<std::ops::Range<usize>> {
+/// Where a logged packet (code, SNR, RSSI, then the packet) holds a position, if it is an
+/// advert that has one. The packet: a header, four bytes of transport codes on some routes, the
+/// path's length and the path, then the payload. An advert's payload: key (32), time (4),
+/// signature (64), flags, and with flag 0x10 the latitude and longitude.
+fn advert_position(frame: &[u8]) -> Option<std::ops::Range<usize>> {
     const ADVERT: u8 = 4;
     const HAS_POSITION: u8 = 0x10;
-    if frame.first() != Some(&0x88) {
-        return None;
-    }
     let header = *frame.get(3)?;
     if (header >> 2) & 0x0f != ADVERT {
         return None;
     }
-    // Route types 0 and 3 carry 4 bytes of transport codes.
-    let transport = if matches!(header & 3, 0 | 3) { 4 } else { 0 };
-    let path_at = 4 + transport;
-    let path_byte = *frame.get(path_at)?;
-    let path = usize::from(path_byte & 0x3f) * (usize::from(path_byte >> 6) + 1);
-    let flags_at = path_at + 1 + path + 32 + 4 + 64;
-    if frame.get(flags_at)? & HAS_POSITION == 0 {
-        return None;
-    }
-    let end = frame.len().min(flags_at + 9);
-    Some(flags_at + 1..end)
+    let transport = if matches!(header & 0x03, 0 | 3) { 4 } else { 0 };
+    let path_len = 4 + transport;
+    let byte = *frame.get(path_len)?;
+    // The top two bits say how long each hop's hash is.
+    let path = usize::from(byte & 0x3f) * (usize::from(byte >> 6) + 1);
+    let flags = path_len + 1 + path + 32 + 4 + 64;
+    (*frame.get(flags)? & HAS_POSITION != 0).then(|| flags + 1..flags + 9)
 }
 
 fn now_ms() -> u64 {
@@ -357,6 +351,28 @@ mod tests {
         advert[3] = (2 << 2) | 2;
         advert[105] = 0x91;
         assert_eq!(redacted("from_radio", &advert), advert);
+    }
+
+    #[test]
+    fn issue_134_logged_adverts_from_the_air_hide_their_position() {
+        // A flood advert after two hops, with a position, and one with transport codes.
+        for (header, codes) in [(0x11, 0), (0x10, 4)] {
+            let mut frame = vec![0x88, 29, 200, header];
+            frame.extend(vec![0xee; codes]);
+            frame.extend([2, 0xaa, 0xbb]);
+            frame.extend([7; 100]);
+            frame.push(0x91);
+            let position = frame.len()..frame.len() + 8;
+            frame.extend([9; 8]);
+            frame.extend(*b"name");
+            let logged = redacted("from_radio", &frame);
+            assert_eq!(logged[position.clone()], [0; 8]);
+            assert_eq!(logged[..position.start], frame[..position.start]);
+            assert_eq!(logged[position.end..], frame[position.end..]);
+        }
+        // Another kind of packet stays as it is.
+        let text = [&[0x88, 29, 200, 0x09, 0][..], &[7; 120]].concat();
+        assert_eq!(redacted("from_radio", &text), text);
     }
 
     #[test]

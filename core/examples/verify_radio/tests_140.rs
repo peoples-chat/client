@@ -71,7 +71,7 @@ impl Usb for MeshUsb {
 }
 
 struct Bench {
-    usb: MeshUsb,
+    usb: Arc<MeshUsb>,
     config: Config,
     power: Uhubctl,
     log: Arc<FrameLog>,
@@ -82,7 +82,7 @@ impl Bench {
     fn new() -> Self {
         let folder = TempDir::new().unwrap();
         Self {
-            usb: MeshUsb(FakeMesh::new()),
+            usb: Arc::new(MeshUsb(FakeMesh::new())),
             config: config::parse(LAB).unwrap(),
             power: Uhubctl {
                 program: "false".into(),
@@ -95,7 +95,7 @@ impl Bench {
     fn lab(&self) -> Lab<'_> {
         Lab {
             config: &self.config,
-            usb: &self.usb,
+            usb: self.usb.clone(),
             power: &self.power,
             log: self.log.clone(),
             timing: Timing::default(),

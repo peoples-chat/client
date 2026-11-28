@@ -71,6 +71,7 @@ export function CreateProfile() {
           autoCapitalize="words"
           maxLength={MAX_NAME}
           autoFocus
+          data-testid="create-profile-name"
         />
         <div className={styles.keyNote}>
           <Icon name="key" size={22} className={styles.keyIcon} />
@@ -83,7 +84,7 @@ export function CreateProfile() {
         )}
       </main>
       <footer className={styles.footer}>
-        <Button type="submit" disabled={!trimmed || busy}>
+        <Button type="submit" disabled={!trimmed || busy} data-testid="create-profile-continue">
           Continue
         </Button>
       </footer>

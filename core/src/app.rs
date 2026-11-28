@@ -15,14 +15,16 @@ use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use crate::interface::{
-    Account, Chat, CommandError, Contact, CoreEvent, DeliveryState, Direction, Invitation, Message,
-    Reach, Relay, RelayOperator, RelayStatus, SentInvite, Snapshot, Transport,
+    Account, Chat, ChatState, CommandError, Contact, CoreEvent, DeliveryState, Direction,
+    Invitation, Message, RadioIssue, Reach, Relay, RelayOperator, RelayStatus, Sender, SentInvite,
+    Snapshot, Transport,
 };
 use crate::invite;
 use crate::invites::{InviteRecord, Invites};
+use crate::known_chats::KnownChats;
 use crate::messaging::{
-    ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions, NewAccount,
-    PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
+    ChatForm, ChatItem, DirectChat, InviteToken, Messaging, MessagingError, MessagingOptions,
+    NewAccount, PROJECT_RELAYS, RelayLink, RelayLinks, TextMessage, canonical_relay,
 };
 use crate::outbox::Outbox;
 use crate::photo::{self, AVATAR_SIDE, Avatars, UPLOAD_SIDE};
@@ -31,6 +33,7 @@ use crate::radio_store::{RadioMessage, RadioStore};
 use crate::reach::{Reachability, radio_reach};
 use crate::transport::{Route, route};
 
+mod expiry;
 mod pairing;
 mod radio;
 mod waiting;
@@ -65,10 +68,15 @@ struct Inner {
     /// Wakes the relays' watcher to look again at when a chat's reach changes next, as when a
     /// radio was heard (#44).
     reach_wake: Arc<tokio::sync::Notify>,
+    /// Wakes the watcher of disappearing messages (#124).
+    expiry: Arc<expiry::ExpiryWake>,
     /// Avatars made from profile photos (#94).
     avatars: Avatars,
     /// The invitations the user sent (#95).
     invites: Invites,
+    /// The direct chats the core has shown, and with whom, for when they stop being direct
+    /// (#125).
+    known_chats: KnownChats,
     /// What the core keeps about the radio (#40).
     radio_store: RadioStore,
     /// The radio the core uses, and the chats' radio keys.
@@ -86,6 +94,7 @@ impl Core {
     pub async fn start(options: MessagingOptions) -> Result<Self, MessagingError> {
         let avatars = Avatars::new(&options.data_dir);
         let invites = Invites::open(&options.data_dir);
+        let known_chats = KnownChats::open(&options.data_dir);
         let radio_store = RadioStore::open(&options.data_dir);
         // Before the chats load, so that they show radio messages that timed out meanwhile (#41).
         let awaited = radio_store.after_restart(now_ms()).unwrap_or_else(|error| {
@@ -125,8 +134,10 @@ impl Core {
                 watchers: Mutex::new(Vec::new()),
                 reach: Mutex::new(Reachability::default()),
                 reach_wake: Arc::new(tokio::sync::Notify::new()),
+                expiry: Arc::default(),
                 avatars,
                 invites,
+                known_chats,
                 radio_store,
                 radio: radio::RadioParts::default(),
                 outbox,
@@ -442,6 +453,9 @@ impl Core {
         if let Err(error) = self.inner.invites.clear() {
             log::warn!("could not remove the invitations: {error}");
         }
+        if let Err(error) = self.inner.known_chats.clear() {
+            log::warn!("could not remove the known chats: {error}");
+        }
         self.clear_radio();
         if let Err(error) = self.inner.outbox.clear() {
             log::warn!("could not remove the waiting messages: {error}");
@@ -493,12 +507,14 @@ impl Core {
             .await;
         let started = DirectChat {
             id: chat_id,
-            peer_hex: invite.public_key_hex,
+            peer_hex: invite.public_key_hex.clone(),
+            form: ChatForm::Direct,
             invitation: false,
             active: true,
             relays: Vec::new(),
+            disappear_after: None,
         };
-        self.apply(&started, name, now_ms());
+        self.apply(&started, &invite.public_key_hex, name, now_ms());
         // A personal invitation's token goes back to the inviter, whose app then opens the chat
         // without a request (#95). Without it, the chat still works: as a request.
         if let Some(token) = &invite.token
@@ -655,11 +671,19 @@ impl Core {
         let accepted = DirectChat {
             id: invitation.id.clone(),
             peer_hex: invitation.from.public_key.clone(),
+            form: ChatForm::Direct,
             invitation: false,
             active: true,
             relays: Vec::new(),
+            // MDK's update of the chat brings its timer.
+            disappear_after: None,
         };
-        self.apply(&accepted, invitation.from.name, invitation.received_at);
+        self.apply(
+            &accepted,
+            &invitation.from.public_key,
+            invitation.from.name,
+            invitation.received_at,
+        );
         self.chat(&invitation.id)
             .ok_or_else(|| failed("accept the request", "the chat is missing after accepting"))
     }
@@ -682,9 +706,14 @@ impl Core {
         let Some(chat) = self.chat(chat_id) else {
             return Err(CommandError::new("This chat no longer exists."));
         };
-        let forced = self.inner.radio_store.forced();
+        if let Some(why) = cannot_send(&chat) {
+            return Err(CommandError::new(why));
+        }
+        // Radio keys are for the two people of a direct chat (#37): another chat goes by
+        // internet, or waits (#125).
+        let forced = self.inner.radio_store.forced() && chat.state.is_direct();
         let relays_up = self.reach().reach(chat_id, Instant::now()) == Reach::Internet;
-        let radio = self.contact_radio_reach(&chat.contact.public_key);
+        let radio = self.chat_radio_reach(&chat);
         match route(forced, relays_up, radio) {
             Route::Internet => self.send_by_internet(&account, chat_id, text).await,
             Route::Radio => match self.radio_ready(chat_id, text).await {
@@ -721,13 +750,16 @@ impl Core {
             .inner
             .messaging
             .chat_message(&account.public_key, chat_id, &message_id)
+            .map(|message| self.stamp_expiry(message))
             .unwrap_or_else(|| TextMessage {
                 chat_id: chat_id.to_owned(),
                 id: message_id.clone(),
                 outgoing: true,
+                sender_hex: account.public_key.clone(),
                 text: text.to_owned(),
                 sent_at: now_ms() / 1000 * 1000,
                 acknowledged: false,
+                expires_at: self.expiry_for(chat_id, now_ms() / 1000 * 1000),
             });
         self.apply_message(&sent);
         self.chat(chat_id)
@@ -872,11 +904,14 @@ impl Core {
         };
         let mut unnamed = Vec::new();
         for chat in chats.current() {
+            let Some(contact) = self.contact_of(&chat) else {
+                continue;
+            };
             self.reach().set_chat_relays(&chat.id, &chat.relays);
-            match self.inner.messaging.known_name(&chat.peer_hex) {
+            match self.inner.messaging.known_name(&contact) {
                 Some(name) => {
                     let started = self.started_at(&chat.id);
-                    self.apply(&chat, name, started);
+                    self.apply(&chat, &contact, name, started);
                 }
                 None => unnamed.push(chat),
             }
@@ -914,6 +949,7 @@ impl Core {
                     ChatItem::Text(message) => core.apply_message(&message),
                     ChatItem::InviteToken(token) => core.redeem_token(&token),
                     ChatItem::RadioAddress(address) => core.radio_address_received(&address),
+                    ChatItem::Expired { message_id } => core.message_expired(&message_id),
                 }
             }
         });
@@ -926,7 +962,17 @@ impl Core {
                 tokio::time::sleep(CONTACT_REFRESH).await;
             }
         });
-        let mut watchers = vec![chat_watcher, message_watcher, contact_watcher];
+        // Disappearing messages, soon after start (#124).
+        let expiry_watcher = tokio::spawn(expiry::watch_expiry(
+            Arc::downgrade(&self.inner),
+            Arc::clone(&self.inner.expiry),
+        ));
+        let mut watchers = vec![
+            chat_watcher,
+            message_watcher,
+            contact_watcher,
+            expiry_watcher,
+        ];
         if let Some(relays) = relays {
             watchers.push(tokio::spawn(watch_relays(
                 Arc::downgrade(&self.inner),
@@ -948,34 +994,61 @@ impl Core {
 
     /// Brings one chat from MDK into the snapshot, first finding the contact's name if needed.
     async fn follow_chat(&self, chat: DirectChat) {
+        let Some(contact) = self.contact_of(&chat) else {
+            return;
+        };
         // The relays the chat goes through may decide its reach.
         self.reach().set_chat_relays(&chat.id, &chat.relays);
         self.refresh_reach(Instant::now());
+        // Someone may have turned disappearing messages on or off (#124).
+        self.disappearing_changed(&chat);
         if self.reflects(&chat) {
             return;
         }
-        let name = self.inner.messaging.contact_name(&chat.peer_hex, &[]).await;
+        let name = self.inner.messaging.contact_name(&contact, &[]).await;
         let started = self.started_at(&chat.id);
-        self.apply(&chat, name, started);
+        self.apply(&chat, &contact, name, started);
         if chat.invitation {
             self.redeem_tokens_in(&chat.id);
         }
     }
 
+    /// Whom `chat` is with, if the core shows it: a direct chat or invitation, or a chat that
+    /// was direct when the core showed it, which it keeps following by its id (#125). `None` for
+    /// groups the core never showed, and for direct chats the user is no longer in.
+    fn contact_of(&self, chat: &DirectChat) -> Option<String> {
+        {
+            let state = self.state();
+            if let Some(known) = state.chats.iter().find(|known| known.id == chat.id) {
+                return Some(known.contact.public_key.clone());
+            }
+            if let Some(invitation) = state.invitations.iter().find(|i| i.id == chat.id) {
+                return Some(invitation.from.public_key.clone());
+            }
+        }
+        if let Some(contact) = self.inner.known_chats.contact(&chat.id) {
+            return Some(contact);
+        }
+        (chat.form == ChatForm::Direct && chat.active).then(|| chat.peer_hex.clone())
+    }
+
     /// Whether the snapshot shows `chat` as it is already.
     fn reflects(&self, chat: &DirectChat) -> bool {
         let state = self.state();
-        let is_chat = state.chats.iter().any(|known| known.id == chat.id);
+        if let Some(known) = state.chats.iter().find(|known| known.id == chat.id) {
+            return known.state == chat_state(chat);
+        }
         let is_invitation = state
             .invitations
             .iter()
             .any(|invitation| invitation.id == chat.id);
-        if !chat.active {
-            !is_invitation
-        } else if chat.invitation {
-            is_chat || is_invitation
+        if is_invitation {
+            // Still an invitation to a direct chat.
+            chat.active && chat.invitation && chat.form == ChatForm::Direct
         } else {
-            is_chat
+            // A known chat that is new to the snapshot, as at start, needs adding; one that
+            // ended before the core showed it needs nothing.
+            !chat.active && self.inner.known_chats.contact(&chat.id).is_none()
         }
     }
 
@@ -985,7 +1058,10 @@ impl Core {
     /// A chat or invitation that is new to the snapshot gets its history here, under the same
     /// lock: a message stored earlier is in it, and one stored later reaches
     /// [`Self::apply_message`] after the chat is in the snapshot.
-    fn apply(&self, chat: &DirectChat, contact_name: String, started_at: u64) {
+    ///
+    /// `contact_hex` is whom the chat is with: for a chat that is no longer direct, the contact
+    /// it had when it was (#125).
+    fn apply(&self, chat: &DirectChat, contact_hex: &str, contact_name: String, started_at: u64) {
         let mut state = self.state();
         let Some(account_hex) = state
             .account
@@ -994,58 +1070,79 @@ impl Core {
         else {
             return;
         };
-        let is_chat = state.chats.iter().any(|known| known.id == chat.id);
+        let chat_state = chat_state(chat);
+        let known = state.chats.iter().position(|known| known.id == chat.id);
         let invitation = state
             .invitations
             .iter()
             .position(|invitation| invitation.id == chat.id);
         // Only a new contact looks for a photo; the refresh keeps it current after that.
         let contact = || Contact {
-            public_key: chat.peer_hex.clone(),
+            public_key: contact_hex.to_owned(),
             name: contact_name.clone(),
-            photo: self.known_photo(&chat.peer_hex),
-            meshes: self.contact_meshes(&chat.peer_hex),
+            photo: self.known_photo(contact_hex),
+            meshes: self.contact_meshes(contact_hex),
         };
 
         let mut events = Vec::new();
-        if !chat.active {
-            // Declined elsewhere, withdrawn or left. The interface has no event for a chat that
-            // ends, so only invitations go away.
-            if let Some(index) = invitation {
+        let mut added = None;
+        if let Some(index) = known {
+            // A chat that stops being direct, or ends, stays, and says so (#125).
+            let known = &mut state.chats[index];
+            if known.state != chat_state {
+                log::info!("a chat is now {chat_state:?}");
+                known.state = chat_state;
+                // In a chat that is no longer direct, messages say who sent them.
+                known.messages = self.history(&account_hex, &chat.id, chat_state);
+                events.push(CoreEvent::ChatChanged {
+                    chat: known.clone(),
+                });
+            }
+        } else if let Some(index) = invitation {
+            if !chat.active || chat.form != ChatForm::Direct {
+                // Declined elsewhere, withdrawn, or no longer a direct chat.
                 state.invitations.remove(index);
                 events.push(CoreEvent::InvitationRemoved {
                     invitation_id: chat.id.clone(),
                 });
+            } else if !chat.invitation {
+                // Accepted.
+                let accepted = state.invitations.remove(index);
+                events.push(CoreEvent::InvitationRemoved {
+                    invitation_id: chat.id.clone(),
+                });
+                added = Some(accepted.from);
             }
         } else if chat.invitation {
-            if !is_chat && invitation.is_none() {
+            if chat.active && chat.form == ChatForm::Direct {
                 let invitation = Invitation {
                     id: chat.id.clone(),
                     from: contact(),
                     received_at: started_at,
-                    messages: self.history(&account_hex, &chat.id),
+                    messages: self.history(&account_hex, &chat.id, ChatState::Direct),
                 };
                 state.invitations.push(invitation.clone());
                 events.push(CoreEvent::InvitationReceived { invitation });
             }
-        } else if !is_chat {
-            let contact = match invitation {
-                Some(index) => {
-                    let accepted = state.invitations.remove(index);
-                    events.push(CoreEvent::InvitationRemoved {
-                        invitation_id: chat.id.clone(),
-                    });
-                    accepted.from
-                }
-                None => contact(),
-            };
+        } else {
+            // A new direct chat, or, as at start, one the core showed before it changed.
+            added = Some(contact());
+        }
+        if let Some(contact) = added {
+            if chat_state.is_direct() {
+                self.inner
+                    .known_chats
+                    .remember(&chat.id, &contact.public_key);
+            }
             let added = Chat {
                 id: chat.id.clone(),
                 contact,
-                messages: self.history(&account_hex, &chat.id),
+                state: chat_state,
+                messages: self.history(&account_hex, &chat.id, chat_state),
                 reach: self.reach().reach(&chat.id, Instant::now()),
                 // The radio's part follows right after, from `radio_chat_added`.
                 radio_issue: None,
+                disappear_after: chat.disappear_after,
             };
             state.chats.push(added.clone());
             events.push(CoreEvent::ChatAdded { chat: added });
@@ -1053,12 +1150,19 @@ impl Core {
         let added = events
             .iter()
             .any(|event| matches!(event, CoreEvent::ChatAdded { .. }));
+        let changed = events
+            .iter()
+            .any(|event| matches!(event, CoreEvent::ChatChanged { .. }));
         for event in events {
             self.emit(event);
         }
         drop(state);
-        if added {
+        if added && chat_state.is_direct() {
             self.radio_chat_added(&chat.id);
+        }
+        if changed {
+            // Only a direct chat goes by radio.
+            self.refresh_reach(Instant::now());
         }
     }
 
@@ -1066,15 +1170,31 @@ impl Core {
     /// an outgoing one that a relay has now acknowledged. A message for a chat the snapshot
     /// doesn't have yet is in that chat's history when it arrives.
     fn apply_message(&self, message: &TextMessage) {
-        let view = message_view(
+        // The user's own message may come before MDK has stamped its expiry (#124).
+        let stamped;
+        let message = if message.outgoing && message.expires_at.is_none() {
+            stamped = self.stamp_expiry(message.clone());
+            &stamped
+        } else {
+            message
+        };
+        let mut view = message_view(
             message,
             self.inner.radio_store.message(&message.id).as_ref(),
         );
         let waits = message.outgoing && self.radio_sending_in(&message.chat_id);
+        // Gone already (#124); one that expires later wakes the watcher, which takes it then.
+        if let Some(at) = view.expires_at {
+            if at <= now_ms() {
+                return;
+            }
+            self.inner.expiry.look_again();
+        }
         let mut guard = self.state();
         let state = &mut *guard;
         let messages = if let Some(chat) = state.chats.iter_mut().find(|c| c.id == message.chat_id)
         {
+            view.sender = self.sender_in(chat.state, message);
             &mut chat.messages
         } else if let Some(invitation) = state
             .invitations
@@ -1148,6 +1268,8 @@ impl Core {
         for chat in &mut state.chats {
             let (reach, radio_issue) = match reachability.reach(&chat.id, now) {
                 Reach::Internet => (Reach::Internet, None),
+                // Radio keys are for the two people of a direct chat (#125).
+                _ if !chat.state.is_direct() => (Reach::Unreachable, None),
                 _ => {
                     let contact = self
                         .inner
@@ -1212,14 +1334,18 @@ impl Core {
     }
 
     /// The latest messages of a chat or invitation, with those that came by radio and whose
-    /// relay copies haven't arrived yet (#40).
-    fn history(&self, account_hex: &str, chat_id: &str) -> Vec<Message> {
+    /// relay copies haven't arrived yet (#40). In a chat that is no longer direct, messages
+    /// say who sent them (#125).
+    fn history(&self, account_hex: &str, chat_id: &str, chat_state: ChatState) -> Vec<Message> {
         let store = &self.inner.radio_store;
         let mut messages: Vec<Message> =
             match self.inner.messaging.chat_messages(account_hex, chat_id) {
                 Ok(messages) => messages
                     .iter()
-                    .map(|message| message_view(message, store.message(&message.id).as_ref()))
+                    .map(|message| Message {
+                        sender: self.sender_in(chat_state, message),
+                        ..message_view(message, store.message(&message.id).as_ref())
+                    })
                     .collect(),
                 Err(error) => {
                     log::warn!("could not read a chat's messages: {error}");
@@ -1229,7 +1355,9 @@ impl Core {
         let kept = store.messages_in(chat_id);
         let mut more: Vec<Message> = kept
             .iter()
-            .filter(|radio| !messages.iter().any(|message| message.id == radio.id))
+            .filter(|radio| {
+                !radio.expired && !messages.iter().any(|message| message.id == radio.id)
+            })
             .map(radio_view)
             .collect();
         // Messages that wait for a path (#46).
@@ -1244,6 +1372,9 @@ impl Core {
             };
             messages.sort_by_key(|message| (message.sent_at, kept_at(&message.id)));
         }
+        // Those whose time is up are gone, whether or not MDK has deleted them yet (#124).
+        let now = now_ms();
+        messages.retain(|message| message.expires_at.is_none_or(|at| at > now));
         messages
     }
 
@@ -1262,12 +1393,30 @@ impl Core {
             .cloned()
     }
 
+    /// The direct chat with `public_key`. A chat with them that is no longer direct doesn't
+    /// count: adding them again starts a new one (#125).
     fn chat_with(&self, public_key: &str) -> Option<Chat> {
         self.state()
             .chats
             .iter()
-            .find(|chat| chat.contact.public_key == public_key)
+            .find(|chat| chat.contact.public_key == public_key && chat.state.is_direct())
             .cloned()
+    }
+
+    /// Who sent `message`, for a chat in `chat_state` (#125): see [`message_sender`].
+    fn sender_in(&self, chat_state: ChatState, message: &TextMessage) -> Option<Sender> {
+        message_sender(chat_state, message, |hex| {
+            self.inner.messaging.known_name(hex)
+        })
+    }
+
+    /// Whether `chat` can be reached by radio: only a direct chat can (#125).
+    pub(crate) fn chat_radio_reach(&self, chat: &Chat) -> Result<(), RadioIssue> {
+        if chat.state.is_direct() {
+            self.contact_radio_reach(&chat.contact.public_key)
+        } else {
+            Err(RadioIssue::NoContactRadio)
+        }
     }
 
     fn invitation_from(&self, public_key: &str) -> Option<String> {
@@ -1410,6 +1559,8 @@ fn account_view(
 ) -> Result<Account, MessagingError> {
     let invite_link = invite::invite_link(&public_key_hex, messaging.relays())?;
     let share_link = invite::web_link(&invite_link);
+    // The invite link above has already read the same key.
+    let npub = invite::npub(&public_key_hex).expect("the invite link has read this key");
     let photo = messaging
         .known_picture(&public_key_hex)
         .and_then(|url| avatars.get(&url))
@@ -1420,8 +1571,52 @@ fn account_view(
         photo,
         invite_link,
         share_link,
+        npub,
         public_key: public_key_hex,
     })
+}
+
+/// What `chat` is now, as an interface shows it (#125).
+fn chat_state(chat: &DirectChat) -> ChatState {
+    if !chat.active {
+        return ChatState::Removed;
+    }
+    match chat.form {
+        ChatForm::Direct => ChatState::Direct,
+        ChatForm::Alone => ChatState::ContactLeft,
+        ChatForm::Group => ChatState::Group,
+    }
+}
+
+/// Who sent `message`, in a chat in `chat_state` (#125). Only incoming messages in a `group`
+/// chat say so: there anyone in the chat can have sent them. In a direct chat, and one the
+/// contact left, the contact sent them all. `known_name` gives a name from a profile; without
+/// one the sender goes by MDK's pseudonym for them, as in White Noise.
+fn message_sender(
+    chat_state: ChatState,
+    message: &TextMessage,
+    known_name: impl FnOnce(&str) -> Option<String>,
+) -> Option<Sender> {
+    if chat_state != ChatState::Group || message.outgoing || message.sender_hex.is_empty() {
+        return None;
+    }
+    let hex = &message.sender_hex;
+    Some(Sender {
+        public_key: hex.clone(),
+        name: known_name(hex).unwrap_or_else(|| marmot_app::default_profile_pseudonym(hex)),
+    })
+}
+
+/// Why nothing can be sent in `chat`, if it has ended (#125).
+fn cannot_send(chat: &Chat) -> Option<String> {
+    match chat.state {
+        ChatState::ContactLeft => Some(format!(
+            "{} left this chat. Messages can't be sent here any more.",
+            chat.contact.name
+        )),
+        ChatState::Removed => Some("You are no longer in this chat.".to_owned()),
+        ChatState::Direct | ChatState::Group => None,
+    }
 }
 
 /// A message as an interface sees it. `radio` is the message's record in the radio store, if
@@ -1452,6 +1647,10 @@ fn message_view(message: &TextMessage, radio: Option<&RadioMessage>) -> Message 
         },
         delivery: message.outgoing.then_some(delivery),
         cancellable: false,
+        sender: None,
+        expires_at: message
+            .expires_at
+            .or_else(|| radio.and_then(|radio| radio.expires_at)),
     }
 }
 
@@ -1475,6 +1674,8 @@ fn radio_view(radio: &RadioMessage) -> Message {
             DeliveryState::Waiting
         }),
         cancellable: false,
+        sender: None,
+        expires_at: radio.expires_at,
     }
 }
 
@@ -1541,6 +1742,65 @@ mod tests {
                     RelayStatus::Connecting
                 ),
             ]
+        );
+    }
+
+    fn text_from(sender_hex: &str, outgoing: bool) -> TextMessage {
+        TextMessage {
+            chat_id: "chat".to_owned(),
+            id: "message".to_owned(),
+            outgoing,
+            sender_hex: sender_hex.to_owned(),
+            text: "Hello".to_owned(),
+            sent_at: 0,
+            acknowledged: outgoing,
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn issue_125_incoming_messages_in_a_group_say_who_sent_them() {
+        let cy = "c".repeat(64);
+        let named = |hex: &str| (hex == cy).then(|| "Cy Berg".to_owned());
+
+        // A known name.
+        let sender = message_sender(ChatState::Group, &text_from(&cy, false), named).unwrap();
+        assert_eq!(sender.public_key, cy);
+        assert_eq!(sender.name, "Cy Berg");
+
+        // Without a profile, the pseudonym MDK and White Noise give them.
+        let dee = "d".repeat(64);
+        let sender = message_sender(ChatState::Group, &text_from(&dee, false), named).unwrap();
+        assert_eq!(sender.public_key, dee);
+        assert_eq!(sender.name, marmot_app::default_profile_pseudonym(&dee));
+        assert!(!sender.name.is_empty());
+    }
+
+    #[test]
+    fn issue_125_only_incoming_messages_in_a_group_carry_a_sender() {
+        let cy = "c".repeat(64);
+        let named = |_: &str| Some("Cy Berg".to_owned());
+        // Our own messages, in any chat.
+        for state in [
+            ChatState::Direct,
+            ChatState::ContactLeft,
+            ChatState::Removed,
+            ChatState::Group,
+        ] {
+            assert_eq!(message_sender(state, &text_from(&cy, true), named), None);
+        }
+        // The contact's, in a chat that is or was direct, or one the user left.
+        for state in [
+            ChatState::Direct,
+            ChatState::ContactLeft,
+            ChatState::Removed,
+        ] {
+            assert_eq!(message_sender(state, &text_from(&cy, false), named), None);
+        }
+        // A message MDK gave no sender for.
+        assert_eq!(
+            message_sender(ChatState::Group, &text_from("", false), named),
+            None
         );
     }
 }

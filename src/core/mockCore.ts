@@ -205,6 +205,7 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         name: trimmed,
         about: "",
         publicKey: randomHex(32),
+        npub: demoNpub(),
         inviteLink: INVITE_PREFIX + invite,
         shareLink: `https://peoples.chat/i#demo-invite-${invite}`,
       };
@@ -333,6 +334,11 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       const chat = chatById(chatId);
       const body = text.trim();
       if (!body) throw new CoreError("Write a message first.");
+      // As the core does: nothing goes to a chat that has ended (#125).
+      if (chat.state === "contactLeft") {
+        throw new CoreError(`${chat.contact.name} left this chat. Messages can't be sent here any more.`);
+      }
+      if (chat.state === "removed") throw new CoreError("You are no longer in this chat.");
 
       // As the core does: radio carries short text, also when it is forced (#40). With the
       // switch on, longer text is refused; otherwise it waits for the internet (#46), as
@@ -351,6 +357,8 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
         transport: radio ? "radio" : "internet",
         delivery: "waiting",
         ...(waits ? { cancellable: true } : {}),
+        // Its time starts when it goes (#124).
+        ...(!waits && chat.disappearAfter ? { expiresAt: now() + chat.disappearAfter * 1000 } : {}),
       };
       chat.messages.push(message);
       emit({ type: "messageAdded", chatId, message });
@@ -382,6 +390,12 @@ export function createMockCore(options: MockCoreOptions = {}): Core {
       if (!message.cancellable) throw new CoreError("This message is on its way already.");
       chat.messages = chat.messages.filter((m) => m.id !== messageId);
       emit({ type: "messageRemoved", chatId, messageId });
+    },
+
+    // The demo keeps no read marks: its messages disappear after a week, read or not.
+    async markRead(chatId) {
+      requireAccount();
+      chatById(chatId);
     },
 
     // The demo's radio reaches every contact, so the switch is all it takes.
@@ -453,6 +467,9 @@ function demoRelays(): Relay[] {
 }
 
 function demoChat(now: number): Chat {
+  // Astrid turned disappearing messages on, as a White Noise user can (#124).
+  const disappearAfter = 7 * 24 * 60 * 60;
+  const expires = (sentAt: number) => sentAt + disappearAfter * 1000;
   return {
     id: randomHex(8),
     contact: { publicKey: randomHex(32), name: "Astrid Holm" },
@@ -463,6 +480,7 @@ function demoChat(now: number): Chat {
         text: "Storm warning for tonight. Are you still coming by tomorrow?",
         sentAt: now - 26 * MINUTE,
         transport: "internet",
+        expiresAt: expires(now - 26 * MINUTE),
       },
       {
         id: randomHex(8),
@@ -471,9 +489,11 @@ function demoChat(now: number): Chat {
         sentAt: now - 25 * MINUTE,
         transport: "internet",
         delivery: "sent",
+        expiresAt: expires(now - 25 * MINUTE),
       },
     ],
     reach: "internet",
+    disappearAfter,
   };
 }
 
@@ -566,6 +586,8 @@ function restore(storage: StorageLike | null): MockState | null {
     if (restored.account && typeof restored.account.shareLink !== "string") {
       restored.account.shareLink = `https://peoples.chat/i#${restored.account.inviteLink.replace(INVITE_PREFIX, "demo-invite-")}`;
     }
+    // Saved before accounts showed their npub (#129).
+    if (restored.account && typeof restored.account.npub !== "string") restored.account.npub = demoNpub();
     // Acknowledgement timers do not survive a reload, so settle anything still waiting, except
     // in a chat that can't be reached.
     for (const chat of restored.chats) {
@@ -589,6 +611,12 @@ function toBase64(bytes: Uint8Array): string {
 function randomBech32(length: number): string {
   const alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
   return Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => alphabet[b % 32]).join("");
+}
+
+/** Looks like an npub, but is no key: the demo has none (#129). */
+function demoNpub(): string {
+  const bech32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+  return "npub1" + Array.from(crypto.getRandomValues(new Uint8Array(58)), (b) => bech32[b % 32]).join("");
 }
 
 function randomHex(bytes: number): string {

@@ -4,6 +4,7 @@
       "name": "Emil Dahl",
       "about": "Aarhus. Usually reachable by radio.",
       "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+      "npub": "npub1fixtureemildahl",
       "inviteLink": "nostr:nprofile1fixtureemildahl",
       "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
     },
@@ -39,10 +40,12 @@
             "text": "Are you still there?",
             "sentAt": 1795300090000,
             "transport": "radio",
-            "delivery": "timedOut"
+            "delivery": "timedOut",
+            "expiresAt": 1795904890000
           }
         ],
-        "reach": "radio"
+        "reach": "radio",
+        "disappearAfter": 604800
       }
     ],
     "invitations": [
@@ -159,6 +162,44 @@
       "radioIssue": "notHeard"
     },
     {
+      "type": "chatChanged",
+      "chat": {
+        "id": "chat-2",
+        "contact": {
+          "publicKey": "a89ecb62193920de288123ea3d5e5f556118c4d180cbffc672804f3cd4689299",
+          "name": "Jonas Kjær"
+        },
+        "state": "group",
+        "messages": [
+          {
+            "id": "msg-4",
+            "direction": "out",
+            "text": "Hello!",
+            "sentAt": 1795300180000,
+            "transport": "internet",
+            "delivery": "sent"
+          },
+          {
+            "id": "msg-6",
+            "direction": "in",
+            "text": "I'm Frida, Jonas added me.",
+            "sentAt": 1795300260000,
+            "transport": "internet",
+            "sender": {
+              "publicKey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+              "name": "Frida Nygaard"
+            }
+          }
+        ],
+        "reach": "unreachable"
+      }
+    },
+    {
+      "type": "disappearingChanged",
+      "chatId": "chat-2",
+      "disappearAfter": 3600
+    },
+    {
       "type": "relaysChanged",
       "relays": [
         {
@@ -180,6 +221,7 @@
         "about": "Aarhus, Denmark",
         "photo": "data:image/jpeg;base64,/9j/2wBDAA==",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "npub": "npub1fixtureemildahl",
         "inviteLink": "nostr:nprofile1fixtureemildahl",
         "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
       }
@@ -228,6 +270,7 @@
         "name": "Emil Dahl",
         "about": "",
         "publicKey": "a6f88a0dad235fa33069f21239521642065cda427b98979f781735299c3face3",
+        "npub": "npub1fixtureemildahl",
         "inviteLink": "nostr:nprofile1fixtureemildahl",
         "shareLink": "https://peoples.chat/i#nprofile1fixtureemildahl"
       }

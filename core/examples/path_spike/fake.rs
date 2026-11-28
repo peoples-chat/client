@@ -245,6 +245,14 @@ impl FakeRadio {
             1 => (vec![self.self_info()], None),
             22 => (vec![device_info()], None),
             12 => (vec![OK.to_vec()], None),
+            // GET_DEVICE_TIME and SET_DEVICE_TIME: the clock follows the computer's.
+            5 => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs() as u32);
+                (vec![[&[9u8][..], &now.to_le_bytes()].concat()], None)
+            }
+            6 => (vec![OK.to_vec()], None),
             4 => {
                 let mut frames =
                     vec![[&[2u8][..], &u32::from(state.knows_peer).to_le_bytes()].concat()];

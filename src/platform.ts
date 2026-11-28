@@ -4,8 +4,11 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 /** True in the iOS and Android apps, false on desktop and in the browser preview. */
 const inPhoneApp = isTauri() && /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 
-/** Scanning QR codes uses the camera plugin, which the iOS and Android apps have. */
-export const canScanQrCodes = inPhoneApp;
+/**
+ * Scanning QR codes uses the camera plugin, which the iOS and Android apps have. Desktop e2e
+ * builds scan too: their tests hand in the scanned text (`src/screens/Scan.tsx`).
+ */
+export const canScanQrCodes = inPhoneApp || import.meta.env.VITE_E2E === "1";
 
 /**
  * Whether the system share sheet can open. The phone apps open it through the app's share-sheet

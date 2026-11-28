@@ -9,4 +9,4 @@ export function useAppState(): AppState {
   return useSyncExternalStore(store.subscribe, store.getState);
 }
 
-export { chatListItems, lastActivity, type AppState, type ChatListItem } from "./store";
+export { canSend, chatEndedText, chatListItems, lastActivity, type AppState, type ChatListItem } from "./store";
