@@ -27,6 +27,9 @@ lower `marmot-session` crate.
 | `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
 | `send_invite_token`, `invite_tokens`, `follow_messages` (tokens) | `send_custom_event`, `timeline_messages_with_query`, `subscribe_timeline_messages` |
 | `chat_started_at` | `chat_list_row` |
+| `mark_chat_read`, `has_unread` (#124) | `mark_timeline_message_read` on the newest timeline message, `chat_list_row` |
+| `sweep_expired` (#124) | `sweep_expired_retention`; its deletions come as `TimelineMessageChange::Remove` with `TimelineRemoveReason::Pruned` |
+| `DirectChat::disappear_after`, `TextMessage::expires_at` (#124) | `AppGroupRecord::message_retention`, `TimelineMessageRecord::retention_expires_at` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
 | `follow_messages` | `subscribe_timeline_messages` |
