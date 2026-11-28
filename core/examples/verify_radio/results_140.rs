@@ -289,3 +289,16 @@ fn issue_140_the_captures_hold_no_unprompted_advert() {
     }
     assert_in_page(&["| R1 to R2 | 14.7 min | 0 | 0 |".to_owned()]);
 }
+
+/// The 75-minute lab listen (`pnpm verify:radio --adverts 75`, reported on #140) is on the page:
+/// no unprompted advert on either radio, and each heard the other's prompted one.
+#[test]
+fn issue_140_the_page_records_the_hour_without_adverts() {
+    assert_in_page(&[
+        "| R1 | 4500 s | 0 | 0 | heard |".to_owned(),
+        "| R2 | 4500 s | 0 | 0 | heard |".to_owned(),
+    ]);
+    let page = page();
+    assert!(page.contains("firmware v1.18.0"));
+    assert!(!page.contains("Still to do: the full hour"));
+}
