@@ -55,6 +55,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `previewInvite(inviteLink)` | `preview_invite` | `Contact` | | Done (#95) |
 | `sendMessage(chatId, text)` | `send_message` | `Message` | `messageAdded`, then `deliveryChanged` | Done (#20; by radio #40, #45) |
 | `cancelMessage(chatId, messageId)` | `cancel_message` | | `messageRemoved` | Done (#46) |
+| `markRead(chatId)` | `mark_read` | | | Done (#124) |
 | `setForceRadio(forced)` | `set_force_radio` | `RadioStatus` | `radioChanged` | Done (#40) |
 | `exportAccountKey(copy)` | `export_account_key` | `string` | | Done (#86) |
 | `radioPorts()` | `radio_ports` (computers only) | `RadioPort[]` | | Done (#24) |
@@ -68,12 +69,14 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `accountCreated` | `account` | The account was created on this device | Done (#16) |
 | `accountDeleted` | | The account and its data were removed from this device | Done (#16) |
 | `chatAdded` | `chat` | A direct chat starts: the user added a contact or accepted an invitation | Done (#19) |
+| `chatChanged` | `chat` | A chat stopped being direct, or ended: the contact left or deleted their account, it got a name or another member, or the user is no longer in it. The whole chat replaces the one with its id | Done (#125) |
 | `invitationReceived` | `invitation` | Someone who is not a contact invites the user | Done (#19) |
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
 | `messageChanged` | `chatId`, `message` | Someone reacted to a message, or the message a reply quotes arrived. Replaces the message with that id | Done (#123) |
-| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id, or a message disappeared. `chatId` can be an invitation's id | Done (#46, #124) |
+| `disappearingChanged` | `chatId`, `disappearAfter` (optional) | Someone in the chat turned disappearing messages on or off, or changed the timer | Done (#124) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
@@ -87,10 +90,10 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | Type | Fields |
 | --- | --- |
 | `Snapshot` | `account` (or `null`), `chats`, `invitations`, `relays`, `invites`, `radio` |
-| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `inviteLink`, `shareLink` |
+| `Account` | `name`, `about`, `photo` (optional), `publicKey` (hex), `npub`, `inviteLink`, `shareLink` |
 | `Contact` | `publicKey`, `name`, `photo` (optional), `meshes` (optional: `meshCore`, from their radio address records, #34) |
-| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional) |
-| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `placeholder` (optional), `replyTo` (optional `Quote`), `reactions` (optional) |
+| `Chat` | `id`, `contact`, `messages` (oldest first), `reach` (`internet`, `radio`, `unreachable`), `radioIssue` (optional), `disappearAfter` (optional, seconds, #124), `state` (optional: `contactLeft`, `group`, `removed`; left out while `direct`, #125) |
+| `Message` | `id`, `direction` (`in`, `out`), `text`, `sentAt`, `transport` (`internet`, `radio`), `delivery`, `cancellable` (optional), `expiresAt` (optional, #124), `sender` (optional: `publicKey`, `name`; incoming messages in a `group` chat, #125), `placeholder` (optional, #123), `replyTo` (optional `Quote`, #123), `reactions` (optional, #123) |
 | `Quote` | `messageId`, `direction` (absent when the quoted message isn't available), `text`, `placeholder` (optional) |
 | `Reaction` | `emoji`, `count`, `mine` |
 | `Invitation` | `id`, `from`, `receivedAt`, `messages` |
@@ -112,6 +115,9 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 - `reach` says how the chat's messages can travel now; see [Reach](#reach).
 - `relays` are the account's relays; see [Relays](#relays).
 - `inviteLink` is a `nostr:nprofile1…` URI; see [Contacts and invitations](#contacts-and-invitations).
+- `npub` is the same key as a NIP-19 `npub1…`. Profile shows it with Copy, for people who add the user from White
+  Noise: both its phone apps take an npub, and its Android app refuses an nprofile and doesn't open peoples.chat links
+  (#129).
 - An invitation's `id` is the id of the chat that accepting it opens.
 
 ## Contacts and invitations
@@ -138,6 +144,9 @@ mistake.
 
 **Adding a contact:**
 
+- **A scanned code asks first** (#129). Scan shows who it is, with `previewInvite`, and calls `addContact` only when the
+  user taps Start, as a tapped link does and as White Noise opens the person's profile first.
+
 - **The chat opens at once**, with `chatAdded`. The other person gets an invitation in the background.
 - **With a contact the user already has**, it returns their chat.
 - **When that person has already invited the user**, it accepts the invitation instead, so two people who scan each
@@ -154,10 +163,23 @@ mistake.
   derived from the key ("Brave Otter"), the same one White Noise shows. A name found later, or a new one, arrives as
   `contactChanged` ([Profile](#profile)).
 
+**When a chat stops being direct (#125):**
+
+MDK counts a chat as direct while it has no name and two accounts. The core keeps a chat it has shown, by its id,
+after that stops: `chatChanged` brings the whole chat with its new `state`, and it stays after a restart (the core
+keeps which chats were direct, and with whom, in `chats.json`).
+
+- **`contactLeft`**: the contact left the chat or deleted their account. The chat says so, and `sendMessage` refuses
+  with "Bea Holm left this chat. Messages can't be sent here any more." Waiting messages stay until cancelled.
+- **`removed`**: the user left the chat or was removed, in another app. Nothing can be sent.
+- **`group`**: the chat got a name or a third member, in another app. Incoming messages carry `sender`, since anyone
+  in it can have sent them. Messages go by internet only: radio keys are for the two people of a direct chat.
+- Adding the contact again starts a new direct chat; the old one stays in the list.
+
 **Not built yet:**
 
 - deleting or blocking an invitation;
-- group chats: the core shows direct chats only;
+- group chats: the core shows direct chats, and chats that were direct (#125), only;
 - opening an invite link tapped in another app on an iPhone: that needs the Apple developer account (#61). See [Links that
   open the app](#links-that-open-the-app).
 
@@ -242,7 +264,9 @@ no server.
 2. Someone without an account opens the link. `previewInvite(link)` gives the inviter's name and photo from their
    profile; it needs no account.
 3. They create an account, and `addContact(link)` starts the chat. Their core then sends the token in the chat, as an
-   app event of the app's own kind (9910). It isn't text, so White Noise doesn't show it.
+   app event of the app's own kind (9910). peoples.chat doesn't show it. White Noise would show a kind it doesn't know,
+   for Android as a bubble of its raw content and for iOS as an "Unsupported event" card (#123), but that does no harm
+   here: the token goes only to the inviter, whose app is peoples.chat.
 4. The inviter's core gets the token while the chat is still a request. If the token is the user's, unused and less
    than 7 days old, the core marks the invitation as used (`inviteChanged`, with `joinedChatId`) and accepts the chat
    (`invitationRemoved`, then `chatAdded`). A token that came while the app was closed counts when it starts.
@@ -302,9 +326,29 @@ that comes before the user accepts an invitation is added to the invitation: `me
   chat, and is empty for a sticker or an unknown kind.
 - The app's own events stay hidden: an invitation's token (9910) and a radio address record (9911, until #119).
   Deleted messages, and ones withdrawn when the chat's state was settled, stay hidden too.
+- In a `group` chat (#125), a quote of someone else's message doesn't say who wrote it: MDK's `reply_preview` is read
+  for its text and whether it was the user's.
+
+**Disappearing messages** (#124, `core/src/app/expiry.rs`). peoples.chat doesn't offer the timer, but anyone in a
+chat can set it: Marmot lets any admin ([message-retention-v1](https://github.com/marmot-protocol/marmot/blob/36757fed3c5053aa3c194cc6c26f6985b344af51/app-components/message-retention-v1.md#L68-L70)),
+both people are admins in a chat MDK starts, and White Noise for Android offers it in direct chats.
+
+- **The chat's timer** is `disappearAfter`, in seconds; `disappearingChanged` follows it. The chat says "Messages
+  disappear 1 week after they are sent." under its header while it is on.
+- **Each message sent while it is on** has `expiresAt`: the sender's clock when it was sent, plus the timer then. A
+  later change to the timer doesn't change it. Expiry is advisory, since it counts from the sender's clock.
+- **When its time is up**, the core takes the message away with `messageRemoved`, also from an invitation, and the
+  snapshot no longer has it. A radio message loses its text in `radio.json` then; its id stays, for the replay check.
+- **From disk.** MDK deletes expired messages only when asked (`sweep_expired_retention`), and holds back one the user
+  hasn't read, or a whole chat while a message in it expired less than 5 seconds ago. The core asks soon after start, 6
+  seconds after the latest expiry, after `markRead`, and every minute.
+- **`markRead(chatId)`** says the user has seen the chat up to its newest message. The interface calls it while it
+  shows the chat. MDK's read mark stays on this device: nothing is sent, so the other person isn't told.
+- A message that waits for a path (#46) gets its time once it goes.
 
 **Not built yet:**
 
+- turning disappearing messages on from peoples.chat;
 - a failed state: a message that every relay refuses stays `waiting` (#48 shows delivery);
 - sending reactions, replies and media; showing photos, files, stickers and polls themselves; editing and deleting. A
   message deleted after it was shown stays until the app restarts (#122).
@@ -426,8 +470,9 @@ a message the radio can't take waits for the internet instead:
 - "That is too long for radio. Keep it to 96 bytes."
 - "Pair a radio first."
 - "Your radio isn't connected.": it is paired, but the core is looking for it.
-- "Bea Holm's radio isn't known yet.": the contact's app hasn't sent a radio address record (#34); see
+- "Bea Holm's radio isn't known yet.": the chat has no radio address record of the contact's (#34); see
   [radio.md](radio.md).
+- "Only a MeshCore radio can send messages."
 - "Could not send by radio: the chat's keys aren't ready. Try again."
 
 Then MDK keeps the message as usual, and the radio carries it too. MDK publishes it once a relay can be reached, and

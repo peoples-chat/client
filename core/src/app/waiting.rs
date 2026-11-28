@@ -8,7 +8,9 @@
 //! `messageRemoved` takes away the waiting one.
 
 use super::{Core, failed, now_ms};
-use crate::interface::{CommandError, CoreEvent, DeliveryState, Direction, Message, Transport};
+use crate::interface::{
+    ChatState, CommandError, CoreEvent, DeliveryState, Direction, Message, Transport,
+};
 use crate::outbox::Queued;
 use crate::radio::format;
 use crate::transport::{Route, route};
@@ -99,11 +101,15 @@ impl Core {
         let Some(chat) = self.chat(chat_id) else {
             return;
         };
+        // In a chat that has ended, they stay until the user cancels them (#125).
+        if !matches!(chat.state, ChatState::Direct | ChatState::Group) {
+            return;
+        }
         for queued in self.inner.outbox.in_chat(chat_id) {
             // A relay that is connected, not one that may be: after a start without the
             // internet, relays count as reachable for a while before they count as gone.
             let relays_up = self.reach().connected(chat_id);
-            let radio = self.contact_radio_reach(&chat.contact.public_key);
+            let radio = self.chat_radio_reach(&chat);
             let by = route(false, relays_up, radio);
             let ready = match by {
                 Route::Wait => return,
@@ -185,5 +191,8 @@ fn queued_view(queued: &Queued) -> Message {
         placeholder: None,
         reply_to: None,
         reactions: Vec::new(),
+        sender: None,
+        // Its time starts when it goes (#124).
+        expires_at: None,
     }
 }

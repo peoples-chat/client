@@ -43,6 +43,7 @@ export function Account() {
           icon="download"
           label="Export account key"
           description="Keep a copy of your own"
+          testId="account-export-key"
           onClick={() => navigation.push({ name: "exportKey" })}
         />
         <ActionRow icon="shield" label="Move the key to a signer app" description="For extra protection" disabled />
@@ -55,9 +56,11 @@ export function Account() {
             <h3 id="delete-title" className={styles.confirmTitle}>
               Delete your account?
             </h3>
-            <p className={styles.confirmText}>
-              Your profile is removed, you leave every chat, and your chats are deleted from this phone. This
-              cannot be undone.
+            <p className={styles.confirmText} data-testid="delete-account-text">
+              You leave every chat. Your messages, chats and encryption data are deleted from this phone, with
+              your account key. The app asks the relays to delete your invitation key, so nobody can start a new
+              chat with you. Your name, photo, follow list and relay lists stay on the relays. This cannot be
+              undone.
             </p>
             {error && (
               <p className={styles.error} role="alert">
@@ -65,10 +68,10 @@ export function Account() {
               </p>
             )}
             <div className={styles.actions}>
-              <Button variant="secondary" onClick={() => setConfirming(false)} disabled={busy} autoFocus>
+              <Button variant="secondary" onClick={() => setConfirming(false)} disabled={busy} autoFocus data-testid="account-delete-cancel">
                 Cancel
               </Button>
-              <Button variant="dangerSolid" onClick={deleteAccount} disabled={busy}>
+              <Button variant="dangerSolid" onClick={deleteAccount} disabled={busy} data-testid="account-delete-confirm">
                 Delete account
               </Button>
             </div>
@@ -77,9 +80,10 @@ export function Account() {
           <ActionRow
             icon="trash"
             label="Delete account"
-            description="Removes your profile and leaves every chat"
+            description="Deletes your key and chats from this phone"
             danger
             chevron={false}
+            testId="account-delete"
             onClick={() => setConfirming(true)}
           />
         )}

@@ -14,8 +14,11 @@ interface MessageListProps {
   onCancel?: (messageId: string) => void;
   /** The chat's messages go by radio, so a waiting one too long for radio says why it waits. */
   byRadio?: boolean;
-  /** The other person, who wrote the messages a reply quotes that aren't the user's (#123). */
-  contactName: string;
+  /**
+   * The other person, who wrote the messages a reply quotes that aren't the user's (#123). Absent in
+   * a group chat, where it can be anyone (#125).
+   */
+  contactName?: string;
 }
 
 /** The messages of a chat, oldest at the top, with a separator for each day. */
@@ -73,7 +76,7 @@ export function MessageList({ messages, empty, onCancel, byRadio = false, contac
   );
 }
 
-export function MessageBubble({ message, contactName }: { message: Message; contactName: string }) {
+export function MessageBubble({ message, contactName }: { message: Message; contactName?: string }) {
   const outgoing = message.direction === "out";
   // Radio messages say so, in the radio colour (#48). Internet is the usual way and says nothing.
   const radio = message.transport === "radio";
@@ -92,6 +95,11 @@ export function MessageBubble({ message, contactName }: { message: Message; cont
         className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}
         data-testid="message"
       >
+        {message.sender && !outgoing && (
+          <div className={styles.sender} data-testid="message-sender">
+            {message.sender.name}
+          </div>
+        )}
         {replyTo && <QuoteBlock quote={replyTo} contactName={contactName} />}
         {placeholder && (
           <div className={styles.placeholder} data-testid="message-placeholder">
@@ -140,10 +148,15 @@ export function MessageBubble({ message, contactName }: { message: Message; cont
 }
 
 /** The message a reply answers, above the reply's text (#123). */
-function QuoteBlock({ quote, contactName }: { quote: Quote; contactName: string }) {
+function QuoteBlock({ quote, contactName }: { quote: Quote; contactName?: string }) {
+  const author = quote.direction === "out" ? "You" : quote.direction === "in" ? contactName : undefined;
   return (
     <div className={styles.quote} data-testid="message-quote">
-      {quote.direction && <div className={styles.quoteAuthor}>{quote.direction === "out" ? "You" : contactName}</div>}
+      {author && (
+        <div className={styles.quoteAuthor} data-testid="message-quote-author">
+          {author}
+        </div>
+      )}
       <div className={`${styles.quoteText} ${quote.direction ? "" : styles.unavailable}`}>{quoteSummary(quote)}</div>
     </div>
   );

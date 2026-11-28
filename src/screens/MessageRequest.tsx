@@ -10,6 +10,14 @@ import layout from "../ui/layout.module.css";
 import { errorText, Missing } from "./shared";
 import styles from "./MessageRequest.module.css";
 
+/**
+ * What the sender learns from the request (#129): nothing. Marmot has no read receipts, and
+ * accepting joins the chat without telling them.
+ */
+export function requestNote(name: string): string {
+  return `${firstName(name)} is not told whether you read this or accept. They see only what you reply.`;
+}
+
 /** An invitation from someone who is not a contact yet. Only Accept is built so far. */
 export function MessageRequest({ invitationId }: { invitationId: string }) {
   const { invitations } = useAppState();
@@ -50,7 +58,9 @@ export function MessageRequest({ invitationId }: { invitationId: string }) {
       />
       <MessageList messages={invitation.messages} contactName={name} />
       <footer className={styles.footer}>
-        <p className={styles.note}>{firstName(name)} cannot see that you have read this until you accept.</p>
+        <p className={styles.note} data-testid="request-note">
+          {requestNote(name)}
+        </p>
         {error && (
           <p className={styles.error} role="alert">
             {error}

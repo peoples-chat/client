@@ -54,6 +54,9 @@ pub struct Config {
     /// How long the radio takes to answer its app. meshcore-rs listens for an answer only
     /// after it has written the command, so an instant answer can be missed.
     pub reply_latency: Duration,
+    /// The frequency the radio says it is on, in kHz. The rest of its preset is fixed: 62.5 kHz,
+    /// SF 8, CR 8.
+    pub frequency_khz: u32,
 }
 
 impl Default for Config {
@@ -67,6 +70,7 @@ impl Default for Config {
             max_contacts: 350,
             seed: 0,
             reply_latency: Duration::from_millis(20),
+            frequency_khz: 869_618,
         }
     }
 }
@@ -108,8 +112,11 @@ struct Shared {
 }
 
 struct State {
-    /// Frames for the app that is connected, if one is.
-    app: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    /// Frames for the app that is connected, if one is, with the number of its link.
+    app: Option<(u64, mpsc::UnboundedSender<Vec<u8>>)>,
+    /// Counts the links. A link with an older number has gone quiet: the radio neither reads
+    /// nor writes it any more, and doesn't close it either.
+    link: u64,
     contacts: Vec<(Contact, u32)>,
     /// Message frames waiting for the app to collect them.
     waiting: VecDeque<Waiting>,
@@ -183,6 +190,7 @@ enum Packet {
     },
     Advert {
         from: [u8; 32],
+        name: String,
         /// The sender's clock when it sent it.
         at: u32,
     },
@@ -218,6 +226,7 @@ impl FakeRadio {
         let addr = listener.local_addr()?;
         let state = State {
             app: None,
+            link: 0,
             contacts: Vec::new(),
             waiting: VecDeque::new(),
             unconfirmed: HashMap::new(),
@@ -253,6 +262,13 @@ impl FakeRadio {
     /// Adds a contact, or updates the one with its key.
     pub fn add_contact(&self, contact: Contact) -> Result<(), TableFull> {
         self.shared.add_contact(contact)
+    }
+
+    /// The link to the app goes quiet, the way a Bluetooth link is lost: nothing comes from the
+    /// radio any more, what the app writes goes nowhere, and nobody closes anything. An app
+    /// that connects again is served as usual.
+    pub fn go_quiet(&self) {
+        self.shared.state().link += 1;
     }
 
     /// Loses the next `count` messages this radio puts on the air, whatever
@@ -299,9 +315,9 @@ impl Drop for FakeRadio {
 /// whose table is full still hears the other, but doesn't hold it: it can't send to it, and
 /// drops its messages, which it couldn't decrypt.
 pub fn link(a: &FakeRadio, b: &FakeRadio) -> Result<(), TableFull> {
+    put_in_range(a, b);
     let mut result = Ok(());
     for (one, other) in [(a, b), (b, a)] {
-        one.shared.state().peers.push(Arc::downgrade(&other.shared));
         let added = one.add_contact(Contact {
             public_key: other.public_key(),
             name: other.shared.config.name.clone(),
@@ -312,6 +328,15 @@ pub fn link(a: &FakeRadio, b: &FakeRadio) -> Result<(), TableFull> {
         result = result.and(added);
     }
     result
+}
+
+/// Puts two radios in range of each other without making them contacts: each adds the other
+/// when it hears it announce itself (`SEND_SELF_ADVERT`), as radios that add contacts by
+/// themselves do.
+pub fn put_in_range(a: &FakeRadio, b: &FakeRadio) {
+    for (one, other) in [(a, b), (b, a)] {
+        one.shared.state().peers.push(Arc::downgrade(&other.shared));
+    }
 }
 
 /// Starts two linked radios. Fails if either has no room for the other; start them and
@@ -352,10 +377,11 @@ async fn accept(listener: TcpListener, shared: Arc<Shared>) {
 async fn converse(stream: TcpStream, shared: Arc<Shared>) {
     let (mut from_app, mut to_app) = stream.into_split();
     let (sender, mut outgoing) = mpsc::unbounded_channel::<Vec<u8>>();
-    let greeting = {
+    let (link, greeting) = {
         let mut state = shared.state();
-        state.app = Some(sender);
-        state.replay.as_mut().map(Replay::radio_frames)
+        state.link += 1;
+        state.app = Some((state.link, sender));
+        (state.link, state.replay.as_mut().map(Replay::radio_frames))
     };
     let write = async {
         while let Some(frame) = outgoing.recv().await {
@@ -372,6 +398,9 @@ async fn converse(stream: TcpStream, shared: Arc<Shared>) {
         }
         while let Ok(command) = frames::read(&mut from_app).await {
             tokio::time::sleep(shared.config.reply_latency).await;
+            if !shared.hears(link) {
+                continue;
+            }
             let (answer, packet) = shared.answer(&command);
             // The answer goes first, so a confirmation can't overtake its SENT.
             shared.to_app(answer);
@@ -392,11 +421,20 @@ impl Shared {
     }
 
     fn to_app(&self, frames: Vec<Vec<u8>>) {
-        if let Some(app) = &self.state().app {
+        let state = self.state();
+        if let Some((link, app)) = &state.app
+            && *link == state.link
+        {
             for frame in frames {
                 let _ = app.send(frame);
             }
         }
+    }
+
+    /// Whether the radio reads what arrives on the link with this number: not on one that went
+    /// quiet.
+    fn hears(&self, link: u64) -> bool {
+        link == self.state().link
     }
 
     fn add_contact(&self, contact: Contact) -> Result<(), TableFull> {
@@ -425,7 +463,11 @@ impl Shared {
             return (vec![frames::error(frames::ERR_ILLEGAL_ARG)], None);
         };
         let answer = match code {
-            frames::CMD_APP_START => frames::self_info(&self.public_key, &self.config.name),
+            frames::CMD_APP_START => frames::self_info(
+                &self.public_key,
+                &self.config.name,
+                self.config.frequency_khz,
+            ),
             frames::CMD_DEVICE_QUERY => frames::device_info(self.config.max_contacts),
             frames::CMD_GET_CONTACTS => return (self.contacts(body), None),
             frames::CMD_SEND_TXT_MSG => {
@@ -445,6 +487,7 @@ impl Shared {
                 .map_or_else(frames::no_more_messages, |m| {
                     frames::message(&m.from, m.sent_at, &m.text)
                 }),
+            frames::CMD_GET_BATT_AND_STORAGE => frames::battery(),
             _ => frames::error(frames::ERR_UNSUPPORTED),
         };
         (vec![answer], None)
@@ -471,6 +514,7 @@ impl Shared {
         state.last_advert_sent = at;
         Packet::Advert {
             from: self.public_key,
+            name: self.config.name.clone(),
             at,
         }
     }
@@ -584,23 +628,35 @@ impl Shared {
                 self.to_app(vec![frames::message_waiting()]);
                 self.transmit(Packet::Ack { to: from, ack });
             }
-            Packet::Advert { from, at } => {
-                // Only contacts: the fake adds none by itself. And only an advert stamped later
-                // than the last one taken from that contact.
-                let reported = {
+            Packet::Advert { from, name, at } => {
+                // A contact's advert counts only if stamped later than the last one taken from
+                // it, and the app is told. A sender that isn't a contact is added, if there is
+                // room, as radios that add contacts by themselves do.
+                let (held, newer) = {
                     let mut state = self.state();
-                    state
+                    match state
                         .contacts
                         .iter_mut()
-                        .find(|(c, _)| c.public_key == from && at > c.last_advert)
-                        .map(|(contact, modified)| {
+                        .find(|(c, _)| c.public_key == from)
+                    {
+                        Some((contact, modified)) if at > contact.last_advert => {
                             contact.last_advert = at;
                             *modified = now();
-                        })
-                        .is_some()
+                            (true, true)
+                        }
+                        Some(_) => (true, false),
+                        None => (false, false),
+                    }
                 };
-                if reported {
+                if newer {
                     self.to_app(vec![frames::advert(&from)]);
+                } else if !held {
+                    let _ = self.add_contact(Contact {
+                        public_key: from,
+                        name,
+                        kind: 1,
+                        last_advert: at,
+                    });
                 }
             }
             Packet::Ack { to, ack } => {

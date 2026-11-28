@@ -106,6 +106,18 @@ describe("issue 123: messages the app can't show", () => {
     expect(byTestId(gone, "message-quote")).toEqual(["Message not available"]);
   });
 
+  it("doesn't credit the contact with a quote in a group chat, where anyone can have written it", () => {
+    const reply = message({
+      text: "Agreed",
+      sender: { publicKey: "c".repeat(64), name: "Cy Berg" },
+      replyTo: { messageId: "m0", direction: "in", text: "Shall we meet?" },
+    });
+    const shown = renderToStaticMarkup(<MessageBubble message={reply} />);
+    expect(byTestId(shown, "message-sender")).toEqual(["Cy Berg"]);
+    expect(byTestId(shown, "message-quote-author")).toEqual([]);
+    expect(byTestId(shown, "message-quote")).toEqual(["Shall we meet?"]);
+  });
+
   it("sums a message up in one line for the chat list", () => {
     expect(messageSummary(message({ text: "Hello" }))).toBe("Hello");
     expect(messageSummary(message({ placeholder: "photo", text: "Look" }))).toBe("Photo: Look");

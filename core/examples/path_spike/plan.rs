@@ -6,7 +6,7 @@ use std::time::Duration;
 use peoples_chat_core::radio::format::{
     MAX_RADIO_TEXT_BYTES, OVERHEAD_BYTES, open_text, seal_text, to_text_message,
 };
-use peoples_chat_core::radio::{RadioKeys, RadioSettings};
+use peoples_chat_core::radio::{RadioKey, RadioSettings, new_radio_key};
 
 use crate::airtime::time_on_air;
 use crate::frames::{self, Expected, Kind, Route};
@@ -270,35 +270,27 @@ pub fn schedule(options: &Options) -> Vec<Step> {
     steps
 }
 
-/// The made-up chat secret and accounts the spike seals packets with: the radios aren't paired
-/// with accounts, and only the packets' sizes and their arrival intact matter here.
-const CHAT_SECRET: [u8; 32] = [0x36; 32];
-const ACCOUNT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const ACCOUNT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const EPOCH: u64 = 1;
+/// The number of the made-up key the spike seals packets with: the radios aren't paired with
+/// accounts, and only the packets' sizes and their arrival intact matter here.
+const KEY_NUMBER: u64 = 1;
 
-/// Radio A's sending key, and the same key as radio B's side opens packets with.
+/// Radio A's sending key, which radio B's side opens packets with.
 pub struct Keys {
-    pub send: RadioKeys,
-    pub receive: RadioKeys,
+    key: RadioKey,
 }
 
 impl Keys {
     pub fn new() -> Self {
-        let derive = |own, contact| {
-            RadioKeys::derive(&CHAT_SECRET, EPOCH, own, contact).expect("the test keys are valid")
-        };
         Self {
-            send: derive(ACCOUNT_A, ACCOUNT_B),
-            receive: derive(ACCOUNT_B, ACCOUNT_A),
+            key: new_radio_key(),
         }
     }
 
     /// A format v0 packet with `text_bytes` of chat text, as radio A's side seals it.
     pub fn seal(&self, counter: u64, text_bytes: usize, sent_at: u32) -> Vec<u8> {
         seal_text(
-            &self.send.send,
-            EPOCH,
+            &self.key,
+            KEY_NUMBER,
             counter,
             sent_at,
             &chat_text(counter, text_bytes),
@@ -307,7 +299,7 @@ impl Keys {
 
     /// Whether `packet` opens on radio B's side to the chat text it was sealed with.
     pub fn opens(&self, packet: &[u8], counter: u64, text_bytes: usize) -> bool {
-        open_text(&self.receive.receive, packet, counter)
+        open_text(&self.key, packet, counter)
             .is_ok_and(|opened| opened.text == chat_text(counter, text_bytes))
     }
 }

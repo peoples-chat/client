@@ -23,6 +23,9 @@ pub struct Account {
     pub photo: Option<String>,
     /// The account's public key, in hex.
     pub public_key: String,
+    /// The same key as a NIP-19 `npub1…`, for people who add the user from another Marmot app:
+    /// White Noise takes an `npub`, and its Android app refuses an `nprofile` (#129).
+    pub npub: String,
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
     /// NIP-21 `nostr:nprofile1…` URI: the public key and relay hints (#19).
     pub invite_link: String,
@@ -104,6 +107,15 @@ pub struct Message {
     /// with MDK's id.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancellable: bool,
+    /// When the message disappears, in milliseconds since the Unix epoch, for a message sent
+    /// while the chat's messages disappear (#124). It counts from the sender's clock. The core
+    /// takes the message away then with `messageRemoved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// Who sent it: on incoming messages in a `group` chat, where it can be someone other than
+    /// the contact (#125).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<Sender>,
     /// What the message is, when the app can't show it as text yet (#123). `text` is then its
     /// caption, a poll's question, or what happened in the chat, and can be empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +168,37 @@ pub struct Reaction {
     pub mine: bool,
 }
 
+/// Who sent a message (#125).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sender {
+    pub public_key: String,
+    /// Their profile name as this device knows it, or the pseudonym derived from their key.
+    pub name: String,
+}
+
+/// What a chat is now (#125). Only a `direct` chat sends by radio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatState {
+    /// The user and the contact, and nobody else.
+    #[default]
+    Direct,
+    /// The contact left the chat, or deleted their account. Nothing can be sent there.
+    ContactLeft,
+    /// The chat got a name or another member, in another app. Messages say who sent them.
+    Group,
+    /// The user is no longer in the chat: they left it or were removed, in another app.
+    /// Nothing can be sent there.
+    Removed,
+}
+
+impl ChatState {
+    pub fn is_direct(&self) -> bool {
+        *self == Self::Direct
+    }
+}
+
 /// How a chat's messages can travel now (#43).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,12 +230,15 @@ pub enum RadioIssue {
     AirtimeUsed,
 }
 
-/// A direct chat with one contact.
+/// A direct chat with one contact, or one that was direct (#125).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
     pub id: String,
     pub contact: Contact,
+    /// What the chat is now. Left out while it is `direct`.
+    #[serde(default, skip_serializing_if = "ChatState::is_direct")]
+    pub state: ChatState,
     /// Oldest first.
     pub messages: Vec<Message>,
     #[serde(default)]
@@ -200,6 +246,10 @@ pub struct Chat {
     /// Why the chat isn't reachable by radio, when it is `unreachable` (#44).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radio_issue: Option<RadioIssue>,
+    /// After how many seconds new messages in the chat disappear, when someone in it turned
+    /// disappearing messages on (#124). Absent when they are off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disappear_after: Option<u64>,
 }
 
 /// One of the relays the account's messages travel through (#88).
@@ -371,6 +421,12 @@ pub enum CoreEvent {
     ChatAdded {
         chat: Chat,
     },
+    /// A chat stopped being a direct chat, or ended: the contact left, it got a name or another
+    /// member, or the user is no longer in it (#125). Carries the whole chat, which replaces the
+    /// one with its id: in a `group` chat, incoming messages say who sent them.
+    ChatChanged {
+        chat: Chat,
+    },
     InvitationReceived {
         invitation: Invitation,
     },
@@ -395,7 +451,7 @@ pub enum CoreEvent {
         message: Message,
     },
     /// A message is gone: the user cancelled it while it waited, or it went, and came back
-    /// under MDK's id (#46).
+    /// under MDK's id (#46), or it disappeared once its time was up (#124).
     MessageRemoved {
         chat_id: String,
         message_id: String,
@@ -408,6 +464,13 @@ pub enum CoreEvent {
         /// Why the chat isn't reachable by radio, when it is `unreachable`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radio_issue: Option<RadioIssue>,
+    },
+    /// Someone in the chat turned disappearing messages on or off, or changed after how long
+    /// they disappear (#124). Without `disappear_after`, they are off.
+    DisappearingChanged {
+        chat_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disappear_after: Option<u64>,
     },
     /// The account's relays changed, or their connections did. Carries all of them.
     RelaysChanged {

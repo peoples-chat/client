@@ -45,6 +45,8 @@ describe("mock core", () => {
 
     expect(account.name).toBe("Emil Dahl");
     expect(account.inviteLink).toMatch(/^peopleschat:demo-invite\//);
+    // Issue #129: an npub to show on Profile.
+    expect(account.npub).toMatch(/^npub1[02-9ac-hj-np-z]{58}$/);
     expect(events.map((e) => e.type)).toEqual([
       "accountCreated",
       "relaysChanged",

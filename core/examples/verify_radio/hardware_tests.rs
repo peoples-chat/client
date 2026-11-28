@@ -100,6 +100,7 @@ async fn run(
         power: &NoPower,
         log: log.clone(),
         timing: Timing::default(),
+        bluetooth: false,
     };
     let mut out = Vec::new();
     let result = checks_and_tests(&lab, waits(), false, &mut out).await;

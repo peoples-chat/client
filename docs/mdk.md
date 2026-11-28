@@ -27,12 +27,18 @@ lower `marmot-session` crate.
 | `upload_photo`, `download_photo` | `upload_profile_image`, `download_profile_image` |
 | `send_invite_token`, `invite_tokens`, `follow_messages` (tokens) | `send_custom_event`, `timeline_messages_with_query`, `subscribe_timeline_messages` |
 | `chat_started_at` | `chat_list_row` |
+| `mark_chat_read`, `has_unread` (#124) | `mark_timeline_message_read` on the newest timeline message, `chat_list_row` |
+| `sweep_expired` (#124) | `sweep_expired_retention`; its deletions come as `TimelineMessageChange::Remove` with `TimelineRemoveReason::Pruned` |
+| `DirectChat::disappear_after`, `TextMessage::expires_at` (#124) | `AppGroupRecord::message_retention`, `TimelineMessageRecord::retention_expires_at` |
 | `send_text` | `submit_text` |
 | `chat_messages`, `chat_message` | `timeline_messages_with_query`, `timeline_message` |
 | `follow_messages` | `subscribe_timeline_messages` |
 | `follow_relays` | `subscribe_relay_liveness` |
 | `connectivity_restored` | `notify_connectivity_restored` |
-| `chat_secret` | `group_mls_state`, `AccountManager::exporter_secret` (`marmot/group-event`) |
+| `chat_membership` | `group_mls_state`, `group_members` |
+| `radio_addresses` (version 0, read only) | `timeline_messages_with_query` |
+| `app_component`, `set_app_component` | `group_app_component`, `update_app_component` |
+| `follow_epochs` | `subscribe` (`GroupEvent::EpochChanged`) |
 | `update_own_key` | `schedule_manual_self_update`, `run_due_maintenance` |
 | `export_key` | `export_encrypted_secret_key` (NIP-49), `reveal_nsec` |
 | `close` | `shutdown_and_close` |
@@ -160,8 +166,13 @@ later (#11). Building with `TAURI_PEOPLES_CHAT_RELAYS` (comma-separated) replace
 1. They look up its relay lists (kinds 10002 and 10050) on discovery relays of their own.
 2. They fetch its KeyPackage (kind 30443) from the relays the list names.
 
-White Noise's discovery relays are `purplepag.es`, `relay.vertexlab.io`, `nos.lol`, `relay.ditto.pub` and
-`relay.primal.net`. When we checked on 22 November 2026:
+White Noise looks a contact up on its own two relays only, `wss://relay.us.whitenoise.chat` and
+`wss://relay.eu.whitenoise.chat` (#22, #76). Our accounts don't publish their relay lists there, so White Noise users
+can't find them yet; what to do about it is #76.
+
+`purplepag.es`, `relay.vertexlab.io`, `nos.lol`, `relay.ditto.pub` and `relay.primal.net` are where White Noise looks
+for its own user's lists at sign-in, not for contacts. Other clients may look contacts up on relays like these.
+When we checked them on 22 November 2026:
 
 - `nos.lol`, `relay.ditto.pub` and `relay.primal.net` found a new account and its KeyPackage. Ditto found it even
   though we don't publish there.
@@ -330,16 +341,32 @@ every 5 minutes after, from our relays.
 
 ## App events
 
-**Personal invitations' tokens** (#95) and **radio address records** (#34) travel as app events: `send_custom_event`
-sends an event of a kind the app chooses, inside the chat's encryption.
+**Personal invitations' tokens** (#95) travel as app events: `send_custom_event` sends an event of a kind the app
+chooses, inside the chat's encryption.
 
 - MDK refuses the kinds it acts on itself (chat, reactions, edits, deletions, polls, agent, group system, push tokens,
-  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens and 9911 (`RADIO_ADDRESS_KIND`) for
-  records. Both are provisional: Marmot assigns kinds only to adopted specs.
+  device groups). The core uses kind 9910 (`INVITE_TOKEN_KIND`) for tokens, which is provisional: Marmot assigns kinds
+  only to adopted specs. Older builds sent radio address records as kind 9911; the core still reads those, and sends
+  none.
 - The event shows in the timeline as a row of its own. It doesn't change the chat list's preview and raises no
   notification.
 - It reaches the other phone while the chat is still a request. MDK delivers messages of chats not yet accepted, as it
   does text.
+
+## Radio records in the chat's state
+
+**Radio address records** (#34, #128) are no events: they are MLS app components in the direct chat's GroupContext, as
+spike [#117](https://github.com/peoples-chat/client/blob/117-chat-state-spike/docs/spikes/117-chat-state.md) tried
+them. The record and the rules: [radio-format-v0.md](radio-format-v0.md#where-the-keys-come-from).
+
+- `update_app_component` replaces a component by a commit, which only an admin may make. `group_app_component` reads
+  it from this device's copy of the chat. A change shows in neither chat.
+- Component ids from `0xf000` up belong to apps. The core uses `0xf910` and `0xf911`, one for each member of a direct
+  chat, provisional until registered (#145). With one for both, a race loses a record.
+- `subscribe` reports `GroupEvent::EpochChanged` when a chat moves to a new epoch, and the core reads the components
+  again.
+- Without a relay, the change waits (`PendingPublish`), the component still reads as before, and MDK publishes it
+  later by itself. Messages can still be written meanwhile.
 
 ## Relay reachability
 
@@ -466,11 +493,13 @@ orientation, dropping the metadata, transparency and refusals.
 - without a relay the profile doesn't change, and the error says why;
 - the error messages, and the limits counted in characters.
 
-`core/tests/radio_keys.rs` has two contacts derive their chat's radio keys (#37):
+`core/tests/issue_128_radio_records.rs` has two contacts with mock radios exchange their radio records through the
+chat's state (#128):
 
-- what one sends with, the other receives with, and a restart keeps the keys;
-- a slow test, ignored unless asked for (`--include-ignored`), checks that both move to new keys after MDK's
-  post-join key update and after one asked for. Each took about 100 seconds.
+- the records go by themselves, show nothing, radio text works both ways, and a restart keeps the keys;
+- a membership change or another radio brings a new key, and the old one opens no new packets;
+- each mesh has its own record and key, and a record of an unknown mesh is kept and not used;
+- a version 0 event is still read, and two members writing at once both keep their records.
 
 The two-phone tests share `core/tests/support/mod.rs`, and take turns: several MDK runtimes in one process slow each
 other down. Three tests took 31 seconds together and 11 one after another. The app runs one runtime.

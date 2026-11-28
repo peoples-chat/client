@@ -18,6 +18,11 @@ export interface Account {
   photo?: string;
   publicKey: PublicKey;
   /**
+   * The same key as an `npub1…`, for people who add the user from another Marmot app: White
+   * Noise takes an npub, and its Android app refuses an nprofile (#129). Opaque to the interface.
+   */
+  npub: string;
+  /**
    * Link that other people open or scan to start a chat. The user's QR code encodes it. From the
    * real core it is a `nostr:nprofile1…` URI; to the interface it is opaque.
    */
@@ -77,6 +82,17 @@ export interface Message {
    */
   cancellable?: boolean;
   /**
+   * When the message disappears, in milliseconds since the Unix epoch, for one sent while the
+   * chat's messages disappear (#124). It counts from the sender's clock. The core takes the
+   * message away then with `messageRemoved`.
+   */
+  expiresAt?: number;
+  /**
+   * Who sent it: on incoming messages in a `group` chat, where it can be someone other than the
+   * contact (#125).
+   */
+  sender?: Sender;
+  /**
    * What the message is, when the app can't show it as text yet (#123). `text` is then its caption,
    * a poll's question, or what happened in the chat, and can be empty.
    */
@@ -112,6 +128,23 @@ export interface Reaction {
   mine: boolean;
 }
 
+/** Who sent a message (#125). */
+export interface Sender {
+  publicKey: PublicKey;
+  /** Their profile name, or the pseudonym derived from their key. */
+  name: string;
+}
+
+/**
+ * What a chat is now (#125). Only a `direct` chat sends by radio.
+ * - `direct`: the user and the contact, and nobody else.
+ * - `contactLeft`: the contact left the chat, or deleted their account. Nothing can be sent.
+ * - `group`: the chat got a name or another member, in another app. Messages say who sent them.
+ * - `removed`: the user is no longer in the chat, after leaving or being removed in another app.
+ *   Nothing can be sent.
+ */
+export type ChatState = "direct" | "contactLeft" | "group" | "removed";
+
 /**
  * How a chat's messages can travel now (#43).
  * - `internet`: at least one of the chat's relays is connected.
@@ -120,15 +153,22 @@ export interface Reaction {
  */
 export type Reach = "internet" | "radio" | "unreachable";
 
-/** A direct chat with one contact. */
+/** A direct chat with one contact, or one that was direct (#125). */
 export interface Chat {
   id: string;
   contact: Contact;
+  /** What the chat is now. Left out while it is `direct`. */
+  state?: ChatState;
   /** Oldest first. */
   messages: Message[];
   reach: Reach;
   /** Why the chat isn't reachable by radio, when it is `unreachable` (#44). */
   radioIssue?: RadioIssue;
+  /**
+   * After how many seconds new messages disappear, when someone in the chat turned disappearing
+   * messages on (#124). Absent when they are off.
+   */
+  disappearAfter?: number;
 }
 
 /**
@@ -268,15 +308,25 @@ export type CoreEvent =
   | { type: "accountCreated"; account: Account }
   | { type: "accountDeleted" }
   | { type: "chatAdded"; chat: Chat }
+  /**
+   * A chat stopped being direct, or ended (#125). Carries the whole chat, which replaces the one
+   * with its id.
+   */
+  | { type: "chatChanged"; chat: Chat }
   | { type: "invitationReceived"; invitation: Invitation }
   | { type: "invitationRemoved"; invitationId: string }
   | { type: "messageAdded"; chatId: string; message: Message }
   | { type: "deliveryChanged"; chatId: string; messageId: string; delivery: DeliveryState }
   /** Someone reacted to a message, or the message it quotes arrived (#123). Replaces it by id. */
   | { type: "messageChanged"; chatId: string; message: Message }
-  /** A message is gone: cancelled while it waited, or gone out under the core's id (#46). */
+  /**
+   * A message is gone: cancelled while it waited, or gone out under the core's id (#46), or it
+   * disappeared once its time was up (#124). `chatId` can be an invitation's id.
+   */
   | { type: "messageRemoved"; chatId: string; messageId: string }
   | { type: "reachChanged"; chatId: string; reach: Reach; radioIssue?: RadioIssue }
+  /** Someone in the chat turned disappearing messages on or off, or changed the timer (#124). */
+  | { type: "disappearingChanged"; chatId: string; disappearAfter?: number }
   /** The account's relays changed, or their connections did. Carries all of them. */
   | { type: "relaysChanged"; relays: Relay[] }
   /** The user changed their profile (#93). */
@@ -336,6 +386,12 @@ export interface Core {
   sendMessage(chatId: string, text: string): Promise<Message>;
   /** Cancels a message that waits for a path (#46). One on its way can't be cancelled. */
   cancelMessage(chatId: string, messageId: string): Promise<void>;
+  /**
+   * The user has seen the chat up to its newest message (#124). Called while the chat is shown.
+   * Nothing is sent: the read mark stays on this device. Expired messages are deleted from disk
+   * only once they are read.
+   */
+  markRead(chatId: string): Promise<void>;
   /** Sends every message by radio, or stops doing so: a switch for testing (#40). */
   setForceRadio(forced: boolean): Promise<RadioStatus>;
   /** The USB ports a radio may be plugged into, where `canPair` is set (#24). */

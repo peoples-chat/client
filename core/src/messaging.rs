@@ -16,13 +16,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use cgka_traits::engine::GroupEvent;
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
-    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, MarmotDeployment, RelayLiveness,
-    RelayLivenessStatus, RuntimeChatsSubscription, RuntimeRelayLivenessSubscription,
-    RuntimeTimelineMessageUpdate, RuntimeTimelineMessagesSubscription, SelfMembership,
-    TimelineMessageChange, TimelineMessageQuery, TimelineMessageRecord, TimelinePagination,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime, MarmotDeployment,
+    RelayLiveness, RelayLivenessStatus, RetentionSweepStatus, RuntimeChatsSubscription,
+    RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
+    RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
+    TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, TimelineRemoveReason,
     UserProfileMetadata,
 };
 use nostr::types::RelayUrl;
@@ -39,25 +41,23 @@ const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
 const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 /// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
 const HISTORY_LIMIT: usize = 200;
-/// MDK's name for `MLS-Exporter("marmot", "group-event", 32)`, one of the three exporter secrets
-/// it computes for every epoch and lets the app read.
-const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
-const EXPORTER_BYTES: usize = 32;
 /// The surface that MDK's audit log records for a key export: a fixed label, never a person or a
 /// key.
 const EXPORT_CALLER: &str = "peoples_chat_core::Core::export_account_key";
-/// How often [`Messaging::chat_secret`] tries while the chat is changing, and how long it waits
-/// in between.
-const SECRET_ATTEMPTS: usize = 5;
-const SECRET_RETRY: Duration = Duration::from_millis(100);
+/// How often [`Messaging::chat_membership`] tries while the chat is changing, and how long it
+/// waits in between.
+const MEMBERSHIP_ATTEMPTS: usize = 5;
+const MEMBERSHIP_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
-/// It isn't text, so White Noise doesn't show it as a message.
+/// White Noise shows a kind it doesn't know, for Android as a bubble of its raw content and for
+/// iOS as an "Unsupported event" card (#123). That does no harm here: only the inviter's app,
+/// which is peoples.chat, receives the token.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
-/// The app's own kind for a radio address record (#34), which each app sends in its direct
-/// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
+/// The app event that carried a version 0 radio address record (#34), in builds before the
+/// records moved into the chat's state (#128). Still read, never sent.
 pub const RADIO_ADDRESS_KIND: u64 = 9_911;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
@@ -68,8 +68,8 @@ static SENDS: AtomicU64 = AtomicU64::new(0);
 /// relay lists, profile and KeyPackage here.
 ///
 /// These are public, general-purpose relays. Who runs the project's own relays is decided later
-/// (#11). nos.lol and relay.primal.net are also among the relays White Noise searches for relay
-/// lists, so White Noise users can find accounts made here.
+/// (#11). They don't make accounts made here findable from White Noise: it looks a contact's
+/// relay lists up only on its own relays (#22), and that stays to be decided (#76).
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
@@ -198,13 +198,27 @@ pub struct ExistingAccount {
     pub name: Option<String>,
 }
 
-/// A direct chat as MDK holds it: an unnamed group of exactly two accounts.
+/// What a chat is now, by its state in MDK (#125).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatForm {
+    /// No name and two accounts: the account and the contact.
+    Direct,
+    /// Only the account is left: the contact left, or deleted their account.
+    Alone,
+    /// The chat has a name, or more than two accounts. MDK no longer counts it as direct.
+    Group,
+}
+
+/// A chat as MDK holds it. The core shows direct chats, and keeps following one by its id once
+/// it stops being direct (#125).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectChat {
     /// The MLS group id, in hex. It stays the same for the chat's life.
     pub id: String,
-    /// The other person's public key, in hex.
+    /// The other person's public key, in hex, while the chat has exactly two accounts. Empty
+    /// otherwise: the core knows whom a chat that was direct is with.
     pub peer_hex: String,
+    pub form: ChatForm,
     /// The other person invited the account, and it has not accepted yet.
     pub invitation: bool,
     /// The account is still in the chat: the chat is not archived, left or removed.
@@ -212,32 +226,33 @@ pub struct DirectChat {
     /// The relays the chat's messages go through, as [`canonical_relay`] spells them. Empty when
     /// the core made this value itself rather than reading it from MDK.
     pub relays: Vec<String>,
+    /// After how many seconds new messages disappear, when someone in the chat turned
+    /// disappearing messages on (#124). `None` when they are off, or when the core made this
+    /// value itself.
+    pub disappear_after: Option<u64>,
 }
 
-/// The account's direct chats as they were when following began, then each one that changes.
+/// The account's chats as they were when following began, then each one that changes. Groups
+/// come too: the core decides by id which of them it shows (#125).
 pub struct DirectChats {
     account_hex: String,
     subscription: RuntimeChatsSubscription,
 }
 
 impl DirectChats {
-    /// The direct chats when following began, invitations included.
+    /// The chats when following began, invitations included.
     pub fn current(&self) -> Vec<DirectChat> {
         self.subscription
             .snapshot
             .iter()
-            .filter_map(|record| direct_chat(&self.account_hex, record))
+            .map(|record| direct_chat(&self.account_hex, record))
             .collect()
     }
 
-    /// The next direct chat that was added or changed. `None` once messaging has stopped.
+    /// The next chat that was added or changed. `None` once messaging has stopped.
     pub async fn next(&mut self) -> Option<DirectChat> {
-        loop {
-            let record = self.subscription.recv().await?;
-            if let Some(chat) = direct_chat(&self.account_hex, &record) {
-                return Some(chat);
-            }
-        }
+        let record = self.subscription.recv().await?;
+        Some(direct_chat(&self.account_hex, &record))
     }
 }
 
@@ -252,6 +267,8 @@ pub struct TextMessage {
     pub id: String,
     /// The account sent it, rather than received it.
     pub outgoing: bool,
+    /// Who sent it: their public key, in hex (#125).
+    pub sender_hex: String,
     /// The text; for a photo or file its caption, for a poll its question, for a chat event what
     /// happened. Empty when there is none.
     pub text: String,
@@ -260,6 +277,10 @@ pub struct TextMessage {
     pub sent_at: u64,
     /// Outgoing only: a relay has acknowledged it.
     pub acknowledged: bool,
+    /// When it disappears, in milliseconds since the Unix epoch (whole seconds), if it was sent
+    /// while the chat's messages disappear (#124). MDK pins it to the message: the sender's
+    /// clock when it was sent, plus the chat's timer then.
+    pub expires_at: Option<u64>,
     /// What the message is when it isn't plain text (#123).
     pub placeholder: Option<Placeholder>,
     /// The message it answers, for a reply or a thread message (#123).
@@ -354,10 +375,14 @@ fn text_message(account_hex: &str, record: &TimelineMessageRecord) -> Option<Tex
         chat_id: record.group_id_hex.clone(),
         id: record.message_id_hex.clone(),
         outgoing,
+        sender_hex: record.sender.clone(),
         text: text.trim().to_owned(),
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
             && (record.source_message_id_hex.is_some() || record.recipient_confirmed),
+        expires_at: record
+            .retention_expires_at
+            .map(|seconds| seconds.saturating_mul(1000)),
         placeholder,
         reply_to: quote(account_hex, record),
         reactions: reactions(account_hex, &record.reactions),
@@ -526,6 +551,10 @@ pub enum ChatItem {
     Text(TextMessage),
     InviteToken(InviteToken),
     RadioAddress(RadioAddressItem),
+    /// MDK deleted the message `message_id` because its time was up (#124).
+    Expired {
+        message_id: String,
+    },
 }
 
 fn chat_item(account_hex: &str, record: &TimelineMessageRecord) -> Option<ChatItem> {
@@ -561,8 +590,18 @@ impl ChatItems {
                 }
                 RuntimeTimelineMessageUpdate::Projection(projection) => {
                     for change in &projection.update.timeline_changes {
-                        if let TimelineMessageChange::Upsert { message, .. } = change {
-                            self.ready.extend(chat_item(&self.account_hex, message));
+                        match change {
+                            TimelineMessageChange::Upsert { message, .. } => {
+                                self.ready.extend(chat_item(&self.account_hex, message));
+                            }
+                            // The retention sweep deleted it (#124). Deletions are #122's.
+                            TimelineMessageChange::Remove {
+                                message_id_hex,
+                                reason: TimelineRemoveReason::Pruned,
+                            } => self.ready.push_back(ChatItem::Expired {
+                                message_id: message_id_hex.clone(),
+                            }),
+                            TimelineMessageChange::Remove { .. } => {}
                         }
                     }
                 }
@@ -571,16 +610,34 @@ impl ChatItems {
     }
 }
 
-/// The direct chat in `record`, unless it is a group or the account's own device group.
-fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat> {
-    let members = record.direct_member_ids_hex.as_ref()?;
-    if members.len() != 2 || !members.iter().any(|member| member == account_hex) {
-        return None;
-    }
-    let peer_hex = members.iter().find(|member| *member != account_hex)?;
-    Some(DirectChat {
+/// The chat in `record`, and what it is now (#125). The account's own device group, of one
+/// account, reads as [`ChatForm::Alone`]; the core never showed it, so it ignores it.
+fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> DirectChat {
+    // The other account of a two-account roster, named or not.
+    let peer = |members: &Option<Vec<String>>| {
+        let members = members.as_ref()?;
+        if members.len() != 2 || !members.iter().any(|member| member == account_hex) {
+            return None;
+        }
+        members
+            .iter()
+            .find(|member| *member != account_hex)
+            .cloned()
+    };
+    let (form, peer_hex) = if let Some(peer_hex) = peer(&record.direct_member_ids_hex) {
+        (ChatForm::Direct, peer_hex)
+    } else if record.member_count == Some(1) {
+        (ChatForm::Alone, String::new())
+    } else {
+        (
+            ChatForm::Group,
+            peer(&record.presentation_member_ids_hex).unwrap_or_default(),
+        )
+    };
+    DirectChat {
         id: record.group_id_hex.clone(),
-        peer_hex: peer_hex.clone(),
+        peer_hex,
+        form,
         invitation: record.pending_confirmation,
         active: !record.archived && matches!(record.self_membership, SelfMembership::Member),
         relays: record
@@ -589,7 +646,43 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
             .iter()
             .map(|relay| canonical_relay(relay))
             .collect(),
-    })
+        // Marmot: 0 means off (message-retention-v1).
+        disappear_after: Some(record.message_retention.disappearing_message_secs)
+            .filter(|secs| *secs > 0),
+    }
+}
+
+/// The chats that move to new MLS epochs, from when following began.
+pub struct EpochChanges {
+    events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
+}
+
+/// What [`EpochChanges::next`] saw.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EpochChange {
+    /// The chat with this id is in a new epoch.
+    Chat(String),
+    /// Some changes were missed: any chat may be in a new epoch.
+    Missed,
+}
+
+impl EpochChanges {
+    /// The next change. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<EpochChange> {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            match self.events.recv().await {
+                Ok(MarmotAppEvent::GroupEvent(group)) => {
+                    if let GroupEvent::EpochChanged { group_id, .. } = &group.event {
+                        return Some(EpochChange::Chat(group_id.to_string()));
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => return Some(EpochChange::Missed),
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
 }
 
 /// One of the account's relays, and whether the account's connection to it is open.
@@ -670,21 +763,13 @@ pub enum MessagingError {
     PhotoDownload(String),
 }
 
-/// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
-pub struct ChatSecret {
+/// Who is in a chat in one MLS epoch (#128).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatMembership {
     pub epoch: u64,
-    /// `MLS-Exporter("marmot", "group-event", 32)`. MDK derives the key for the chat's events on
-    /// the relays from it, so it never leaves the core.
-    pub secret: Zeroizing<Vec<u8>>,
-}
-
-impl std::fmt::Debug for ChatSecret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatSecret")
-            .field("epoch", &self.epoch)
-            .field("secret", &"<redacted>")
-            .finish()
-    }
+    /// Each member account's public key, in hex, and how many of its devices are in the chat.
+    /// Sorted by key.
+    pub members: Vec<(String, u32)>,
 }
 
 impl MessagingError {
@@ -1186,25 +1271,6 @@ impl Messaging {
         Ok(page.messages.iter().filter_map(radio_address).collect())
     }
 
-    /// Sends this phone's radio address record in the chat `chat_id` (#34).
-    pub async fn send_radio_address(
-        &self,
-        account_hex: &str,
-        chat_id: &str,
-        record: &str,
-    ) -> Result<(), MessagingError> {
-        self.runtime
-            .send_custom_event(
-                account_hex,
-                &group_id(chat_id)?,
-                RADIO_ADDRESS_KIND,
-                Vec::new(),
-                record.to_owned(),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
     /// chat without a request (#95).
     pub async fn send_invite_token(
@@ -1239,6 +1305,74 @@ impl Messaging {
         text_message(account_hex, &record)
     }
 
+    /// Marks everything in the chat `chat_id` as read, up to its newest message (#124). MDK's
+    /// read cursor stays on this device: nothing is sent. The retention sweep deletes only
+    /// expired messages that are read.
+    pub fn mark_chat_read(&self, account_hex: &str, chat_id: &str) -> Result<(), MessagingError> {
+        let page = self.runtime.timeline_messages_with_query(
+            account_hex,
+            TimelineMessageQuery {
+                group_id_hex: Some(chat_id.to_owned()),
+                pagination: TimelinePagination {
+                    limit: Some(HISTORY_LIMIT),
+                    ..TimelinePagination::default()
+                },
+                ..TimelineMessageQuery::default()
+            },
+        )?;
+        // The newest one received: the user's own message, sent in the same second, may come
+        // after it or before it, and MDK's read mark counts from the one it is given.
+        let newest = page
+            .messages
+            .iter()
+            .rev()
+            .find(|record| record.direction == "received");
+        if let Some(newest) = newest {
+            self.runtime.mark_timeline_message_read(
+                account_hex,
+                chat_id,
+                &newest.message_id_hex,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Whether the chat `chat_id` has messages the user hasn't seen, by MDK's read mark (#124).
+    pub fn has_unread(&self, account_hex: &str, chat_id: &str) -> Result<bool, MessagingError> {
+        Ok(self
+            .runtime
+            .chat_list_row(account_hex, chat_id)?
+            .is_some_and(|row| row.has_unread))
+    }
+
+    /// Has MDK delete the plaintext of expired disappearing messages in all the account's
+    /// chats, as of `now_ms` (#124). MDK holds back a chat while an expired message in it is
+    /// unread, or while one expired less than 5 seconds ago. Returns how many it deleted; each
+    /// also comes as [`ChatItem::Expired`].
+    pub async fn sweep_expired(
+        &self,
+        account_hex: &str,
+        now_ms: u64,
+    ) -> Result<u64, MessagingError> {
+        let report = self
+            .runtime
+            .sweep_expired_retention(account_hex, now_ms)
+            .await?;
+        for group in &report.groups {
+            if group.status == RetentionSweepStatus::Failed {
+                log::warn!(
+                    "deleting a chat's expired messages failed: {}",
+                    group.failure_kind.as_deref().unwrap_or("unknown")
+                );
+            }
+        }
+        Ok(report
+            .groups
+            .iter()
+            .map(|group| group.pruned_messages)
+            .sum())
+    }
+
     /// Follows the account's messages in all its chats, from now on.
     pub async fn follow_messages(&self, account_hex: &str) -> Result<ChatItems, MessagingError> {
         let subscription = self
@@ -1267,42 +1401,61 @@ impl Messaging {
         }
     }
 
-    /// The secret both members of the chat `chat_id` hold in its current MLS epoch (#37).
+    /// Who is in the chat `chat_id` in its current MLS epoch (#128).
     ///
-    /// MDK lets the app read three exporter secrets of a chat, all of the current epoch; this is
-    /// the one for group events. While the account has a change to the chat that the relays
-    /// haven't confirmed yet, MDK gives the secret of the epoch that change starts but reports
-    /// the epoch before it, so this reads only while the chat is settled, and fails if it doesn't
-    /// settle within half a second. `docs/spikes/37-radio-keys.md` explains the choice.
-    pub async fn chat_secret(
+    /// This reads only while the chat is settled: while the account has a change to the chat that
+    /// the relays haven't confirmed yet, the change isn't the chat's yet. It fails if the chat
+    /// doesn't settle within half a second.
+    pub async fn chat_membership(
         &self,
         account_hex: &str,
         chat_id: &str,
-    ) -> Result<ChatSecret, MessagingError> {
+    ) -> Result<ChatMembership, MessagingError> {
         let group_id = group_id(chat_id)?;
-        let accounts = self.runtime.accounts();
         let settled =
             |state: &AppGroupMlsState| state.lifecycle_state == AppGroupLifecycleState::Stable;
-        for attempt in 0..SECRET_ATTEMPTS {
+        for attempt in 0..MEMBERSHIP_ATTEMPTS {
             if attempt > 0 {
-                tokio::time::sleep(SECRET_RETRY).await;
+                tokio::time::sleep(MEMBERSHIP_RETRY).await;
             }
             let before = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if !settled(&before) {
                 continue;
             }
-            let secret = accounts
-                .exporter_secret(account_hex, &group_id, GROUP_EVENT_EXPORTER, EXPORTER_BYTES)
-                .await?;
+            let members = self.runtime.group_members(account_hex, &group_id).await?;
             let after = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if settled(&after) && before.epoch == after.epoch {
-                return Ok(ChatSecret {
+                let mut members: Vec<(String, u32)> = members
+                    .into_iter()
+                    .map(|member| (member.member_id_hex, member.device_count))
+                    .collect();
+                members.sort();
+                return Ok(ChatMembership {
                     epoch: after.epoch,
-                    secret,
+                    members,
                 });
             }
         }
         Err(MessagingError::EpochUnsettled)
+    }
+
+    /// Gives the chat `chat_id` a name, which makes it a group for MDK and for every member's
+    /// app (#125). The interface doesn't offer this; tests use it to do what another app can.
+    pub async fn rename_chat(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        name: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_group_profile(
+                account_hex,
+                &group_id(chat_id)?,
+                Some(name.to_owned()),
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// The account key as a copy to keep (#86): a NIP-49 `ncryptsec1…` protected by `password`,
@@ -1325,6 +1478,45 @@ impl Messaging {
             )?),
             None => self.runtime.reveal_nsec(account_hex, EXPORT_CALLER)?,
         })
+    }
+
+    /// The app component `component` in the state of the chat `chat_id`, as this device's copy
+    /// has it now (#128). `None` when absent. A change of this account's that waits for the
+    /// relays isn't in it yet.
+    pub async fn app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+    ) -> Result<Option<Vec<u8>>, MessagingError> {
+        Ok(self
+            .runtime
+            .group_app_component(account_hex, &group_id(chat_id)?, component)
+            .await?)
+    }
+
+    /// Replaces the app component `component` in the state of the chat `chat_id` with `data`, by
+    /// an MLS commit: nothing shows in the chat (#128). Only an admin of the chat can. Without a
+    /// relay, MDK keeps the change and publishes it later by itself.
+    pub async fn set_app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+        data: Vec<u8>,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_app_component(account_hex, &group_id(chat_id)?, component, data)
+            .await?;
+        Ok(())
+    }
+
+    /// Follows the chats' moves to new MLS epochs from now on: the sign that a chat's state, or
+    /// its membership, may have changed (#128).
+    pub fn follow_epochs(&self) -> EpochChanges {
+        EpochChanges {
+            events: self.runtime.subscribe(),
+        }
     }
 
     /// Updates the account's own key in the chat `chat_id`, which starts a new MLS epoch once
@@ -1449,11 +1641,71 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RELAYS, GROUP_SYSTEM_KIND, INVITE_TOKEN_KIND, LOCAL_PUBLISH_FAILED, POLL_KIND,
-        Placeholder, Quote, RADIO_ADDRESS_KIND, TextMessage, TimelineMessageRecord,
-        WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers, directory_relays, lookup_relays,
-        profile_copy_relays, text_message,
+        ChatForm, DEFAULT_RELAYS, GROUP_SYSTEM_KIND, INVITE_TOKEN_KIND, LOCAL_PUBLISH_FAILED,
+        POLL_KIND, Placeholder, Quote, RADIO_ADDRESS_KIND, TextMessage, TimelineMessageRecord,
+        WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers, direct_chat, directory_relays,
+        lookup_relays, profile_copy_relays, text_message,
     };
+    use marmot_app::{AppGroupRecord, SelfMembership};
+
+    /// A chat's record as MDK v0.18.0 gave it in `issue_125_chat_stops_being_direct`, once the
+    /// contact had left: one account, no name.
+    const LEFT_RECORD: &str = r#"{"group_id_hex":"7f1f288b40fd8c00c2379118eda153a8","protocol_profile":"legacy","endpoint":"ws://127.0.0.1:50947","nostr_routing":{"component_id":32772,"component":"marmot.transport.nostr.routing.v1","nostr_group_id_hex":"000387dd80dddf903670887bbe0a79c819cd39546f38dfc4ee265ab106dd0fad","relays":["ws://127.0.0.1:50947"],"data_hex":"000387dd80dddf903670887bbe0a79c819cd39546f38dfc4ee265ab106dd0fad151477733a2f2f3132372e302e302e313a3530393437"},"nostr_routing_last_epoch":3,"prior_nostr_routes":[],"profile":{"component_id":32769,"component":"marmot.group.profile.v1","present":true,"name":"","description":"","data_hex":"0000"},"image":{"component_id":32770,"component":"marmot.group.blossom.image.v1","present":false,"image_hash_hex":"","image_key_hex":"","image_nonce_hex":"","image_upload_key_hex":"","media_type":null,"data_hex":"0000000000"},"avatar_url":{"component_id":32775,"component":"marmot.group.avatar-url.v1","present":false,"url":"","dim":null,"thumbhash":null,"data_hex":"000000"},"admin_policy":{"component_id":32771,"component":"marmot.group.admin-policy.v1","admins":["ac762ca44a352c9b60bfd54060121ed977e31b92971a1fe765a559335630fc8a"],"data_hex":"20ac762ca44a352c9b60bfd54060121ed977e31b92971a1fe765a559335630fc8a"},"message_retention":{"component_id":32773,"component":"marmot.group.message-retention.v1","disappearing_message_secs":0,"data_hex":"0000000000000000"},"agent_text_stream":{"component_id":32774,"component":"marmot.group.agent-text-stream.quic.v1","required":true,"required_member_roles":["receive"],"allowed_member_roles":["receive","send"],"max_plaintext_frame_len":4096,"replay_ttl_secs":0,"padding_bucket_bytes":0,"data_hex":"010300001000000000000000"},"encrypted_media":{"component_id":32776,"component":"marmot.group.encrypted-media.v1","required":false,"media_format":"","allowed_locator_kinds":[],"default_blob_endpoints":[],"data_hex":""},"unknown_components":[],"archived":false,"pending_confirmation":false,"member_count":1,"self_membership":"Member","disbanding":false,"disbanded":false,"unrecoverable":false}"#;
+
+    /// #125: what a chat is, from MDK's record of it.
+    #[test]
+    fn issue_125_a_chat_is_direct_alone_or_a_group() {
+        let me = "a".repeat(64);
+        let bea = "b".repeat(64);
+        let carl = "c".repeat(64);
+        let left: AppGroupRecord = serde_json::from_str(LEFT_RECORD).unwrap();
+
+        // No name and two accounts: direct, with the other one.
+        let mut direct = left.clone();
+        direct.member_count = Some(2);
+        direct.direct_member_ids_hex = Some(vec![me.clone(), bea.clone()]);
+        direct.presentation_member_ids_hex = direct.direct_member_ids_hex.clone();
+        let chat = direct_chat(&me, &direct);
+        assert_eq!(
+            (chat.form, chat.peer_hex.as_str()),
+            (ChatForm::Direct, &*bea)
+        );
+        assert!(chat.active);
+        assert_eq!(chat.relays, ["ws://127.0.0.1:50947"]);
+
+        // The contact left: only the account is in it.
+        let chat = direct_chat(&me, &left);
+        assert_eq!((chat.form, chat.peer_hex.as_str()), (ChatForm::Alone, ""));
+        assert!(chat.active);
+
+        // A name, with the same two accounts: MDK no longer counts it as direct.
+        let mut named = direct.clone();
+        named.profile.name = "Allotment".to_owned();
+        named.direct_member_ids_hex = None;
+        let chat = direct_chat(&me, &named);
+        assert_eq!(
+            (chat.form, chat.peer_hex.as_str()),
+            (ChatForm::Group, &*bea)
+        );
+
+        // A third account.
+        let mut three = left.clone();
+        three.member_count = Some(3);
+        let chat = direct_chat(&me, &three);
+        assert_eq!((chat.form, chat.peer_hex.as_str()), (ChatForm::Group, ""));
+
+        // Two accounts, and the account isn't one of them: not a chat with it.
+        let mut others = direct.clone();
+        others.direct_member_ids_hex = Some(vec![bea.clone(), carl]);
+        assert_eq!(direct_chat(&me, &others).form, ChatForm::Group);
+
+        // The account was removed, or left: no longer active.
+        let mut removed = direct;
+        removed.self_membership = SelfMembership::Removed;
+        let chat = direct_chat(&me, &removed);
+        assert_eq!(chat.form, ChatForm::Direct);
+        assert!(!chat.active);
+    }
 
     #[test]
     fn profiles_are_copied_to_white_noise_only_from_the_default_relays() {

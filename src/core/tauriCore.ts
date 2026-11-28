@@ -70,6 +70,7 @@ export function createTauriCore(ipc: Ipc = { invoke, listen }): Core {
     previewInvite: (inviteLink) => call<Contact>("preview_invite", { inviteLink }),
     sendMessage: (chatId, text) => call<Message>("send_message", { chatId, text }),
     cancelMessage: (chatId, messageId) => call<void>("cancel_message", { chatId, messageId }),
+    markRead: (chatId) => call<void>("mark_read", { chatId }),
     setForceRadio: (forced) => call<RadioStatus>("set_force_radio", { forced }),
     // Computers only: phone builds have no such commands, and say `canPair` is off (#24).
     radioPorts: () => call<RadioPort[]>("radio_ports"),
