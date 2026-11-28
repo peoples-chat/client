@@ -16,11 +16,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use cgka_traits::engine::GroupEvent;
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_app::{
     AccountSetupReadiness, AccountSetupRequest, AppError, AppGroupLifecycleState, AppGroupMlsState,
-    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime, MarmotDeployment, RelayLiveness,
-    RelayLivenessStatus, RetentionSweepStatus, RuntimeChatsSubscription,
+    AppGroupRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime, MarmotDeployment,
+    RelayLiveness, RelayLivenessStatus, RetentionSweepStatus, RuntimeChatsSubscription,
     RuntimeRelayLivenessSubscription, RuntimeTimelineMessageUpdate,
     RuntimeTimelineMessagesSubscription, SelfMembership, TimelineMessageChange,
     TimelineMessageQuery, TimelineMessageRecord, TimelinePagination, TimelineRemoveReason,
@@ -40,17 +41,13 @@ const ACCEPT_RETRY_FOR: Duration = Duration::from_secs(30);
 const ACCEPT_RETRY_POLL: Duration = Duration::from_millis(50);
 /// How many of a chat's latest messages [`Messaging::chat_messages`] reads: MDK's largest page.
 const HISTORY_LIMIT: usize = 200;
-/// MDK's name for `MLS-Exporter("marmot", "group-event", 32)`, one of the three exporter secrets
-/// it computes for every epoch and lets the app read.
-const GROUP_EVENT_EXPORTER: &str = "marmot/group-event";
-const EXPORTER_BYTES: usize = 32;
 /// The surface that MDK's audit log records for a key export: a fixed label, never a person or a
 /// key.
 const EXPORT_CALLER: &str = "peoples_chat_core::Core::export_account_key";
-/// How often [`Messaging::chat_secret`] tries while the chat is changing, and how long it waits
-/// in between.
-const SECRET_ATTEMPTS: usize = 5;
-const SECRET_RETRY: Duration = Duration::from_millis(100);
+/// How often [`Messaging::chat_membership`] tries while the chat is changing, and how long it
+/// waits in between.
+const MEMBERSHIP_ATTEMPTS: usize = 5;
+const MEMBERSHIP_RETRY: Duration = Duration::from_millis(100);
 /// MDK's kind for chat messages (NIP-C7).
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
@@ -59,9 +56,9 @@ const CHAT_KIND: u64 = 9;
 /// iOS as an "Unsupported event" card (#123). That does no harm here: only the inviter's app,
 /// which is peoples.chat, receives the token.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
-/// The app's own kind for a radio address record (#34), which each app sends in its direct
-/// chats when it has a radio. Provisional, like 9910: Marmot assigns kinds only for adopted specs.
-pub const RADIO_ADDRESS_KIND: u64 = 9_911;
+/// The app event that carried a version 0 radio address record (#34), in builds before the
+/// records moved into the chat's state (#128). Still read, never sent.
+const RADIO_ADDRESS_KIND: u64 = 9_911;
 /// The mark MDK puts on a message of ours that no relay would take.
 const LOCAL_PUBLISH_FAILED: &str = "local_publish_failed";
 /// Makes each send's client token unique within this process.
@@ -523,6 +520,39 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> DirectChat {
     }
 }
 
+/// The chats that move to new MLS epochs, from when following began.
+pub struct EpochChanges {
+    events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
+}
+
+/// What [`EpochChanges::next`] saw.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EpochChange {
+    /// The chat with this id is in a new epoch.
+    Chat(String),
+    /// Some changes were missed: any chat may be in a new epoch.
+    Missed,
+}
+
+impl EpochChanges {
+    /// The next change. `None` once messaging has stopped.
+    pub async fn next(&mut self) -> Option<EpochChange> {
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            match self.events.recv().await {
+                Ok(MarmotAppEvent::GroupEvent(group)) => {
+                    if let GroupEvent::EpochChanged { group_id, .. } = &group.event {
+                        return Some(EpochChange::Chat(group_id.to_string()));
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => return Some(EpochChange::Missed),
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
+}
+
 /// One of the account's relays, and whether the account's connection to it is open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelayLink {
@@ -601,21 +631,13 @@ pub enum MessagingError {
     PhotoDownload(String),
 }
 
-/// A secret that both members of a chat hold in one MLS epoch, and that epoch (#37).
-pub struct ChatSecret {
+/// Who is in a chat in one MLS epoch (#128).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatMembership {
     pub epoch: u64,
-    /// `MLS-Exporter("marmot", "group-event", 32)`. MDK derives the key for the chat's events on
-    /// the relays from it, so it never leaves the core.
-    pub secret: Zeroizing<Vec<u8>>,
-}
-
-impl std::fmt::Debug for ChatSecret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatSecret")
-            .field("epoch", &self.epoch)
-            .field("secret", &"<redacted>")
-            .finish()
-    }
+    /// Each member account's public key, in hex, and how many of its devices are in the chat.
+    /// Sorted by key.
+    pub members: Vec<(String, u32)>,
 }
 
 impl MessagingError {
@@ -1113,25 +1135,6 @@ impl Messaging {
         Ok(page.messages.iter().filter_map(radio_address).collect())
     }
 
-    /// Sends this phone's radio address record in the chat `chat_id` (#34).
-    pub async fn send_radio_address(
-        &self,
-        account_hex: &str,
-        chat_id: &str,
-        record: &str,
-    ) -> Result<(), MessagingError> {
-        self.runtime
-            .send_custom_event(
-                account_hex,
-                &group_id(chat_id)?,
-                RADIO_ADDRESS_KIND,
-                Vec::new(),
-                record.to_owned(),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Sends an invitation's token in the chat `chat_id`, so that the inviter's app opens the
     /// chat without a request (#95).
     pub async fn send_invite_token(
@@ -1261,38 +1264,38 @@ impl Messaging {
         }
     }
 
-    /// The secret both members of the chat `chat_id` hold in its current MLS epoch (#37).
+    /// Who is in the chat `chat_id` in its current MLS epoch (#128).
     ///
-    /// MDK lets the app read three exporter secrets of a chat, all of the current epoch; this is
-    /// the one for group events. While the account has a change to the chat that the relays
-    /// haven't confirmed yet, MDK gives the secret of the epoch that change starts but reports
-    /// the epoch before it, so this reads only while the chat is settled, and fails if it doesn't
-    /// settle within half a second. `docs/spikes/37-radio-keys.md` explains the choice.
-    pub async fn chat_secret(
+    /// This reads only while the chat is settled: while the account has a change to the chat that
+    /// the relays haven't confirmed yet, the change isn't the chat's yet. It fails if the chat
+    /// doesn't settle within half a second.
+    pub async fn chat_membership(
         &self,
         account_hex: &str,
         chat_id: &str,
-    ) -> Result<ChatSecret, MessagingError> {
+    ) -> Result<ChatMembership, MessagingError> {
         let group_id = group_id(chat_id)?;
-        let accounts = self.runtime.accounts();
         let settled =
             |state: &AppGroupMlsState| state.lifecycle_state == AppGroupLifecycleState::Stable;
-        for attempt in 0..SECRET_ATTEMPTS {
+        for attempt in 0..MEMBERSHIP_ATTEMPTS {
             if attempt > 0 {
-                tokio::time::sleep(SECRET_RETRY).await;
+                tokio::time::sleep(MEMBERSHIP_RETRY).await;
             }
             let before = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if !settled(&before) {
                 continue;
             }
-            let secret = accounts
-                .exporter_secret(account_hex, &group_id, GROUP_EVENT_EXPORTER, EXPORTER_BYTES)
-                .await?;
+            let members = self.runtime.group_members(account_hex, &group_id).await?;
             let after = self.runtime.group_mls_state(account_hex, &group_id).await?;
             if settled(&after) && before.epoch == after.epoch {
-                return Ok(ChatSecret {
+                let mut members: Vec<(String, u32)> = members
+                    .into_iter()
+                    .map(|member| (member.member_id_hex, member.device_count))
+                    .collect();
+                members.sort();
+                return Ok(ChatMembership {
                     epoch: after.epoch,
-                    secret,
+                    members,
                 });
             }
         }
@@ -1338,6 +1341,45 @@ impl Messaging {
             )?),
             None => self.runtime.reveal_nsec(account_hex, EXPORT_CALLER)?,
         })
+    }
+
+    /// The app component `component` in the state of the chat `chat_id`, as this device's copy
+    /// has it now (#128). `None` when absent. A change of this account's that waits for the
+    /// relays isn't in it yet.
+    pub async fn app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+    ) -> Result<Option<Vec<u8>>, MessagingError> {
+        Ok(self
+            .runtime
+            .group_app_component(account_hex, &group_id(chat_id)?, component)
+            .await?)
+    }
+
+    /// Replaces the app component `component` in the state of the chat `chat_id` with `data`, by
+    /// an MLS commit: nothing shows in the chat (#128). Only an admin of the chat can. Without a
+    /// relay, MDK keeps the change and publishes it later by itself.
+    pub async fn set_app_component(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        component: u16,
+        data: Vec<u8>,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_app_component(account_hex, &group_id(chat_id)?, component, data)
+            .await?;
+        Ok(())
+    }
+
+    /// Follows the chats' moves to new MLS epochs from now on: the sign that a chat's state, or
+    /// its membership, may have changed (#128).
+    pub fn follow_epochs(&self) -> EpochChanges {
+        EpochChanges {
+            events: self.runtime.subscribe(),
+        }
     }
 
     /// Updates the account's own key in the chat `chat_id`, which starts a new MLS epoch once

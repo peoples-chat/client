@@ -117,7 +117,7 @@ describe("applyEvent", () => {
   });
 
   it("takes the account's new profile, once", () => {
-    const account = { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" };
+    const account = { name: "Emil", about: "", publicKey: "k", npub: "npub1k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" };
     const state = { ...ready(), account };
     const changed = { ...account, name: "Emil D.", about: "Aarhus" };
     const next = applyEvent(state, { type: "accountChanged", account: changed });
@@ -263,7 +263,7 @@ describe("applyEvent", () => {
   it("clears the account, chats, requests and relays when the account is deleted", () => {
     const state = {
       ...ready([chat("a")]),
-      account: { name: "Emil", about: "", publicKey: "k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" },
+      account: { name: "Emil", about: "", publicKey: "k", npub: "npub1k", inviteLink: "peopleschat:x", shareLink: "https://peoples.chat/i#x" },
       invitations: [{ id: "i1", from: { publicKey: "k2", name: "Karen" }, receivedAt: 5, messages: [] }],
       relays: [relay("wss://a.example", "connected")],
     };

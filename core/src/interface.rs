@@ -23,6 +23,9 @@ pub struct Account {
     pub photo: Option<String>,
     /// The account's public key, in hex.
     pub public_key: String,
+    /// The same key as a NIP-19 `npub1…`, for people who add the user from another Marmot app:
+    /// White Noise takes an `npub`, and its Android app refuses an `nprofile` (#129).
+    pub npub: String,
     /// Link that other people open or scan to start a chat. The user's QR code encodes it. A
     /// NIP-21 `nostr:nprofile1…` URI: the public key and relay hints (#19).
     pub invite_link: String,

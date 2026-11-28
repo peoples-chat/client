@@ -39,7 +39,7 @@ export function Chats() {
         accountName={state.account?.name ?? ""}
         accountPhoto={state.account?.photo}
         onOpenSettings={() => navigation.push({ name: "settings" })}
-        action={<IconButton label="New chat" icon="edit" onClick={() => navigation.push({ name: "newChat" })} />}
+        action={<IconButton label="New chat" icon="edit" data-testid="chats-new-chat" onClick={() => navigation.push({ name: "newChat" })} />}
       />
       {/* Search and the filters other than All are not built yet (#63). */}
       <SearchField label="Search" placeholder="Search" disabled />

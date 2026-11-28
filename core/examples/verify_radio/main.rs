@@ -1,16 +1,22 @@
 //! `pnpm verify:radio` (#133): runs the hardware checks against the radio lab, safely.
 //!
 //! ```sh
-//! pnpm verify:radio              # checks every USB radio, then tests the first two on the air
+//! pnpm verify:radio              # checks every radio, then tests them on the air
 //! pnpm verify:radio --dry-run    # lists the radios found and their firmware
+//! pnpm verify:radio --usb-only   # leaves the radios on Bluetooth alone
 //! ```
 //!
 //! It holds the lab lock for the whole run, finds radios by their USB serial numbers, refuses
-//! to go on when a radio's firmware or settings differ from `radios.toml`, and saves every frame.
-//! It never changes a radio's firmware, frequency, preset or power; it does set each radio's
-//! clock, except in a dry run. The over-the-air tests (#134) are in `messages.rs`. Details:
-//! `docs/radio-lab.md`.
+//! to go on when a radio's firmware or settings differ from `radios.toml`, and saves every USB
+//! radio's frames. It never changes a radio's firmware, frequency, preset or power; it does set
+//! each USB radio's clock, except in a dry run. The over-the-air tests between USB radios (#134)
+//! are in `messages.rs`. A radio on Bluetooth (#135, `ble.rs`) is reached over TCP through the
+//! bridge in `tools/ble-bridge/`, and skipped when the bridge isn't running: the harness itself
+//! never touches Bluetooth. Details: `docs/radio-lab.md`.
 
+mod ble;
+#[cfg(all(test, target_os = "macos"))]
+mod ble_tests;
 mod config;
 mod fixtures;
 #[cfg(test)]
@@ -39,13 +45,16 @@ use crate::lock::LabLock;
 use crate::messages::{Bench, Waits};
 use crate::power::Uhubctl;
 
-const USAGE: &str = "Usage: pnpm verify:radio [--dry-run]
+const USAGE: &str = "Usage: pnpm verify:radio [--dry-run] [--usb-only]
+
+  --dry-run    lists the radios and checks them against the lab; sends nothing
+  --usb-only   leaves the radios on Bluetooth alone
 
 Environment:
-  RADIOS_TOML           the lab file (default: ~/factory/radios.toml)
-  RADIO_LAB_LOCK        the lock (default: ~/factory/locks/radio-lab)
-  RADIO_LOG_DIR         where frame logs go (default: .factory/radio in the repository)
-  UHUBCTL               the uhubctl program (default: uhubctl)";
+  RADIOS_TOML     the lab file (default: ~/factory/radios.toml)
+  RADIO_LAB_LOCK  the lock (default: ~/factory/locks/radio-lab)
+  RADIO_LOG_DIR   where frame logs go (default: .factory/radio in the repository)
+  UHUBCTL         the uhubctl program (default: uhubctl)";
 
 /// Where a run reads and writes.
 struct Paths {
@@ -53,6 +62,15 @@ struct Paths {
     lock: PathBuf,
     logs: PathBuf,
     uhubctl: PathBuf,
+}
+
+/// What a run may do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Mode {
+    /// Lists and checks the radios, and sends nothing.
+    dry_run: bool,
+    /// Leaves Bluetooth radios alone.
+    usb_only: bool,
 }
 
 impl Paths {
@@ -127,7 +145,7 @@ where
     end
 }
 
-fn verify(paths: &Paths, dry_run: bool, out: &mut (dyn Write + Send)) -> End {
+fn verify(paths: &Paths, mode: Mode, out: &mut (dyn Write + Send)) -> End {
     // Before the lock: a missing lab file needs no radios.
     let config = match config::load(&paths.config) {
         Ok(config) => config,
@@ -146,8 +164,9 @@ fn verify(paths: &Paths, dry_run: bool, out: &mut (dyn Write + Send)) -> End {
             power: &power,
             log: log.clone(),
             timing: Timing::default(),
+            bluetooth: !mode.usb_only,
         };
-        let result = checks_and_tests(&lab, Waits::default(), dry_run, out).await;
+        let result = checks_and_tests(&lab, Waits::default(), mode.dry_run, out).await;
         // Whether the tests passed or not: a failed run's frames are worth having too.
         for fixture in fixtures::save(log.path())? {
             let _ = writeln!(out, "Fixture: {}", fixture.display());
@@ -185,10 +204,11 @@ async fn checks_and_tests(
 }
 
 fn main() {
-    let mut dry_run = false;
+    let mut mode = Mode::default();
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
-            "--dry-run" => dry_run = true,
+            "--dry-run" => mode.dry_run = true,
+            "--usb-only" => mode.usb_only = true,
             // pnpm passes the separator on.
             "--" => {}
             "--help" | "-h" => {
@@ -202,7 +222,7 @@ fn main() {
         }
     }
     let end = match Paths::from_env(|name| std::env::var_os(name).map(PathBuf::from)) {
-        Ok(paths) => verify(&paths, dry_run, &mut std::io::stdout()),
+        Ok(paths) => verify(&paths, mode, &mut std::io::stdout()),
         Err(error) => End::Failed(error),
     };
     match end {
