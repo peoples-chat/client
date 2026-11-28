@@ -72,7 +72,7 @@ interface's tests both read it, so the two sides cannot drift apart unnoticed.
 | `invitationRemoved` | `invitationId` | The invitation was accepted, or withdrawn by its sender | Done (#19) |
 | `messageAdded` | `chatId`, `message` | A message arrived, or the user sent one. `chatId` can be an invitation's id | Done (#20) |
 | `deliveryChanged` | `chatId`, `messageId`, `delivery` | An outgoing message's delivery changed | Done (#20; `timedOut` #41) |
-| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id | Done (#46) |
+| `messageRemoved` | `chatId`, `messageId` | A waiting message was cancelled, or went and came back under the core's id. Or a radio message disappeared before its relay copy came (#127) | Done (#46, #127) |
 | `reachChanged` | `chatId`, `reach`, `radioIssue` (optional) | A chat's relays went away or came back, or the contact's radio was heard or not any more | Done (#43, #44) |
 | `relaysChanged` | `relays` | The account's relays changed, or their connections did. Carries all of them | Done (#88) |
 | `accountChanged` | `account` | The user changed their profile | Done (#93) |
@@ -396,7 +396,8 @@ combination in its tests.
 
 - It is `waiting` and `cancellable`, under a provisional id. `cancelMessage` takes it away with `messageRemoved`; a
   message MDK has gives "This message is on its way already."
-- It stays across a restart, in the order it was written.
+- It stays across a restart, in the order it was written. Its text is encrypted in the file (#127). It is not a Marmot
+  message yet, so a chat's disappearing messages timer starts only once it goes.
 - **When a path returns,** the chat's waiting messages go in that order, by the rules above: over the internet once a
   relay is connected, else by radio. One too long for radio keeps waiting for the internet, while shorter ones after it
   go by radio. Each comes back under the core's id with `messageAdded`, and `messageRemoved` takes the waiting one away.

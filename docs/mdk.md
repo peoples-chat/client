@@ -114,6 +114,10 @@ ours reads, holds or passes the key, except to export it when the user asks (bel
 - **Release builds on Macs** will move to the data-protection keychain, which never asks. That needs the signed app
   (#61).
 
+**The core's data key** (#127). The little message text the core keeps itself is encrypted with a random key of its
+own, not the account key. It is stored through the same `AccountSecretStore`, as an entry named
+`local-data-<public key>` that MDK lists as no account, and it moves with the account key (`core/src/vault.rs`).
+
 **Signing.**
 
 - When MDK starts an account, it loads the key from the store and signs with it in memory (`AccountSigner::Local` in

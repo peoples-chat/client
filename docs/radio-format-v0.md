@@ -210,9 +210,23 @@ keys once and tries again, in case a chat has moved to a new epoch.
 
 - **the counters,** written and synced before the packet goes out. A damaged file means lost counters: each chat then
   sends again only from its next epoch, whose key has never been used.
-- **every message that went or came by radio,** with its id. A received one is shown from there until its relay copy
-  arrives, and is marked as radio after that too.
+- **every message that went or came by radio,** with its id and chat. A received one is shown from there until its
+  relay copy arrives, and is marked as radio after that too. Its text is kept only until then (below).
 - **the contacts' radios,** and the switch.
+
+**Message text outside MDK** (#127). MDK keeps messages in its encrypted databases. The core keeps text of its own in two
+cases only: a received radio message until MDK has it, and a message waiting for a path (`outbox.json`).
+
+- **Encrypted** with ChaCha20-Poly1305 under a random key per account (`core/src/vault.rs`), kept where the account key
+  is: the platform's key store, or a file in development builds on computers (#115). Deleting the account removes it.
+- **Owner only:** both files are created readable by their owner only.
+- **Dropped once MDK has the message,** in any state, also deleted or withdrawn. The id, chat and confirmation codes
+  stay, for replay checks and confirmations. A sent message's text is never kept: MDK has it from the start.
+- **Deletions** (#122) of a message MDK has find no copy left.
+- **Disappearing messages** (#124): a received radio message whose relay copy hasn't come is out of MDK's reach. The
+  core takes the chat's timer as it is on receipt, and removes the message from the disk and the chat when the time,
+  counted from the sender's clock, is up.
+- Plain text that an earlier version left in these files is encrypted or dropped at the next start.
 
 Two cores with mock radios exchange text this way with the relay blocked (`core/tests/radio_chat.rs`).
 
