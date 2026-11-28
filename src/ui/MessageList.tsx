@@ -76,6 +76,11 @@ function MessageBubble({ message }: { message: Message }) {
   const radio = message.transport === "radio";
   return (
     <div className={`${styles.bubble} ${outgoing ? styles.out : styles.in} ${radio ? styles.radio : ""}`}>
+      {message.sender && !outgoing && (
+        <div className={styles.sender} data-testid="message-sender">
+          {message.sender.name}
+        </div>
+      )}
       <div className={styles.text}>{message.text}</div>
       <div className={styles.meta}>
         {radio && (

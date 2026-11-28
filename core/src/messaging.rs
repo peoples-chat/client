@@ -52,7 +52,9 @@ const MEMBERSHIP_RETRY: Duration = Duration::from_millis(100);
 const CHAT_KIND: u64 = 9;
 /// The app's own kind for an invitation's token (#95), which the invited person's app sends
 /// once, right after it starts the chat. MDK refuses the kinds it acts on itself; this isn't one.
-/// It isn't text, so White Noise doesn't show it as a message.
+/// White Noise shows a kind it doesn't know, for Android as a bubble of its raw content and for
+/// iOS as an "Unsupported event" card (#123). That does no harm here: only the inviter's app,
+/// which is peoples.chat, receives the token.
 pub const INVITE_TOKEN_KIND: u64 = 9_910;
 /// The app event that carried a version 0 radio address record (#34), in builds before the
 /// records moved into the chat's state (#128). Still read, never sent.
@@ -66,8 +68,8 @@ static SENDS: AtomicU64 = AtomicU64::new(0);
 /// relay lists, profile and KeyPackage here.
 ///
 /// These are public, general-purpose relays. Who runs the project's own relays is decided later
-/// (#11). nos.lol and relay.primal.net are also among the relays White Noise searches for relay
-/// lists, so White Noise users can find accounts made here.
+/// (#11). They don't make accounts made here findable from White Noise: it looks a contact's
+/// relay lists up only on its own relays (#22), and that stays to be decided (#76).
 pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
@@ -196,13 +198,27 @@ pub struct ExistingAccount {
     pub name: Option<String>,
 }
 
-/// A direct chat as MDK holds it: an unnamed group of exactly two accounts.
+/// What a chat is now, by its state in MDK (#125).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatForm {
+    /// No name and two accounts: the account and the contact.
+    Direct,
+    /// Only the account is left: the contact left, or deleted their account.
+    Alone,
+    /// The chat has a name, or more than two accounts. MDK no longer counts it as direct.
+    Group,
+}
+
+/// A chat as MDK holds it. The core shows direct chats, and keeps following one by its id once
+/// it stops being direct (#125).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectChat {
     /// The MLS group id, in hex. It stays the same for the chat's life.
     pub id: String,
-    /// The other person's public key, in hex.
+    /// The other person's public key, in hex, while the chat has exactly two accounts. Empty
+    /// otherwise: the core knows whom a chat that was direct is with.
     pub peer_hex: String,
+    pub form: ChatForm,
     /// The other person invited the account, and it has not accepted yet.
     pub invitation: bool,
     /// The account is still in the chat: the chat is not archived, left or removed.
@@ -216,30 +232,27 @@ pub struct DirectChat {
     pub disappear_after: Option<u64>,
 }
 
-/// The account's direct chats as they were when following began, then each one that changes.
+/// The account's chats as they were when following began, then each one that changes. Groups
+/// come too: the core decides by id which of them it shows (#125).
 pub struct DirectChats {
     account_hex: String,
     subscription: RuntimeChatsSubscription,
 }
 
 impl DirectChats {
-    /// The direct chats when following began, invitations included.
+    /// The chats when following began, invitations included.
     pub fn current(&self) -> Vec<DirectChat> {
         self.subscription
             .snapshot
             .iter()
-            .filter_map(|record| direct_chat(&self.account_hex, record))
+            .map(|record| direct_chat(&self.account_hex, record))
             .collect()
     }
 
-    /// The next direct chat that was added or changed. `None` once messaging has stopped.
+    /// The next chat that was added or changed. `None` once messaging has stopped.
     pub async fn next(&mut self) -> Option<DirectChat> {
-        loop {
-            let record = self.subscription.recv().await?;
-            if let Some(chat) = direct_chat(&self.account_hex, &record) {
-                return Some(chat);
-            }
-        }
+        let record = self.subscription.recv().await?;
+        Some(direct_chat(&self.account_hex, &record))
     }
 }
 
@@ -253,6 +266,8 @@ pub struct TextMessage {
     pub id: String,
     /// The account sent it, rather than received it.
     pub outgoing: bool,
+    /// Who sent it: their public key, in hex (#125).
+    pub sender_hex: String,
     pub text: String,
     /// When the sender sent it, by the sender's clock, in milliseconds since the Unix epoch. MDK
     /// keeps whole seconds.
@@ -295,6 +310,7 @@ fn text_message(record: &TimelineMessageRecord) -> Option<TextMessage> {
         chat_id: record.group_id_hex.clone(),
         id: record.message_id_hex.clone(),
         outgoing,
+        sender_hex: record.sender.clone(),
         text: record.plaintext.clone(),
         sent_at: record.timeline_at.saturating_mul(1000),
         acknowledged: outgoing
@@ -401,16 +417,34 @@ impl ChatItems {
     }
 }
 
-/// The direct chat in `record`, unless it is a group or the account's own device group.
-fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat> {
-    let members = record.direct_member_ids_hex.as_ref()?;
-    if members.len() != 2 || !members.iter().any(|member| member == account_hex) {
-        return None;
-    }
-    let peer_hex = members.iter().find(|member| *member != account_hex)?;
-    Some(DirectChat {
+/// The chat in `record`, and what it is now (#125). The account's own device group, of one
+/// account, reads as [`ChatForm::Alone`]; the core never showed it, so it ignores it.
+fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> DirectChat {
+    // The other account of a two-account roster, named or not.
+    let peer = |members: &Option<Vec<String>>| {
+        let members = members.as_ref()?;
+        if members.len() != 2 || !members.iter().any(|member| member == account_hex) {
+            return None;
+        }
+        members
+            .iter()
+            .find(|member| *member != account_hex)
+            .cloned()
+    };
+    let (form, peer_hex) = if let Some(peer_hex) = peer(&record.direct_member_ids_hex) {
+        (ChatForm::Direct, peer_hex)
+    } else if record.member_count == Some(1) {
+        (ChatForm::Alone, String::new())
+    } else {
+        (
+            ChatForm::Group,
+            peer(&record.presentation_member_ids_hex).unwrap_or_default(),
+        )
+    };
+    DirectChat {
         id: record.group_id_hex.clone(),
-        peer_hex: peer_hex.clone(),
+        peer_hex,
+        form,
         invitation: record.pending_confirmation,
         active: !record.archived && matches!(record.self_membership, SelfMembership::Member),
         relays: record
@@ -422,7 +456,7 @@ fn direct_chat(account_hex: &str, record: &AppGroupRecord) -> Option<DirectChat>
         // Marmot: 0 means off (message-retention-v1).
         disappear_after: Some(record.message_retention.disappearing_message_secs)
             .filter(|secs| *secs > 0),
-    })
+    }
 }
 
 /// The chats that move to new MLS epochs, from when following began.
@@ -1207,6 +1241,25 @@ impl Messaging {
         Err(MessagingError::EpochUnsettled)
     }
 
+    /// Gives the chat `chat_id` a name, which makes it a group for MDK and for every member's
+    /// app (#125). The interface doesn't offer this; tests use it to do what another app can.
+    pub async fn rename_chat(
+        &self,
+        account_hex: &str,
+        chat_id: &str,
+        name: &str,
+    ) -> Result<(), MessagingError> {
+        self.runtime
+            .update_group_profile(
+                account_hex,
+                &group_id(chat_id)?,
+                Some(name.to_owned()),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// The account key as a copy to keep (#86): a NIP-49 `ncryptsec1…` protected by `password`,
     /// or the plain `nsec1…` without one.
     ///
@@ -1390,9 +1443,69 @@ fn profile_name(profile: &UserProfileMetadata) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers, directory_relays,
-        lookup_relays, profile_copy_relays,
+        ChatForm, DEFAULT_RELAYS, WHITE_NOISE_RELAYS, canonical_relay, chat_media_servers,
+        direct_chat, directory_relays, lookup_relays, profile_copy_relays,
     };
+    use marmot_app::{AppGroupRecord, SelfMembership};
+
+    /// A chat's record as MDK v0.18.0 gave it in `issue_125_chat_stops_being_direct`, once the
+    /// contact had left: one account, no name.
+    const LEFT_RECORD: &str = r#"{"group_id_hex":"7f1f288b40fd8c00c2379118eda153a8","protocol_profile":"legacy","endpoint":"ws://127.0.0.1:50947","nostr_routing":{"component_id":32772,"component":"marmot.transport.nostr.routing.v1","nostr_group_id_hex":"000387dd80dddf903670887bbe0a79c819cd39546f38dfc4ee265ab106dd0fad","relays":["ws://127.0.0.1:50947"],"data_hex":"000387dd80dddf903670887bbe0a79c819cd39546f38dfc4ee265ab106dd0fad151477733a2f2f3132372e302e302e313a3530393437"},"nostr_routing_last_epoch":3,"prior_nostr_routes":[],"profile":{"component_id":32769,"component":"marmot.group.profile.v1","present":true,"name":"","description":"","data_hex":"0000"},"image":{"component_id":32770,"component":"marmot.group.blossom.image.v1","present":false,"image_hash_hex":"","image_key_hex":"","image_nonce_hex":"","image_upload_key_hex":"","media_type":null,"data_hex":"0000000000"},"avatar_url":{"component_id":32775,"component":"marmot.group.avatar-url.v1","present":false,"url":"","dim":null,"thumbhash":null,"data_hex":"000000"},"admin_policy":{"component_id":32771,"component":"marmot.group.admin-policy.v1","admins":["ac762ca44a352c9b60bfd54060121ed977e31b92971a1fe765a559335630fc8a"],"data_hex":"20ac762ca44a352c9b60bfd54060121ed977e31b92971a1fe765a559335630fc8a"},"message_retention":{"component_id":32773,"component":"marmot.group.message-retention.v1","disappearing_message_secs":0,"data_hex":"0000000000000000"},"agent_text_stream":{"component_id":32774,"component":"marmot.group.agent-text-stream.quic.v1","required":true,"required_member_roles":["receive"],"allowed_member_roles":["receive","send"],"max_plaintext_frame_len":4096,"replay_ttl_secs":0,"padding_bucket_bytes":0,"data_hex":"010300001000000000000000"},"encrypted_media":{"component_id":32776,"component":"marmot.group.encrypted-media.v1","required":false,"media_format":"","allowed_locator_kinds":[],"default_blob_endpoints":[],"data_hex":""},"unknown_components":[],"archived":false,"pending_confirmation":false,"member_count":1,"self_membership":"Member","disbanding":false,"disbanded":false,"unrecoverable":false}"#;
+
+    /// #125: what a chat is, from MDK's record of it.
+    #[test]
+    fn issue_125_a_chat_is_direct_alone_or_a_group() {
+        let me = "a".repeat(64);
+        let bea = "b".repeat(64);
+        let carl = "c".repeat(64);
+        let left: AppGroupRecord = serde_json::from_str(LEFT_RECORD).unwrap();
+
+        // No name and two accounts: direct, with the other one.
+        let mut direct = left.clone();
+        direct.member_count = Some(2);
+        direct.direct_member_ids_hex = Some(vec![me.clone(), bea.clone()]);
+        direct.presentation_member_ids_hex = direct.direct_member_ids_hex.clone();
+        let chat = direct_chat(&me, &direct);
+        assert_eq!(
+            (chat.form, chat.peer_hex.as_str()),
+            (ChatForm::Direct, &*bea)
+        );
+        assert!(chat.active);
+        assert_eq!(chat.relays, ["ws://127.0.0.1:50947"]);
+
+        // The contact left: only the account is in it.
+        let chat = direct_chat(&me, &left);
+        assert_eq!((chat.form, chat.peer_hex.as_str()), (ChatForm::Alone, ""));
+        assert!(chat.active);
+
+        // A name, with the same two accounts: MDK no longer counts it as direct.
+        let mut named = direct.clone();
+        named.profile.name = "Allotment".to_owned();
+        named.direct_member_ids_hex = None;
+        let chat = direct_chat(&me, &named);
+        assert_eq!(
+            (chat.form, chat.peer_hex.as_str()),
+            (ChatForm::Group, &*bea)
+        );
+
+        // A third account.
+        let mut three = left.clone();
+        three.member_count = Some(3);
+        let chat = direct_chat(&me, &three);
+        assert_eq!((chat.form, chat.peer_hex.as_str()), (ChatForm::Group, ""));
+
+        // Two accounts, and the account isn't one of them: not a chat with it.
+        let mut others = direct.clone();
+        others.direct_member_ids_hex = Some(vec![bea.clone(), carl]);
+        assert_eq!(direct_chat(&me, &others).form, ChatForm::Group);
+
+        // The account was removed, or left: no longer active.
+        let mut removed = direct;
+        removed.self_membership = SelfMembership::Removed;
+        let chat = direct_chat(&me, &removed);
+        assert_eq!(chat.form, ChatForm::Direct);
+        assert!(!chat.active);
+    }
 
     #[test]
     fn profiles_are_copied_to_white_noise_only_from_the_default_relays() {
